@@ -45,8 +45,8 @@ pub use session::{
     ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter, AuthorityScope, ContextPoint,
     ContextPosition, ForkPoint, ModelContextSnapshot, ModelUsagePurpose, PreparedNavigation,
     RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt, Session,
-    SessionEntry, SessionError, SessionInputPreview, SessionIo, SessionMetadata, SessionStatus,
-    SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
+    SessionEntry, SessionError, SessionInputPreview, SessionIo, SessionMetadata, SessionReader,
+    SessionStatus, SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
     UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};

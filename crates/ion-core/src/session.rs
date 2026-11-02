@@ -51,7 +51,7 @@ mod recovery;
 #[cfg(test)]
 mod recovery_tests;
 mod storage;
-pub use storage::SessionIo;
+pub use storage::{SessionIo, SessionReader};
 mod store;
 mod submission;
 #[cfg(test)]
@@ -805,8 +805,10 @@ impl Session {
     pub fn inspect(path: impl AsRef<Path>) -> Result<SessionView, SessionError> {
         let path = database_path(path.as_ref())?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        let header = read_header(&connection)?;
-        let entries = read_entries(&connection)?;
+        configure_connection(&connection)?;
+        let snapshot = connection.unchecked_transaction()?;
+        let header = read_header(&snapshot)?;
+        let entries = read_entries(&snapshot)?;
         let HistoryProjection {
             state,
             context_index,
@@ -938,6 +940,12 @@ impl Session {
     /// Shutdown closes lane admission, including on already-created lanes.
     pub fn io(self: &Arc<Self>) -> Result<SessionIo, SessionError> {
         SessionIo::new(self)
+    }
+
+    /// Create an explicit read-only storage lane. Unlike `io`, it remains
+    /// available after completed shutdown, but not while shutdown joins work.
+    pub fn reader(self: &Arc<Self>) -> Result<SessionReader, SessionError> {
+        SessionReader::new(self)
     }
 
     /// Close execution admission, request stop and join retained work. A timed-out
