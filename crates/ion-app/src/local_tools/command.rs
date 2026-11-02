@@ -4,6 +4,7 @@ use std::{
     process::Stdio, time::Duration,
 };
 
+use futures_util::FutureExt;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -46,6 +47,12 @@ pub(super) async fn run(
     if stop.is_cancelled() {
         return error("cancelled before command start");
     }
+    // Subscribe before spawning: normal exit observation must leave the root
+    // unreaped while output draining can still request group termination.
+    let mut exits = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child()) {
+        Ok(exits) => exits,
+        Err(e) => return error(format!("cannot observe command exit before start: {e}")),
+    };
     let mut command = environment.command(&input.command);
     command
         .current_dir(cwd)
@@ -61,7 +68,8 @@ pub(super) async fn run(
     let pid = child
         .id()
         .and_then(|id| i32::try_from(id).ok())
-        .and_then(Pid::from_raw);
+        .and_then(Pid::from_raw)
+        .expect("spawned unreaped command has a positive Unix pid");
     let stdout = OutputCapture::start(
         child.stdout.take().expect("piped"),
         artifacts.clone(),
@@ -78,10 +86,21 @@ pub(super) async fn run(
         }
     };
     tokio::pin!(deadline);
-    let status = tokio::select! {
-        status = child.wait() => status,
-        () = stop.cancelled() => { cancelled = true; stop_child(&mut child, pid).await },
-        () = &mut deadline => { timed_out = true; stop_child(&mut child, pid).await },
+    let mut status = tokio::select! {
+        observed = observe_exit(pid, &mut exits) => {
+            match observed {
+                Ok(_) => None,
+                Err(error) => Some(kill_child(&mut child, Some(pid)).await.and(Err(error))),
+            }
+        },
+        () = stop.cancelled() => {
+            cancelled = true;
+            Some(stop_child(&mut child, Some(pid)).await)
+        },
+        () = &mut deadline => {
+            timed_out = true;
+            Some(stop_child(&mut child, Some(pid)).await)
+        },
     };
     // A descendant may hold the pipes after the direct command exits.
     // Continue reading while output arrives, then release idle pipes.
@@ -97,11 +116,11 @@ pub(super) async fn run(
     };
     tokio::pin!(captures);
     let (stdout, stderr) = tokio::select! {
-        result = &mut captures => result,
+        biased;
         () = stop.cancelled(), if !cancelled => {
             cancelled = true;
-            if let Some(pid) = pid {
-                let _ = kill_process_group(pid, Signal::TERM);
+            if status.is_none() {
+                status = Some(stop_child(&mut child, Some(pid)).await);
             }
             drain_stop.cancel();
             captures.await
@@ -111,14 +130,29 @@ pub(super) async fn run(
         // after that child exits. Stop acquisition, but join retained storage I/O.
         () = &mut deadline, if !already_stopped => {
             timed_out = true;
-            if let Some(pid) = pid {
-                let _ = kill_process_group(pid, Signal::TERM);
+            if status.is_none() {
+                status = Some(stop_child(&mut child, Some(pid)).await);
             }
             drain_stop.cancel();
             captures.await
         }
+        result = &mut captures => result,
     };
+    // Linearize observation completion before releasing the reserved root.
+    // A stop/deadline becoming ready alongside EOF must still stop the group.
     cancelled |= stop.is_cancelled();
+    if !timed_out {
+        timed_out = deadline.as_mut().now_or_never().is_some();
+    }
+    if status.is_none() && (cancelled || timed_out) {
+        status = Some(stop_child(&mut child, Some(pid)).await);
+    }
+    // No group signal follows this reap. Normal exit deliberately leaves
+    // background descendants alone; cancellation/timeout stops the owned group.
+    let status = match status {
+        Some(status) => status,
+        None => child.wait().await,
+    };
     let (exit_code, signal, wait_error, succeeded) = match status {
         Ok(status) => (status.code(), status.signal(), None, status.success()),
         Err(error) => (
@@ -189,17 +223,24 @@ pub(crate) async fn observe_exit(
     }
 }
 
+/// Escalate the owned group before reaping its root. This joins the direct
+/// child, not arbitrary grandchildren or work in escaped process groups.
 pub(crate) async fn stop_child(
     child: &mut tokio::process::Child,
     pid: Option<Pid>,
 ) -> std::io::Result<std::process::ExitStatus> {
     if let Some(pid) = pid {
-        let _ = kill_process_group(pid, Signal::TERM);
+        // Reserve the root PID through escalation. Reaping on its TERM exit
+        // would both abandon TERM-resistant members and make a later group
+        // signal unsafe. Preserve the root's graceful status and final output.
+        if let Ok(mut exits) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::child())
+        {
+            let _ = kill_process_group(pid, Signal::TERM);
+            let _ =
+                tokio::time::timeout(Duration::from_secs(1), observe_exit(pid, &mut exits)).await;
+        }
     }
-    match tokio::time::timeout(Duration::from_secs(1), child.wait()).await {
-        Ok(status) => status,
-        Err(_) => kill_child(child, pid).await,
-    }
+    kill_child(child, pid).await
 }
 
 /// Terminate the owned group before reaping its direct child. Protocol workers
@@ -996,48 +1037,199 @@ mod tests {
                 .contains("explicit Session artifact sink")
         );
     }
-    #[tokio::test]
-    async fn shell_deadline_bounds_output_before_and_after_direct_exit() {
-        for direct_exits in [false, true] {
-            let root =
-                std::env::temp_dir().join(format!("ion-timeout-drain-{}", uuid::Uuid::now_v7()));
-            fs::create_dir(&root).unwrap();
-            let command = format!(
-                "(trap '' TERM; printf ready > ready; while :; do printf x || exit; sleep 0.01; done) & {}",
-                if direct_exits {
-                    "while [ ! -e ready ]; do sleep 0.01; done; exit 0"
-                } else {
-                    "exec sleep 30"
-                }
-            );
-            let (output, _owner) = tokio::time::timeout(
-                Duration::from_secs(3),
-                run_exec(
-                    &root,
-                    json!({"command": command, "timeout_ms": 500}),
-                    CancellationToken::new(),
-                ),
-            )
+    async fn native_state(pid: &str) -> String {
+        let output = tokio::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", pid.trim()])
+            .output()
             .await
-            .expect("timed-out command followed descendant output");
-            assert!(root.join("ready").exists());
-            assert!(output.is_error);
-            assert_eq!(output.value["timed_out"], true);
-            assert_eq!(output.value["cancelled"], false);
-            if direct_exits {
-                assert_eq!(output.value["exit_code"], 0);
-                assert_eq!(output.value["signal"], Value::Null);
-            } else {
-                assert_eq!(output.value["exit_code"], Value::Null);
-                assert_eq!(output.value["signal"], 15);
+            .unwrap();
+        assert!(matches!(output.status.code(), Some(0 | 1)), "{output:?}");
+        assert!(output.stderr.is_empty(), "{output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().into()
+    }
+
+    async fn survivor_state(pid: &str) -> Option<String> {
+        // SIGKILL requests exit; it does not join arbitrary grandchildren.
+        // Allow signal delivery, and exclude Linux orphan zombies, which are
+        // still visible to kill(pid, 0) but cannot execute further work.
+        let until = tokio::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let state = native_state(pid).await;
+            if state.is_empty() || state.starts_with('Z') {
+                return None;
             }
-            assert_eq!(output.value["wait_error"], Value::Null);
-            assert!(!output.value["stdout"].as_str().unwrap().is_empty());
-            assert_eq!(output.value["stdout_truncated"], true);
-            assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
-            fs::remove_dir_all(root).unwrap();
+            if tokio::time::Instant::now() >= until {
+                return Some(state);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
         }
     }
+
+    #[tokio::test]
+    async fn cancellation_ready_with_output_completion_still_stops_the_reserved_group() {
+        let root = std::env::temp_dir().join(format!("ion-stop-eof-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let stop = CancellationToken::new();
+        let command = "printf %s $$ > root.pid; sh -c 'trap \"\" TERM; printf %s $$ > descendant.pid; touch ready; while [ ! -e close ]; do sleep 0.01; done; exec >/dev/null 2>&1; touch closed; exec sleep 30' & while [ ! -e ready ]; do sleep 0.01; done; exit 0";
+        let run = run_exec(&root, json!({"command": command}), stop.clone());
+        tokio::pin!(run);
+        assert!(run.as_mut().now_or_never().is_none());
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !root.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            let pid = fs::read_to_string(root.join("root.pid")).unwrap();
+            loop {
+                if native_state(&pid).await.starts_with('Z') {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        // Advance the actual driver from exit observation into capture waits,
+        // then withhold its polling while its independently spawned readers
+        // see EOF. Cancellation is ready when that same select is polled again.
+        assert!(run.as_mut().now_or_never().is_none());
+        fs::write(root.join("close"), b"").unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while !root.join("closed").exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            tokio::task::yield_now().await;
+        })
+        .await
+        .unwrap();
+        stop.cancel();
+        let result = tokio::time::timeout(Duration::from_secs(3), run).await;
+        let descendant = fs::read_to_string(root.join("descendant.pid")).unwrap();
+        let pid = Pid::from_raw(descendant.parse().unwrap()).unwrap();
+        let survivor = survivor_state(&descendant).await;
+        if survivor.is_some() {
+            let _ = rustix::process::kill_process(pid, Signal::KILL);
+        }
+        fs::remove_dir_all(&root).unwrap();
+        let (output, _owner) = result.unwrap();
+        assert!(output.is_error);
+        assert_eq!(output.value["cancelled"], true);
+        assert_eq!(output.value["exit_code"], 0);
+        assert_eq!(output.value["wait_error"], Value::Null);
+        assert!(
+            survivor.is_none(),
+            "cancellation lost to completed output: {survivor:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_stop_terminates_term_resistant_group_members_before_and_after_direct_exit() {
+        for (direct_exits, graceful_root) in [(false, false), (true, false), (false, true)] {
+            for cancel in [false, true] {
+                let root =
+                    std::env::temp_dir().join(format!("ion-stop-group-{}", uuid::Uuid::now_v7()));
+                fs::create_dir(&root).unwrap();
+                let command = format!(
+                    "printf %s $$ > root.pid; {} sh -c 'trap \"\" TERM PIPE; printf %s $$ > descendant.pid; printf x >&2; touch ready; while :; do printf x >&2; done' & while [ ! -e ready ]; do sleep 0.01; done; {}",
+                    if graceful_root {
+                        "trap 'printf ROOT_CLEANUP; exit 0' TERM;"
+                    } else {
+                        ""
+                    },
+                    if direct_exits {
+                        "exit 0"
+                    } else if graceful_root {
+                        "wait"
+                    } else {
+                        "exec sleep 30"
+                    }
+                );
+                let stop = CancellationToken::new();
+                let trigger = stop.clone();
+                let work = async {
+                    let catalog = tools(&root);
+                    let call = ToolCall {
+                        id: "stop-group".into(),
+                        name: "exec".into(),
+                        arguments: json!({"command": command, "timeout_ms": if cancel { 30000 } else { 1000 }}),
+                        raw_arguments: None,
+                    };
+                    // Continuous ready output cannot accidentally hit the idle
+                    // cutoff. No artifact sink: this lifecycle fixture retains
+                    // only the bounded tail, not an unbounded test database.
+                    let run = catalog.execute(ion_core::ToolInvocation::untracked(&call, stop));
+                    let cancel_when_ready = async {
+                        if cancel {
+                            while !root.join("ready").exists() {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                            if direct_exits {
+                                let root_pid = fs::read_to_string(root.join("root.pid")).unwrap();
+                                loop {
+                                    if native_state(&root_pid).await.starts_with('Z') {
+                                        break;
+                                    }
+                                    tokio::time::sleep(Duration::from_millis(5)).await;
+                                }
+                            }
+                            trigger.cancel();
+                        }
+                    };
+                    tokio::join!(run, cancel_when_ready).0
+                };
+                let result = tokio::time::timeout(Duration::from_secs(5), work).await;
+                let descendant = fs::read_to_string(root.join("descendant.pid"))
+                    .unwrap()
+                    .parse::<i32>()
+                    .unwrap();
+                let pid = Pid::from_raw(descendant).unwrap();
+                let survivor = survivor_state(&descendant.to_string()).await;
+                // Always clean the original-red survivor before asserting.
+                if survivor.is_some() {
+                    let _ = rustix::process::kill_process(pid, Signal::KILL);
+                }
+                fs::remove_dir_all(&root).unwrap();
+                let output = result.expect("command stop did not settle");
+                assert!(output.is_error, "{}", output.value);
+                assert_eq!(output.value["cancelled"], cancel);
+                assert_eq!(output.value["timed_out"], !cancel);
+                assert_eq!(output.value["wait_error"], Value::Null);
+                assert_eq!(
+                    output.value["exit_code"],
+                    if direct_exits || graceful_root {
+                        json!(0)
+                    } else {
+                        Value::Null
+                    }
+                );
+                assert_eq!(
+                    output.value["signal"],
+                    if direct_exits || graceful_root {
+                        Value::Null
+                    } else {
+                        json!(15)
+                    }
+                );
+                if graceful_root {
+                    assert_eq!(output.value["stdout"], "ROOT_CLEANUP");
+                }
+                assert!(!output.value["stderr"].as_str().unwrap().is_empty());
+                let complete = output.value["stderr_complete"].as_bool().unwrap();
+                // Killing every pipe holder can now expose EOF. A cancelled
+                // acquisition may instead stop first; neither may invent EOF.
+                let omitted = output.value["stderr_omitted_bytes"].as_u64();
+                assert_eq!(omitted.is_some(), complete);
+                assert_eq!(
+                    output.value["stderr_truncated"],
+                    !complete || omitted != Some(0)
+                );
+                assert!(
+                    survivor.is_none(),
+                    "same-group descendant survived: direct_exits={direct_exits}, graceful_root={graceful_root}, cancel={cancel}, state={survivor:?}"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn shell_timeout_is_opt_in_and_accepts_long_explicit_limits() {
         for args in [

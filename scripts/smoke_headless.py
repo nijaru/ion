@@ -34,7 +34,22 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            if "BURST" in prompt:
+            group_prompt = next((str(message["content"]) for message in body["messages"] if message["role"] == "user" and "GROUP_TIMEOUT" in str(message["content"])), None)
+            if group_prompt is not None:
+                if body["messages"][-1]["role"] == "tool":
+                    event({"content": "Group timeout observed."}, "stop")
+                else:
+                    direct_exits = "DIRECT_EXIT" in group_prompt
+                    command = (
+                        "printf %s $$ > native.pid; "
+                        "sh -c 'trap \"\" TERM PIPE; printf %s $$ > descendant.pid; touch native.ready; while :; do printf x; done' & "
+                        "while [ ! -e native.ready ]; do sleep 0.01; done; "
+                        + ("exit 0" if direct_exits else "exec sleep 30")
+                    )
+                    event({"tool_calls": [{"index": 0, "id": "group", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": command, "timeout_ms": 1000})}}]}, "tool_calls")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            elif "BURST" in prompt:
                 deltas = [{"content": "x"}] * 5000 + [{}]
                 records = [b"data: " + json.dumps({"id": "burst", "choices": [{"index": 0, "delta": delta, "finish_reason": "stop" if index == 5000 else None}]}).encode() + b"\n\n" for index, delta in enumerate(deltas)]
                 self.wfile.write(b"".join(records) + b"data: [DONE]\n\n")
@@ -42,7 +57,7 @@ class Handler(BaseHTTPRequestHandler):
             elif "TEXT_PRESSURE" in prompt:
                 commands = [
                     "printf 'ONCE\\n' >> effects; python3 -c \"print('x' * 100000)\"",
-                    "printf '%s\\n' $$ > native.pid; touch native.ready; exec sleep 30",
+                    "printf '%s\\n' $$ > native.pid; sh -c 'trap \"\" TERM; printf %s $$ > descendant.pid; touch native.ready; exec sleep 30' >/dev/null 2>&1 & exec sleep 30",
                     "touch unused",
                 ]
                 calls = [{"index": index, "id": f"call-{index}", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": command, "timeout_ms": 120000})}} for index, command in enumerate(commands)]
@@ -95,15 +110,35 @@ def alive(pid):
         return False
 
 
+def running(pid):
+    # Linux orphan zombies remain visible to kill(pid, 0), but cannot execute.
+    result = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    assert result.returncode in (0, 1) and not result.stderr, result
+    state = result.stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def wait_stopped(pid):
+    # Group SIGKILL precedes root release, but grandchildren are not waitable.
+    deadline = time.monotonic() + 2
+    while running(pid):
+        assert time.monotonic() < deadline, f"same-group descendant {pid} survived stop"
+        time.sleep(0.01)
+
+
 def cleanup(child, workspace):
     if child.poll() is None:
         child.kill()
         child.communicate(timeout=8)
-    pid_path = workspace / "native.pid"
-    if pid_path.exists():
-        pid = int(pid_path.read_text())
-        if alive(pid):
-            os.kill(pid, signal.SIGKILL)
+    for name in ("native.pid", "descendant.pid"):
+        pid_path = workspace / name
+        if pid_path.exists():
+            pid = int(pid_path.read_text())
+            if running(pid):
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
@@ -131,6 +166,30 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
         if len(visible) < 5000:
             assert gaps and sum(record["skipped"] for record in gaps) > 0, (len(visible), gaps)
         assert next(record["text"] for record in burst_records if record["type"] == "final") == "x" * 5000
+        for direct_exits in (False, True):
+            workspace = work / f"group-timeout-{direct_exits}"
+            workspace.mkdir()
+            child = subprocess.Popen([binary, "--cwd", workspace, "--json", "run", "GROUP_TIMEOUT" + (" DIRECT_EXIT" if direct_exits else "")], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                stdout, stderr = child.communicate(timeout=10)
+                assert child.returncode == 0, (stdout, stderr)
+                database = session_database(work / "ion", workspace)
+                facts = entries(database)
+                results = [fact["data"]["result"]["outcome"] for fact in facts if fact["kind"] == "tool_result"]
+                assert len(results) == 1 and results[0]["state"] == "observed", results
+                output = results[0]["output"]["value"]
+                assert output["timed_out"] and not output["cancelled"] and output["wait_error"] is None, output
+                assert output["exit_code"] == (0 if direct_exits else None), output
+                assert output["signal"] == (None if direct_exits else signal.SIGTERM), output
+                assert facts[-1]["kind"] == "turn_ended" and facts[-1]["data"]["reason"] == "completed", facts[-1]
+                descendant = int((workspace / "descendant.pid").read_text())
+                wait_stopped(descendant)
+                assert not alive(int((workspace / "native.pid").read_text())), "direct child was not reaped"
+                # A fresh reader must recover exactly the same committed outcome.
+                reopened = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", database, "inspect"], env=env, capture_output=True, check=True).stdout)
+                assert reopened["entries"] == facts, "read-only reopen changed the timeout outcome"
+            finally:
+                cleanup(child, workspace)
         for json_output in (True, False):
             workspace = work / ("json" if json_output else "text")
             workspace.mkdir()
@@ -189,6 +248,8 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 if (workspace / "native.pid").exists():
                     native_pid = int((workspace / "native.pid").read_text())
                     assert not alive(native_pid), "headless settled before reaping owned native work"
+                    descendant = int((workspace / "descendant.pid").read_text())
+                    wait_stopped(descendant)
                 if writer_probe is not None:
                     os.close(writer_probe)
                     writer_probe = None
