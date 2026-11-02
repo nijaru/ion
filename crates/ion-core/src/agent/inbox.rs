@@ -1,15 +1,20 @@
 //! Atomic user-steering and automated-readiness intake at complete boundaries.
 use super::*;
 use crate::session::AssistantRecord;
-use crate::{CompletionInbox, CompletionNotice};
+use crate::{CommittedInput, CompletionInbox, CompletionNotice, InputCommit, PreparedInput};
 
-/// Host-owned prepared steering. Automated readiness retains independent,
-/// receiving-owned custody, shared across this receiver's operations.
+/// Prepared steering and retained, ordered commit acknowledgements. Automated
+/// readiness has independent receiving-owned custody across operations.
 pub struct SteeringInbox<M = ()> {
-    pub(super) pending: Mutex<VecDeque<crate::AcceptedInput<M>>>,
+    pub(super) state: Mutex<IntakeState<M>>,
     budget: crate::InputBudget,
     limits: AgentLimits,
     pub(super) completions: Option<Arc<CompletionInbox>>,
+}
+
+pub(super) struct IntakeState<M> {
+    pending: VecDeque<PreparedInput<M>>,
+    committed: VecDeque<CommittedInput>,
 }
 
 #[derive(Default)]
@@ -44,7 +49,10 @@ impl CommittedInputs {
 impl<M> SteeringInbox<M> {
     pub fn new(limits: AgentLimits, budget: crate::InputBudget) -> Self {
         Self {
-            pending: Mutex::new(VecDeque::new()),
+            state: Mutex::new(IntakeState {
+                pending: VecDeque::new(),
+                committed: VecDeque::new(),
+            }),
             budget,
             limits,
             completions: None,
@@ -58,64 +66,60 @@ impl<M> SteeringInbox<M> {
     where
         M: serde::Serialize,
     {
-        let input = self.budget.admit(input, metadata, self.limits)?;
-        self.push_admitted(input);
+        let input = self.budget.prepare(input, metadata, self.limits)?;
+        self.push_prepared(input);
         Ok(())
     }
-    pub fn push_admitted(&self, input: crate::AcceptedInput<M>) {
-        self.pending
+    pub fn push_prepared(&self, input: PreparedInput<M>) {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending
             .push_back(input);
     }
-    pub fn take_uncommitted(&self) -> Vec<crate::AcceptedInput<M>> {
-        self.pending
+    /// Only after the actual operation joins can remaining prepared custody be
+    /// treated as uncommitted. Stop and an abandoned wait are not that proof.
+    pub fn take_uncommitted(&self) -> Vec<PreparedInput<M>> {
+        self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending
             .drain(..)
             .collect()
     }
+    /// Positive acknowledgements in durable steering order. Taking these
+    /// releases their retained budget when the returned owners are dropped.
+    pub fn take_committed(&self) -> Vec<CommittedInput> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .drain(..)
+            .collect()
+    }
+    fn freeze(&self) -> FrozenInputs<'_, M> {
+        let inputs = std::mem::take(
+            &mut self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pending,
+        );
+        FrozenInputs {
+            inbox: self,
+            inputs,
+            returnable: true,
+        }
+    }
+    // These blocking operators run inside the Turn's retained Session I/O lane.
     pub(super) fn record_pending(
         &self,
         session: &Session,
         turn: u64,
         limits: AgentLimits,
     ) -> Result<CommittedInputs, AgentError> {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        validate_steering(&pending, limits)?;
-        let completion = self
-            .completions
-            .as_ref()
-            .map(|inbox| inbox.batch(session, Some(turn), true))
-            .transpose()?;
-        let notices = completion
-            .as_ref()
-            .map_or_else(Vec::new, |batch| batch.notices());
-        let entries = session.record_inputs(
-            turn,
-            pending
-                .iter()
-                .map(|input| input.message().clone())
-                .collect(),
-            notices.clone(),
-        )?;
-        if let Some(batch) = completion {
-            batch.commit(turn);
-        }
-        let accepted = pending.drain(..).collect::<Vec<_>>();
-        drop(pending);
-        // User metadata may execute Drop code; never release it under a lock.
-        Ok(CommittedInputs {
-            entries,
-            steering: accepted
-                .into_iter()
-                .map(crate::AcceptedInput::into_message)
-                .collect(),
-            completions: notices,
-        })
+        self.record_boundary(session, turn, None, limits)
+            .map(|(_, inputs)| inputs)
     }
     pub(super) fn record_assistant(
         &self,
@@ -124,41 +128,73 @@ impl<M> SteeringInbox<M> {
         assistant: AssistantRecord,
         limits: AgentLimits,
     ) -> Result<(crate::session::CommittedAssistant, CommittedInputs), AgentError> {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        validate_steering(&pending, limits)?;
-        let completion = self
+        let (committed, inputs) = self.record_boundary(session, turn, Some(assistant), limits)?;
+        Ok((committed.expect("assistant was committed"), inputs))
+    }
+    fn record_boundary(
+        &self,
+        session: &Session,
+        turn: u64,
+        assistant: Option<AssistantRecord>,
+        limits: AgentLimits,
+    ) -> Result<(Option<crate::session::CommittedAssistant>, CommittedInputs), AgentError> {
+        let mut inputs = self.freeze();
+        for input in &inputs.inputs {
+            crate::input::validate_input(input.message(), limits)?;
+        }
+        let mut completion = self
             .completions
             .as_ref()
-            .map(|inbox| inbox.batch(session, Some(turn), !pending.is_empty()))
+            .map(|inbox| {
+                inbox.batch(
+                    session,
+                    Some(turn),
+                    assistant.is_none() || !inputs.inputs.is_empty(),
+                )
+            })
             .transpose()?;
         let notices = completion
             .as_ref()
             .map_or_else(Vec::new, |batch| batch.notices());
-        let (committed, entries) = session.commit_assistant(
-            turn,
-            assistant,
-            pending
-                .iter()
-                .map(|input| input.message().clone())
-                .collect(),
-            notices.clone(),
-        )?;
+        let messages = inputs
+            .inputs
+            .iter()
+            .map(|input| input.message().clone())
+            .collect();
+        inputs.begin();
+        if let Some(batch) = &mut completion {
+            batch.begin();
+        }
+        let result = if let Some(assistant) = assistant {
+            session
+                .commit_assistant(turn, assistant, messages, notices.clone())
+                .map(|(committed, entries)| (Some(committed), entries))
+        } else {
+            session
+                .record_inputs(turn, messages, notices.clone())
+                .map(|entries| (None, entries))
+        };
+        let (committed, entries) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                if !error.is_commit_uncertain() {
+                    inputs.not_committed();
+                    if let Some(batch) = completion {
+                        batch.reject();
+                    }
+                }
+                return Err(error.into());
+            }
+        };
         if let Some(batch) = completion {
             batch.commit(turn);
         }
-        let accepted = pending.drain(..).collect::<Vec<_>>();
-        drop(pending);
+        let steering = inputs.publish(session.id(), turn, entries.steering.clone());
         Ok((
             committed,
             CommittedInputs {
+                steering,
                 entries,
-                steering: accepted
-                    .into_iter()
-                    .map(crate::AcceptedInput::into_message)
-                    .collect(),
                 completions: notices,
             },
         ))
@@ -169,12 +205,70 @@ impl SteeringInbox<()> {
         self.push_message(user_text(prompt), ())
     }
 }
-fn validate_steering<M>(
-    pending: &VecDeque<crate::AcceptedInput<M>>,
-    limits: AgentLimits,
-) -> Result<(), AgentError> {
-    for input in pending {
-        crate::input::validate_input(input.message(), limits)?;
+
+/// Claimed intake owns its messages, not an inbox mutex. Known failures restore
+/// the original prefix ahead of later arrivals; uncertain work is never replayed.
+struct FrozenInputs<'a, M> {
+    inbox: &'a SteeringInbox<M>,
+    inputs: VecDeque<PreparedInput<M>>,
+    returnable: bool,
+}
+impl<M> FrozenInputs<'_, M> {
+    fn begin(&mut self) {
+        self.returnable = false;
+        for input in &self.inputs {
+            input.begin();
+        }
     }
-    Ok(())
+    fn not_committed(&mut self) {
+        for input in &self.inputs {
+            input.not_committed();
+        }
+        self.returnable = true;
+    }
+    fn publish(
+        mut self,
+        session: uuid::Uuid,
+        turn: u64,
+        entries: std::ops::Range<u64>,
+    ) -> Vec<Message> {
+        assert_eq!(self.inputs.len() as u64, entries.end - entries.start);
+        let mut messages = Vec::with_capacity(self.inputs.len());
+        let mut metadata = Vec::with_capacity(self.inputs.len());
+        let mut acknowledgements = Vec::with_capacity(self.inputs.len());
+        // Watch notifications may wake arbitrary receiving code. No inbox lock
+        // may surround either receipt publication or metadata destruction.
+        for (input, entry) in self.inputs.drain(..).zip(entries) {
+            let (message, value, acknowledgement) = input.committed(InputCommit {
+                session,
+                turn,
+                entry,
+            });
+            acknowledgements.extend(acknowledgement);
+            messages.push(message);
+            metadata.push(value);
+        }
+        self.inbox
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .committed
+            .extend(acknowledgements);
+        // Publish every receipt and the ordered batch before arbitrary Drop code.
+        drop(metadata);
+        messages
+    }
+}
+impl<M> Drop for FrozenInputs<'_, M> {
+    fn drop(&mut self) {
+        if self.returnable && !self.inputs.is_empty() {
+            let mut state = self
+                .inbox
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.inputs.append(&mut state.pending);
+            state.pending = std::mem::take(&mut self.inputs);
+        }
+    }
 }

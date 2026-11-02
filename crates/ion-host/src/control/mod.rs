@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use ion_ai::Message;
 use ion_core::{
-    AcceptedInput, AgentError, AgentEvent, InputBudget, InputReservation, Operation, SessionError,
+    AgentError, AgentEvent, InputBudget, InputReservation, Operation, PreparedInput, SessionError,
     SteeringInbox, ToolOutput,
 };
 use serde::Serialize;

@@ -154,9 +154,9 @@ impl RequestPlan {
     /// Publish a compatible total-input sample only after the assistant exchange
     /// was committed. Failed validation/commit and auxiliary requests never call
     /// this path.
-    pub fn record_observed_input(
+    pub async fn record_observed_input(
         &self,
-        session: &Session,
+        io: &crate::SessionIo,
         execution: &ModelExecution,
         usage: Usage,
     ) -> Result<(), SessionError> {
@@ -165,7 +165,8 @@ impl RequestPlan {
             .clone()
             .with_model(execution.route.effective.clone());
         if let Some(calibration) = RequestCalibration::new(&self.measurement, scope, usage) {
-            session.set_request_calibration(calibration)?;
+            io.run(move |session| session.set_request_calibration(calibration))
+                .await?;
         }
         Ok(())
     }
@@ -199,7 +200,7 @@ impl RequestPlan {
 
     pub async fn issue<F>(
         mut self,
-        session: &Session,
+        io: &crate::SessionIo,
         model: &Arc<dyn ModelService>,
         stop: &CancellationToken,
         observe: &mut F,
@@ -210,27 +211,33 @@ impl RequestPlan {
         self.request.controls.max_output_tokens =
             self.output_budget.ok_or(AgentError::ContextTooLarge)?;
         model.validate_controls(&self.request.route.effective, &self.request.controls)?;
-        session.admit_request(
-            self.turn,
-            self.request.route.effective.clone(),
-            ModelContextSnapshot {
-                instructions: self
-                    .request
-                    .instructions
-                    .clone()
-                    .expect("agent instructions"),
-                tools: self.request.tools.clone(),
-            },
-        )?;
-        session.activate_request_calibration(&self.measurement, &self.scope)?;
+        let turn = self.turn;
+        let model_ref = self.request.route.effective.clone();
+        let context = ModelContextSnapshot {
+            instructions: self
+                .request
+                .instructions
+                .clone()
+                .expect("agent instructions"),
+            tools: self.request.tools.clone(),
+        };
+        let measurement = self.measurement.clone();
+        let scope = self.scope.clone();
+        io.run(move |session| {
+            session.admit_request(turn, model_ref, context)?;
+            session.activate_request_calibration(&measurement, &scope)
+        })
+        .await?;
         let attempt = generate_with_retry(model, &self.request, stop, observe, |observed| {
-            session
-                .record_uncommitted_usage(
-                    crate::session::ModelUsagePurpose::Assistant,
-                    observed.execution.clone(),
-                    observed.usage,
-                )
-                .map_err(Into::into)
+            io.run_with(move |session| {
+                session
+                    .record_uncommitted_usage(
+                        crate::session::ModelUsagePurpose::Assistant,
+                        observed.execution,
+                        observed.usage,
+                    )
+                    .map_err(AgentError::from)
+            })
         })
         .await;
         // Retain the route actually used by pre-output retry for cache warming.

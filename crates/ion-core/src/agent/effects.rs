@@ -6,11 +6,11 @@ use super::{
 };
 use crate::{
     request::RequestPlan,
-    session::{ModelContextSnapshot, Session},
+    session::ModelContextSnapshot,
     tool_set::{ToolDispatch, ToolExecution},
 };
 use ion_ai::ToolCall;
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 use tokio_util::sync::CancellationToken;
 
 pub(super) struct OrderedBatch {
@@ -48,7 +48,7 @@ impl OrderedBatch {
     pub async fn run<F>(
         &mut self,
         agent: &Agent,
-        session: &Arc<Session>,
+        io: &crate::SessionIo,
         turn: u64,
         instructions: &str,
         stop: &CancellationToken,
@@ -57,6 +57,7 @@ impl OrderedBatch {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        let session = io.session();
         let catalog = self.plan.catalog();
         let mut activate_tools = BTreeSet::new();
         for (index, call) in self.calls.iter().enumerate() {
@@ -119,15 +120,9 @@ impl OrderedBatch {
                 }
             });
             let tool = Box::pin(async { gateway.run(session, stop, tool).await? });
-            let execution = execute_with_cache_warming(
-                &agent.service,
-                session,
-                turn,
-                tool,
-                stop,
-                &mut self.warmer,
-            )
-            .await?;
+            let execution =
+                execute_with_cache_warming(&agent.service, io, turn, tool, stop, &mut self.warmer)
+                    .await?;
             let (outcome, activated) = match execution {
                 ToolExecution::NotDispatched { reason } => {
                     (crate::ToolOutcome::NotDispatched { reason }, Vec::new())
@@ -151,15 +146,15 @@ impl OrderedBatch {
                         tools: catalog.declared_specs_with(&activate_tools),
                     }
                 });
-            session.record_tool_settlement_with_context(
-                turn,
-                crate::ToolSettlement {
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    outcome: outcome.clone(),
-                },
-                next_context,
-            )?;
+            let settlement = crate::ToolSettlement {
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                outcome: outcome.clone(),
+            };
+            io.run(move |session| {
+                session.record_tool_settlement_with_context(turn, settlement, next_context)
+            })
+            .await?;
             self.never_dispatched.remove(&call.id);
             observe(AgentEvent::ToolFinished {
                 call_id: call.id.clone(),

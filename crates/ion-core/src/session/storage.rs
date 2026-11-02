@@ -23,6 +23,10 @@ pub struct SessionIo {
 }
 
 impl SessionIo {
+    pub(crate) fn session(&self) -> &Arc<Session> {
+        &self.session
+    }
+
     pub(super) fn new(session: &Arc<Session>) -> Result<Self, SessionError> {
         Ok(Self {
             session: session.clone(),

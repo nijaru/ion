@@ -60,6 +60,9 @@ pub(super) fn status(run: &BackgroundRunSnapshot) -> String {
         let status = match completion {
             ion_core::CompletionStatus::Waiting => "waiting for join".into(),
             ion_core::CompletionStatus::Queued => "queued; report not acknowledged".into(),
+            ion_core::CompletionStatus::Unresolved => {
+                "context offer unresolved; reconcile the Session; report retained".into()
+            }
             ion_core::CompletionStatus::Offered { turn } => {
                 format!("offered in Turn {turn}; not proof of model read")
             }

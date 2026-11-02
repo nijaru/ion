@@ -60,7 +60,7 @@ impl Agent {
                     let (mut observe, failed) = contained_observer(observe, stop.clone());
                     let result = agent
                         .run_admitted(
-                            &session,
+                            session.io()?,
                             TurnStart {
                                 turn,
                                 interrupted,

@@ -4,19 +4,20 @@ use super::{Agent, AgentError, AgentEvent, SteeringInbox};
 use crate::{
     generation::OutputObservation,
     request::{RequestPlan, RequestStep},
-    session::{Session, SessionError},
+    session::SessionError,
     tool_set::ToolCatalog,
 };
 use ion_ai::{IncompleteReason, ModelResponse, ModelRouteReason, ResponseTermination};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub(super) struct RequestCycle<'a> {
     agent: &'a Agent,
-    session: &'a Session,
+    io: &'a crate::SessionIo,
     turn: u64,
-    instructions: &'a str,
+    instructions: &'a Arc<str>,
     stop: &'a CancellationToken,
-    catalog: Option<ToolCatalog>,
+    catalog: Option<Arc<ToolCatalog>>,
     length_recovery_attempted: bool,
     replay_rebased: bool,
 }
@@ -24,28 +25,28 @@ pub(super) struct RequestCycle<'a> {
 impl<'a> RequestCycle<'a> {
     pub fn new(
         agent: &'a Agent,
-        session: &'a Session,
+        io: &'a crate::SessionIo,
         turn: u64,
-        instructions: &'a str,
+        instructions: &'a Arc<str>,
         stop: &'a CancellationToken,
         catalog: Option<ToolCatalog>,
     ) -> Self {
         Self {
             agent,
-            session,
+            io,
             turn,
             instructions,
             stop,
-            catalog,
+            catalog: catalog.map(Arc::new),
             length_recovery_attempted: false,
             replay_rebased: false,
         }
     }
 
-    pub async fn next<F, M: Send>(
+    pub async fn next<F, M: Send + 'static>(
         &mut self,
         reason: ModelRouteReason,
-        steering: Option<&SteeringInbox<M>>,
+        steering: Option<&Arc<SteeringInbox<M>>>,
         observe: &mut F,
     ) -> Result<RequestStep, AgentError>
     where
@@ -68,28 +69,42 @@ impl<'a> RequestCycle<'a> {
                 return Err(AgentError::Cancelled);
             }
             if let Some(inbox) = steering {
-                inbox
-                    .record_pending(self.session, self.turn, self.agent.limits)?
-                    .observe(self.turn, observe);
+                let inbox = inbox.clone();
+                let turn = self.turn;
+                let limits = self.agent.limits;
+                self.io
+                    .run_with(move |session| inbox.record_pending(session, turn, limits))
+                    .await?
+                    .observe(turn, observe);
             }
             if self.stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-            let basis = self.session.request_basis(&self.agent.model)?;
-            if basis.turn != Some(self.turn) {
-                return Err(SessionError::InvalidHistory.into());
-            }
-            let assistant_seen = basis.assistant_seen;
-            let prefix_bound = basis.prefix_bound;
-            let plan = RequestPlan::new(
-                self.session,
-                basis,
-                &self.agent.service,
-                &self.agent.tools,
-                reason,
-                self.agent.request_settings(self.instructions),
-                self.catalog.as_ref(),
-            )?;
+            let agent = self.agent.clone();
+            let instructions = self.instructions.clone();
+            let catalog = self.catalog.clone();
+            let turn = self.turn;
+            let (plan, assistant_seen, prefix_bound) = self
+                .io
+                .run_with(move |session| {
+                    let basis = session.request_basis(&agent.model)?;
+                    if basis.turn != Some(turn) {
+                        return Err(AgentError::from(SessionError::InvalidHistory));
+                    }
+                    let assistant_seen = basis.assistant_seen;
+                    let prefix_bound = basis.prefix_bound;
+                    let plan = RequestPlan::new(
+                        session,
+                        basis,
+                        &agent.service,
+                        &agent.tools,
+                        reason,
+                        agent.request_settings(&instructions),
+                        catalog.as_deref(),
+                    )?;
+                    Ok((plan, assistant_seen, prefix_bound))
+                })
+                .await?;
             let output_budget = plan.output_budget();
             let required = output_budget.is_none();
             let keep_bytes = plan.keep_bytes();
@@ -109,14 +124,7 @@ impl<'a> RequestCycle<'a> {
                 }
                 match self
                     .agent
-                    .compact_inner(
-                        None,
-                        self.session,
-                        self.stop,
-                        keep_bytes,
-                        !required,
-                        observe,
-                    )
+                    .compact_inner(None, self.io, self.stop, keep_bytes, !required, observe)
                     .await
                 {
                     Ok(Some(chunked)) => {
@@ -134,14 +142,17 @@ impl<'a> RequestCycle<'a> {
             }
             let output_budget = output_budget.ok_or(AgentError::ContextTooLarge)?;
             let issued = plan
-                .issue(self.session, &self.agent.service, self.stop, observe)
+                .issue(self.io, &self.agent.service, self.stop, observe)
                 .await?;
             let attempt = issued.attempt;
             if !assistant_seen
                 && !self.replay_rebased
                 && matches!(&attempt.outcome, Err(AgentError::ReplayContextChanged))
             {
-                self.session.rebase_provider_replay(self.turn)?;
+                let turn = self.turn;
+                self.io
+                    .run(move |session| session.rebase_provider_replay(turn))
+                    .await?;
                 observe(AgentEvent::ProviderReplayRebased);
                 self.replay_rebased = true;
                 continue;
@@ -162,7 +173,7 @@ impl<'a> RequestCycle<'a> {
             {
                 match self
                     .agent
-                    .compact_inner(None, self.session, self.stop, keep_bytes, false, observe)
+                    .compact_inner(None, self.io, self.stop, keep_bytes, false, observe)
                     .await
                 {
                     Ok(None) => {}
@@ -172,11 +183,17 @@ impl<'a> RequestCycle<'a> {
                         // response is discarded only if recovery replaces it (or
                         // fails); otherwise the Turn still owns its disposition.
                         if let Some(observed) = &attempt.usage {
-                            self.session.record_uncommitted_usage(
-                                crate::session::ModelUsagePurpose::Assistant,
-                                observed.execution.clone(),
-                                observed.usage,
-                            )?;
+                            let execution = observed.execution.clone();
+                            let usage = observed.usage;
+                            self.io
+                                .run(move |session| {
+                                    session.record_uncommitted_usage(
+                                        crate::session::ModelUsagePurpose::Assistant,
+                                        execution,
+                                        usage,
+                                    )
+                                })
+                                .await?;
                         }
                         let _ = recovery?;
                         recovered_overflow = true;

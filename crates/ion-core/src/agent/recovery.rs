@@ -100,7 +100,7 @@ impl Agent {
                     let (mut observe, failed) = contained_observer(observe, stop.clone());
                     let result = agent
                         .run_admitted(
-                            &session,
+                            session.io()?,
                             TurnStart {
                                 turn: point.turn,
                                 interrupted,
@@ -109,7 +109,7 @@ impl Agent {
                             },
                             instructions,
                             stop,
-                            steering.as_deref(),
+                            steering.as_ref(),
                             &mut observe,
                         )
                         .await;

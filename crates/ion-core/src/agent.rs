@@ -218,7 +218,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
-        self.start_submission::<_, ()>(session, input, instructions, stop, None, observe)
+        self.prepare_submission::<_, ()>(session, input, instructions, stop, None, observe)
     }
 
     /// Accept steering at model-step boundaries. Restore uncommitted inputs
@@ -260,7 +260,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
-        self.start_submission(session, input, instructions, stop, Some(steering), observe)
+        self.prepare_submission(session, input, instructions, stop, Some(steering), observe)
     }
 
     /// Accept a literal message with stable delivery correlation. Only the message
@@ -318,7 +318,7 @@ impl Agent {
                     let (mut observe, failed) = contained_observer(observe, stop.clone());
                     let result = agent
                         .run_admitted(
-                            &session,
+                            session.io()?,
                             TurnStart {
                                 turn,
                                 interrupted,
@@ -327,7 +327,7 @@ impl Agent {
                             },
                             instructions,
                             stop,
-                            steering.as_deref(),
+                            steering.as_ref(),
                             &mut observe,
                         )
                         .await;
@@ -353,10 +353,31 @@ impl Agent {
         }
     }
 
-    fn start_submission<F, M: Send + 'static>(
+    fn prepare_submission<F, M: Send + 'static>(
         &self,
         session: Arc<Session>,
         input: Message,
+        instructions: String,
+        stop: CancellationToken,
+        steering: Option<Arc<SteeringInbox<M>>>,
+        observe: F,
+    ) -> crate::Operation<String, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send + 'static,
+    {
+        let input = match crate::InputBudget::default().prepare(input, (), self.limits) {
+            Ok(input) => input,
+            Err(error) => return crate::Operation::ready(Err(error)),
+        };
+        self.submit_prepared(session, input, instructions, stop, steering, observe)
+    }
+
+    /// Transfer once-owned input custody into the engine. Obtain its receipt
+    /// before transfer to observe admission independently of events or this wait.
+    pub fn submit_prepared<F, R: Send + 'static, M: Send + 'static>(
+        &self,
+        session: Arc<Session>,
+        input: crate::PreparedInput<R>,
         instructions: String,
         stop: CancellationToken,
         steering: Option<Arc<SteeringInbox<M>>>,
@@ -376,7 +397,7 @@ impl Agent {
                         input,
                         instructions,
                         stop,
-                        steering.as_deref(),
+                        steering.as_ref(),
                         &mut observe,
                     )
                     .await;
@@ -385,43 +406,67 @@ impl Agent {
         })
     }
 
-    async fn submit_inner<F, M: Send>(
+    async fn submit_inner<F, R: Send + 'static, M: Send + 'static>(
         &self,
         session: &Arc<Session>,
-        input: Message,
+        input: crate::PreparedInput<R>,
         instructions: String,
         stop: CancellationToken,
-        steering: Option<&SteeringInbox<M>>,
+        steering: Option<&Arc<SteeringInbox<M>>>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
         F: FnMut(AgentEvent) + Send,
     {
-        self.validate_submission(session, &input, &stop)?;
-        let (binding, catalog) = self.admission_binding(session, &instructions)?;
-        let TurnAdmission::New {
-            turn,
-            entry,
-            interrupted,
-            input,
-        } = session.admit_turn(input, self.model.clone(), None, binding)?
-        else {
-            unreachable!("anonymous input cannot reconcile");
-        };
-        self.run_admitted(
-            session,
-            TurnStart {
-                turn,
-                interrupted,
-                origin: TurnOrigin::User { entry, input },
-                catalog,
-            },
-            instructions,
-            stop,
-            steering,
-            observe,
-        )
-        .await
+        let io = session.io()?;
+        let agent = self.clone();
+        let admission_stop = stop.clone();
+        let admission_instructions = instructions.clone();
+        let start = io
+            .run_with(move |session| {
+                agent.validate_submission(session, input.message(), &admission_stop)?;
+                let (binding, catalog) =
+                    agent.admission_binding(session, &admission_instructions)?;
+                input.begin();
+                let admission =
+                    session.admit_turn(input.message().clone(), agent.model, None, binding);
+                let TurnAdmission::New {
+                    turn,
+                    entry,
+                    interrupted,
+                    input: message,
+                } = (match admission {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        if !error.is_commit_uncertain() {
+                            input.not_committed();
+                        }
+                        return Err(AgentError::from(error));
+                    }
+                })
+                else {
+                    unreachable!("anonymous input cannot reconcile");
+                };
+                let (_, metadata, acknowledgement) = input.committed(crate::InputCommit {
+                    session: session.id(),
+                    turn,
+                    entry,
+                });
+                drop(acknowledgement);
+                drop(metadata);
+                Ok(TurnStart {
+                    turn,
+                    interrupted,
+                    origin: TurnOrigin::User {
+                        entry,
+                        input: message,
+                    },
+                    catalog,
+                })
+            })
+            .await?;
+        self.run_admitted(io, start, instructions, stop, steering, observe)
+            .await
     }
 
     fn validate_submission(
@@ -456,13 +501,13 @@ impl Agent {
         Ok(())
     }
 
-    async fn run_admitted<F, M: Send>(
+    async fn run_admitted<F, M: Send + 'static>(
         &self,
-        session: &Arc<Session>,
+        io: crate::SessionIo,
         start: TurnStart,
         instructions: String,
         stop: CancellationToken,
-        steering: Option<&SteeringInbox<M>>,
+        steering: Option<&Arc<SteeringInbox<M>>>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -470,7 +515,7 @@ impl Agent {
     {
         turn::Turn {
             agent: self,
-            session,
+            io: &io,
             start,
             instructions,
             stop: &stop,
@@ -664,5 +709,7 @@ impl AgentError {
     }
 }
 
+#[cfg(test)]
+mod input_tests;
 #[cfg(test)]
 mod tests;

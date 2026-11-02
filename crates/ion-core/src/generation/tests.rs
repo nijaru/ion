@@ -75,9 +75,11 @@ async fn cancellation_prevents_provider_construction_including_cache_warm() {
             !refresh_prompt_cache(&model, request(), &stop, &mut None).await
         } else {
             matches!(
-                generate_with_retry(&model, &request(), &stop, &mut |_| {}, |_| Ok(()))
-                    .await
-                    .outcome,
+                generate_with_retry(&model, &request(), &stop, &mut |_| {}, |_| {
+                    std::future::ready(Ok(()))
+                })
+                .await
+                .outcome,
                 Err(AgentError::Cancelled)
             )
         };
@@ -441,7 +443,7 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
                 AgentEvent::ProviderReplayNotice { .. } => notices += 1,
                 _ => {}
             },
-            |_| Ok(()),
+            |_| std::future::ready(Ok(())),
         )
         .await;
         if retry {
@@ -519,7 +521,7 @@ async fn completion_only_attempt_evidence_does_not_depend_on_observer_events() {
             &request,
             &CancellationToken::new(),
             &mut |_| {},
-            |_| Ok(()),
+            |_| std::future::ready(Ok(())),
         )
         .await;
         assert_eq!(attempt.output, expected);

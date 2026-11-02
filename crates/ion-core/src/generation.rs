@@ -85,7 +85,7 @@ impl GenerationAttempt {
     }
 }
 
-pub(crate) async fn generate_with_retry<F, A>(
+pub(crate) async fn generate_with_retry<F, A, Accounting>(
     model: &Arc<dyn ModelService>,
     request: &ModelRequest,
     stop: &CancellationToken,
@@ -94,7 +94,8 @@ pub(crate) async fn generate_with_retry<F, A>(
 ) -> GenerationAttempt
 where
     F: FnMut(AgentEvent) + Send,
-    A: FnMut(&ObservedUsage) -> Result<(), AgentError> + Send,
+    A: FnMut(ObservedUsage) -> Accounting + Send,
+    Accounting: std::future::Future<Output = Result<(), AgentError>> + Send,
 {
     if let Err(error) = model.validate_controls(&request.route.effective, &request.controls) {
         let now = tokio::time::Instant::now();
@@ -118,7 +119,7 @@ where
         // write failing blocks the request just like other Session commits.
         if evidence.outcome.is_err()
             && let Some(usage) = evidence.usage.take()
-            && let Err(error) = account_failure(&usage)
+            && let Err(error) = account_failure(usage).await
         {
             evidence.outcome = Err(error);
             return evidence;

@@ -36,7 +36,10 @@ pub use delegation::{
     DelegationRecord, DelegationSite, DelegationSpec, DelegationTarget, DelegationTask,
     MAX_DELEGATION_PARTIAL_BYTES,
 };
-pub use input::{AcceptedInput, InputBudget, InputReservation};
+pub use input::{
+    CommittedInput, InputBudget, InputCommit, InputReceipt, InputReservation, InputStatus,
+    PreparedInput,
+};
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
 pub use session::{
     ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter, AuthorityScope, ContextPoint,

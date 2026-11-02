@@ -247,7 +247,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     break;
                 };
                 custody.steering_order.push_back(id);
-                active.inbox.push_admitted(prepared);
+                active.inbox.push_prepared(prepared);
             }
         }
         if self.active.is_none() && !self.closed && !self.stop_requested {
@@ -353,7 +353,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             match result.and_then(|message| {
                 Ok(self
                     .budget
-                    .admit(message, id, self.setup.runtime.agent.limits())?)
+                    .prepare(message, id, self.setup.runtime.agent.limits())?)
             }) {
                 Ok(prepared) => {
                     pending.content = InputContent::Ready(prepared);

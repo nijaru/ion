@@ -881,7 +881,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
                 retry_delay = Some(delay_ms);
             }
         },
-        |_| Ok(()),
+        |_| std::future::ready(Ok(())),
     )
     .await
     .into_result()
@@ -908,7 +908,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
                 visible.push_str(&text);
             }
         },
-        |_| Ok(()),
+        |_| std::future::ready(Ok(())),
     )
     .await
     .outcome
@@ -931,7 +931,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
         &request,
         &CancellationToken::new(),
         &mut |_| {},
-        |_| Ok(()),
+        |_| std::future::ready(Ok(())),
     )
     .await
     .outcome
@@ -2208,7 +2208,7 @@ async fn rejected_steering_stays_available_to_the_host() {
         steering
             .take_uncommitted()
             .into_iter()
-            .map(crate::AcceptedInput::into_message)
+            .map(crate::PreparedInput::into_message)
             .collect::<Vec<_>>(),
         vec![user_text(prompt)]
     );
@@ -2274,7 +2274,7 @@ async fn assistant_and_steering_commit_together_or_remain_unpublished() {
         steering
             .take_uncommitted()
             .into_iter()
-            .map(crate::AcceptedInput::into_message)
+            .map(crate::PreparedInput::into_message)
             .collect::<Vec<_>>(),
         vec![user_text(prompt)]
     );
@@ -2946,7 +2946,7 @@ fn steering_commit_releases_host_metadata_outside_inbox_lock() {
         fn drop(&mut self) {
             let inbox = self.inbox.upgrade().unwrap();
             assert!(
-                inbox.pending.try_lock().is_ok(),
+                inbox.state.try_lock().is_ok(),
                 "metadata dropped under inbox lock"
             );
             self.dropped.fetch_add(1, Ordering::SeqCst);
@@ -3045,7 +3045,7 @@ fn image_steering_cannot_commit_on_a_text_only_route() {
         steering
             .take_uncommitted()
             .into_iter()
-            .map(crate::AcceptedInput::into_message)
+            .map(crate::PreparedInput::into_message)
             .collect::<Vec<_>>(),
         vec![input]
     );

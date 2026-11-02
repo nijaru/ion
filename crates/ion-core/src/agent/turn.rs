@@ -9,7 +9,7 @@ use super::{
 use crate::{
     generation::GeneratedResponse,
     request::RequestStep,
-    session::{AssistantRecord, Session, StoredToolActivity, TurnEndReason},
+    session::{AssistantRecord, StoredToolActivity, TurnEndReason},
     tool_set::ToolActivity,
 };
 use ion_ai::{
@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 pub(super) struct Turn<'a> {
     pub agent: &'a Agent,
-    pub session: &'a Arc<Session>,
+    pub io: &'a crate::SessionIo,
     pub start: TurnStart,
     pub instructions: String,
     pub stop: &'a CancellationToken,
@@ -70,9 +70,9 @@ fn validated_calls(
 }
 
 impl Turn<'_> {
-    pub async fn run<F, M: Send>(
+    pub async fn run<F, M: Send + 'static>(
         self,
-        steering: Option<&SteeringInbox<M>>,
+        steering: Option<&Arc<SteeringInbox<M>>>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -80,11 +80,12 @@ impl Turn<'_> {
     {
         let Self {
             agent,
-            session,
+            io,
             start,
             instructions,
             stop,
         } = self;
+        let instructions: Arc<str> = instructions.into();
         let turn = start.turn;
         let mut reason = match start.origin {
             TurnOrigin::User { entry, input } => {
@@ -108,7 +109,7 @@ impl Turn<'_> {
         if start.interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(start.interrupted));
         }
-        let mut cycle = RequestCycle::new(agent, session, turn, &instructions, stop, start.catalog);
+        let mut cycle = RequestCycle::new(agent, io, turn, &instructions, stop, start.catalog);
         let mut batch = None;
         let outcome = async {
             loop {
@@ -133,11 +134,14 @@ impl Turn<'_> {
                 let calls = match validated_calls(&response, &execution, truncated_calls) {
                     Ok(calls) => calls,
                     Err(error) => {
-                        session.record_uncommitted_usage(
-                            crate::session::ModelUsagePurpose::Assistant,
-                            execution,
-                            response.usage,
-                        )?;
+                        io.run(move |session| {
+                            session.record_uncommitted_usage(
+                                crate::session::ModelUsagePurpose::Assistant,
+                                execution,
+                                response.usage,
+                            )
+                        })
+                        .await?;
                         return Err(error);
                     }
                 };
@@ -150,15 +154,15 @@ impl Turn<'_> {
                     .collect::<Vec<_>>();
                 let committed_content = response.message.content.clone();
                 if truncated_calls {
-                    let (entry, results) = session.record_truncated_assistant(
-                        turn,
-                        AssistantRecord {
-                            message: response.message,
-                            tool_activities: tool_activities.clone(),
-                            execution: execution.clone(),
-                            usage: response.usage,
-                        },
-                    )?;
+                    let assistant = AssistantRecord {
+                        message: response.message,
+                        tool_activities: tool_activities.clone(),
+                        execution: execution.clone(),
+                        usage: response.usage,
+                    };
+                    let (entry, results) = io
+                        .run(move |session| session.record_truncated_assistant(turn, assistant))
+                        .await?;
                     observe(AgentEvent::AssistantCommitted {
                         turn,
                         entry,
@@ -181,7 +185,8 @@ impl Turn<'_> {
                             outcome: result.outcome,
                         });
                     }
-                    plan.record_observed_input(session, &execution, response.usage)?;
+                    plan.record_observed_input(io, &execution, response.usage)
+                        .await?;
                     continue;
                 }
                 let final_text = response
@@ -208,12 +213,20 @@ impl Turn<'_> {
                 let commitment = if calls.is_empty()
                     && let Some(inbox) = steering
                 {
-                    inbox.record_assistant(session, turn, assistant, agent.limits)
+                    let inbox = inbox.clone();
+                    let limits = agent.limits;
+                    io.run_with(move |session| {
+                        inbox.record_assistant(session, turn, assistant, limits)
+                    })
+                    .await
                 } else {
-                    session
-                        .commit_assistant(turn, assistant, Vec::new(), Vec::new())
-                        .map(|(committed, _)| (committed, CommittedInputs::default()))
-                        .map_err(Into::into)
+                    io.run_with(move |session| {
+                        session
+                            .commit_assistant(turn, assistant, Vec::new(), Vec::new())
+                            .map(|(committed, _)| (committed, CommittedInputs::default()))
+                            .map_err(AgentError::from)
+                    })
+                    .await
                 };
                 let (committed, committed_steering) = match commitment {
                     Ok(committed) => committed,
@@ -221,11 +234,14 @@ impl Turn<'_> {
                         // Admission can reject ready boundary input before the
                         // atomic write. Storage faults never get a fallback write.
                         if !matches!(error, AgentError::Session(_)) {
-                            session.record_uncommitted_usage(
-                                crate::session::ModelUsagePurpose::Assistant,
-                                execution,
-                                response.usage,
-                            )?;
+                            io.run(move |session| {
+                                session.record_uncommitted_usage(
+                                    crate::session::ModelUsagePurpose::Assistant,
+                                    execution,
+                                    response.usage,
+                                )
+                            })
+                            .await?;
                         }
                         return Err(error);
                     }
@@ -239,7 +255,8 @@ impl Turn<'_> {
                 });
                 let human_continuation = !committed_steering.steering.is_empty();
                 committed_steering.observe(turn, observe);
-                plan.record_observed_input(session, &execution, response.usage)?;
+                plan.record_observed_input(io, &execution, response.usage)
+                    .await?;
                 if committed.complete {
                     observe(AgentEvent::TurnEnded {
                         turn,
@@ -265,7 +282,7 @@ impl Turn<'_> {
                             response.usage,
                             started,
                         ))
-                        .run(agent, session, turn, &instructions, stop, observe)
+                        .run(agent, io, turn, &instructions, stop, observe)
                         .await?;
                     batch = None;
                 }
@@ -279,13 +296,14 @@ impl Turn<'_> {
                 // second closure write. Only the live batch proves non-dispatch.
                 if !matches!(error, AgentError::Session(_)) {
                     let reason = error.end_reason();
-                    let empty = BTreeSet::new();
                     let never_dispatched = batch
                         .as_ref()
-                        .map_or(&empty, OrderedBatch::never_dispatched);
-                    for (result, activity) in
-                        session.end_turn(turn, reason.clone(), never_dispatched)?
-                    {
+                        .map_or_else(BTreeSet::new, |batch| batch.never_dispatched().clone());
+                    let ending = reason.clone();
+                    let settlements = io
+                        .run(move |session| session.end_turn(turn, ending, &never_dispatched))
+                        .await?;
+                    for (result, activity) in settlements {
                         observe(AgentEvent::ToolFinished {
                             call_id: result.call_id,
                             name: result.name,

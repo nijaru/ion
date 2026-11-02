@@ -399,7 +399,6 @@ impl CompletionBatch {
     }
     /// Use only when storage is known not to have committed. Otherwise drop a
     /// begun batch to preserve uncertainty instead of silently retrying it.
-    #[allow(dead_code, reason = "wired by the separate caller migration")]
     pub(crate) fn reject(mut self) {
         self.finish(None);
     }

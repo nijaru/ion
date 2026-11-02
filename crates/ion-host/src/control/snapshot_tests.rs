@@ -238,7 +238,7 @@ async fn acknowledged_metadata_keeps_its_byte_reservation_until_settlement_trans
     let budget = InputBudget::new(retained + 1024);
     fixture.control.budget = budget.clone();
     let probe = || {
-        budget.admit(
+        budget.prepare(
             Message::user_input("p".repeat(2048), []),
             (),
             AgentLimits::default(),

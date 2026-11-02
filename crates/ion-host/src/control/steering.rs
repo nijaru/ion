@@ -124,7 +124,7 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
             let UserInput::Message(message) = &input else {
                 unreachable!("literal steering")
             };
-            let prepared = self.budget.admit(message.clone(), id, self.limits)?;
+            let prepared = self.budget.prepare(message.clone(), id, self.limits)?;
             Ok((id, reservation, prepared))
         });
         let (id, reservation, prepared) = match admitted {

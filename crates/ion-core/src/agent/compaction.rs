@@ -43,7 +43,7 @@ impl Agent {
     async fn compact_owned<F>(
         &self,
         instructions: Option<&str>,
-        session: &Session,
+        session: &Arc<Session>,
         stop: CancellationToken,
         observe: &mut F,
     ) -> Result<bool, AgentError>
@@ -53,16 +53,23 @@ impl Agent {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
-        self.validate_reasoning(session.reasoning()?)?;
-        let keep_bytes = self.limits.compaction_keep_bytes(0).min(
-            crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(
-                &session.context_messages()?,
-            ))? / 2,
-        );
+        let io = session.io()?;
+        let (reasoning, context_bytes) = io
+            .run(move |session| {
+                Ok((
+                    session.reasoning()?,
+                    crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(
+                        &session.context_messages()?,
+                    ))?,
+                ))
+            })
+            .await?;
+        self.validate_reasoning(reasoning)?;
+        let keep_bytes = self.limits.compaction_keep_bytes(0).min(context_bytes / 2);
         let mut changed = false;
         loop {
             match self
-                .compact_inner(instructions, session, &stop, keep_bytes, false, observe)
+                .compact_inner(instructions, &io, &stop, keep_bytes, false, observe)
                 .await?
             {
                 Some(chunked) => {
@@ -79,7 +86,7 @@ impl Agent {
     pub(super) async fn compact_inner<F>(
         &self,
         instructions: Option<&str>,
-        session: &Session,
+        io: &crate::SessionIo,
         stop: &CancellationToken,
         keep_bytes: usize,
         must_shrink: bool,
@@ -90,39 +97,50 @@ impl Agent {
     {
         let output_tokens = self.limits.max_output_tokens.min(4096);
         let mut max_through_entry = u64::MAX;
+        let focus = instructions.map(Arc::<str>::from);
         let (through_entry, chunked, source_bytes, retained_input_bytes, generated) = loop {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-            let Some(plan) = session.compaction_plan(
-                instructions,
-                keep_bytes,
-                self.limits.max_request_bytes,
-                self.limits.image_input,
-                max_through_entry,
-            )?
-            else {
-                return if session
-                    .compaction_plan(
-                        instructions,
+            let focus = focus.clone();
+            let limits = self.limits;
+            let planned = io
+                .run_with(move |session| {
+                    let Some(plan) = session.compaction_plan(
+                        focus.as_deref(),
                         keep_bytes,
-                        usize::MAX,
-                        self.limits.image_input,
-                        u64::MAX,
+                        limits.max_request_bytes,
+                        limits.image_input,
+                        max_through_entry,
                     )?
-                    .is_some()
-                {
-                    Err(AgentError::ContextTooLarge)
-                } else {
-                    Ok(None)
-                };
+                    else {
+                        return if session
+                            .compaction_plan(
+                                focus.as_deref(),
+                                keep_bytes,
+                                usize::MAX,
+                                limits.image_input,
+                                u64::MAX,
+                            )?
+                            .is_some()
+                        {
+                            Err(AgentError::ContextTooLarge)
+                        } else {
+                            Ok(None)
+                        };
+                    };
+                    Ok(Some((plan, session.reasoning()?)))
+                })
+                .await?;
+            let Some((plan, reasoning)) = planned else {
+                return Ok(None);
             };
             let source_bytes = crate::json_size::encoded_len(
                 &crate::prompt_size::NeutralMessages(&plan.messages),
             )?;
             let mut request = ModelRequest {
                 route: ModelRoute::direct(self.model.clone(), ModelRouteReason::Auxiliary),
-                provider_session_id: Some(session.provider_session_id().to_string()),
+                provider_session_id: Some(io.session().provider_session_id().to_string()),
                 instructions: Some(crate::summary::INSTRUCTIONS.into()),
                 messages: vec![crate::summary::input(
                     instructions,
@@ -132,7 +150,7 @@ impl Agent {
                 tools: Vec::new(),
                 context_timeline: None,
                 prompt_cache: ion_ai::PromptCacheIntent::Default,
-                controls: self.limits.controls(session.reasoning()?, false),
+                controls: self.limits.controls(reasoning, false),
             };
             let Some(available) = self.limits.request_output_budget(&request, output_tokens)?
             else {
@@ -144,13 +162,15 @@ impl Agent {
             request.controls.max_output_tokens = available;
             let attempt =
                 generate_with_retry(&self.service, &request, stop, &mut |_| {}, |observed| {
-                    session
-                        .record_uncommitted_usage(
-                            crate::session::ModelUsagePurpose::Compaction,
-                            observed.execution.clone(),
-                            observed.usage,
-                        )
-                        .map_err(Into::into)
+                    io.run_with(move |session| {
+                        session
+                            .record_uncommitted_usage(
+                                crate::session::ModelUsagePurpose::Compaction,
+                                observed.execution,
+                                observed.usage,
+                            )
+                            .map_err(AgentError::from)
+                    })
                 })
                 .await;
             let overflow = attempt.context_length_exceeded();
@@ -165,11 +185,14 @@ impl Agent {
                     next_through_entry: smaller,
                 });
                 if let Some(observed) = attempt.usage {
-                    session.record_uncommitted_usage(
-                        crate::session::ModelUsagePurpose::Compaction,
-                        observed.execution,
-                        observed.usage,
-                    )?;
+                    io.run(move |session| {
+                        session.record_uncommitted_usage(
+                            crate::session::ModelUsagePurpose::Compaction,
+                            observed.execution,
+                            observed.usage,
+                        )
+                    })
+                    .await?;
                 }
                 max_through_entry = smaller;
                 continue;
@@ -197,11 +220,14 @@ impl Agent {
         let summary = match summary {
             Ok(summary) => summary,
             Err(error) => {
-                session.record_uncommitted_usage(
-                    crate::session::ModelUsagePurpose::Compaction,
-                    execution,
-                    response.usage,
-                )?;
+                io.run(move |session| {
+                    session.record_uncommitted_usage(
+                        crate::session::ModelUsagePurpose::Compaction,
+                        execution,
+                        response.usage,
+                    )
+                })
+                .await?;
                 return Err(error);
             }
         };
@@ -215,14 +241,20 @@ impl Agent {
             .saturating_add(retained_input_bytes)
                 >= source_bytes
         {
-            session.record_uncommitted_usage(
-                crate::session::ModelUsagePurpose::Compaction,
-                execution,
-                response.usage,
-            )?;
+            io.run(move |session| {
+                session.record_uncommitted_usage(
+                    crate::session::ModelUsagePurpose::Compaction,
+                    execution,
+                    response.usage,
+                )
+            })
+            .await?;
             return Ok(None);
         }
-        session.record_compaction(through_entry, summary, execution, response.usage)?;
+        io.run(move |session| {
+            session.record_compaction(through_entry, summary, execution, response.usage)
+        })
+        .await?;
         observe(AgentEvent::ContextCompacted { through_entry });
         Ok(Some(chunked))
     }

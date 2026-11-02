@@ -6,7 +6,7 @@ use ion_ai::{ModelRequest, ModelService};
 use tokio_util::sync::CancellationToken;
 
 use super::AgentError;
-use crate::{generation::refresh_prompt_cache, session::Session, tool_set::ToolExecution};
+use crate::{generation::refresh_prompt_cache, tool_set::ToolExecution};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct PromptCacheWarmingPolicy {
@@ -115,7 +115,7 @@ impl PromptCacheWarmer {
 
 pub(super) async fn execute_with_cache_warming(
     service: &Arc<dyn ModelService>,
-    session: &Session,
+    io: &crate::SessionIo,
     turn: u64,
     tool: ion_ai::BoxFuture<'_, Result<ToolExecution, AgentError>>,
     stop: &CancellationToken,
@@ -158,7 +158,11 @@ pub(super) async fn execute_with_cache_warming(
         if let Some(sample) = &observed {
             // Optimization accounting cannot interrupt owned effects. The next
             // correctness-critical write still surfaces storage faults.
-            let _ = session.record_cache_warm(turn, sample.execution.clone(), sample.usage);
+            let execution = sample.execution.clone();
+            let usage = sample.usage;
+            let _ = io
+                .run(move |session| session.record_cache_warm(turn, execution, usage))
+                .await;
         }
         match outcome {
             Selected::Tool(output) => return output,

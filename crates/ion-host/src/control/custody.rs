@@ -61,7 +61,7 @@ pub(super) struct PendingInput {
 
 pub(super) enum InputContent {
     Images(Message),
-    Ready(AcceptedInput<InputId>),
+    Ready(PreparedInput<InputId>),
     // Root dispatch keeps its message reservation here; transferred steering
     // carries that reservation into Core's inbox instead.
     Transferred {
@@ -98,7 +98,7 @@ impl PendingInput {
         self.withdrawn.get_or_insert(reason);
     }
 
-    pub(super) fn take_ready(&mut self) -> Option<AcceptedInput<InputId>> {
+    pub(super) fn take_ready(&mut self) -> Option<PreparedInput<InputId>> {
         if !matches!(self.content, InputContent::Ready(_)) {
             return None;
         }

@@ -729,7 +729,7 @@ async fn tiny_calibrated_estimate_cannot_relax_the_retained_byte_limit() {
     assert_eq!(plan.output_budget(), None);
     let result = plan
         .issue(
-            &session,
+            &session.io().unwrap(),
             &model_service,
             &CancellationToken::new(),
             &mut |_| {},

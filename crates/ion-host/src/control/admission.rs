@@ -126,7 +126,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     AdmissionContent::Ready(message) => {
                         let prepared =
                             self.budget
-                                .admit(message, id, self.setup.runtime.agent.limits())?;
+                                .prepare(message, id, self.setup.runtime.agent.limits())?;
                         (InputContent::Ready(prepared), InputPhase::Queued)
                     }
                 };
@@ -230,7 +230,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         };
         let prepared = match self
             .budget
-            .admit(message, id, self.setup.runtime.agent.limits())
+            .prepare(message, id, self.setup.runtime.agent.limits())
         {
             Ok(prepared) => prepared,
             Err(reason) => {
