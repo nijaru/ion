@@ -64,7 +64,11 @@ cargo build --locked -p ion
 scripts/smoke.sh
 ```
 
-Rust host entry points and examples live in `crates/ion-cli/examples/`. The current `CodingApplication` and `SessionControl` APIs permit embedding the same execution engine; APIs may change before release. `AGENTS.md` contains project-specific development checks.
+Rust application entry points and examples live in `crates/ion-cli/examples/`. `CodingApplication` and `SessionControl` embed the same execution engine; APIs may change before release. `AGENTS.md` contains project-specific development checks.
+
+`Session::create/open` and `SessionSetup::new` are blocking factory operations. Async coding clients use retained `CodingApplication::prepare_setup`, Session I/O and reader capabilities. Keep `setup.retirements()` outside the controller: after controller shutdown, drain reliable updates, release every Session/read capability, then await the retirement scope's `join()`. Shutdown preserves read-only access; retirement separately joins native SQLite close and writer-lease release. Cancelling a borrowed wait does not cancel or discard its native work.
+
+A local input ID or pending launch is not durable acceptance. Use Core input/request receipts and reliable control updates to distinguish committed, not accepted and unresolved inputs. Never automatically retry or restore an unresolved input as a fresh request.
 
 ## Limitations
 
