@@ -128,7 +128,7 @@ pub(super) struct StorageWork {
 }
 
 #[derive(Clone, Copy)]
-enum Access {
+pub(super) enum Access {
     ReadWrite,
     ReadOnly,
 }
@@ -174,7 +174,7 @@ impl Drop for Admission<'_> {
 }
 
 impl StorageWork {
-    async fn run<T, E>(
+    pub(super) async fn run<T, E>(
         &self,
         owner: &Arc<OperationOwner>,
         access: Access,

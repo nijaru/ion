@@ -212,7 +212,9 @@ impl ArtifactWriter {
                 self.sink
                     .0
                     .storage
-                    .run(&self.io, move || sink.append(id, &label, offset, &data))
+                    .run(&self.io, super::storage::Access::ReadWrite, move || {
+                        sink.append(id, &label, offset, &data)
+                    })
                     .await
                     .map_err(io::Error::other)?;
                 self.committed += written;
@@ -256,7 +258,7 @@ impl ArtifactWriter {
         let session = self.sink.0.clone();
         session
             .storage
-            .run(&owner, move || {
+            .run(&owner, super::storage::Access::ReadWrite, move || {
                 self.finish_storage(complete).map_err(SessionError::from)
             })
             .await
