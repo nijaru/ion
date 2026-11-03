@@ -140,7 +140,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
         if panic:
             env["ION_SMOKE_PANIC_AFTER_FIRST_DRAW"] = "1"
         master, slave = pty.openpty()
-        columns = 40 if not editor_fault and not panic else 100
+        columns = 100 if panic else 40
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, columns, 0, 0))
 
         def controlling_terminal():
@@ -214,6 +214,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     os.write(master, b"ghost\x1f\x1f")
                     drain(0.25)
                     assert len(requests) == 1, "undo after handoff admitted sent input"
+                    editor_checkpoint = len(output)
                     if editor_fault:
                         # Keep a multiline literal and mid-line cursor through
                         # editor rejection; resume type-ahead inserts at it.
@@ -223,15 +224,19 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     until(lambda: marker.exists() and terminal.stacks[terminal.alternate][-1] == 1)
                     assert marker.read_text() == "4", "editor inherited Ion's keyboard push"
                     until(lambda: terminal.cursor_queries == 2)
+                    if editor_fault:
+                        def rejected_feedback_visible():
+                            text = CSI.sub(b"", output[editor_checkpoint:]).replace(b"\r", b"").replace(b"\n", b"")
+                            return all(cue in text for cue in (b"not a regular file", b"original draft retained"))
+                        until(rejected_feedback_visible)
+                        assert len(requests) == 1, "editor rejection admitted the retained draft"
                     checkpoint = len(output)
                     os.write(master, b"after\r")
                     until(lambda: len(requests) == 2 and b"done" in output[checkpoint:])
                     users = [message for message in requests[-1]["messages"] if message["role"] == "user"]
                     expected_input = "  retained\ndrafRESUME_aftert" if editor_fault else "RESUME_after"
                     assert users[-1]["content"] == expected_input, users[-1]
-                    if editor_fault:
-                        assert b"not a regular file" in output, "editor special-file failure was not reported"
-                    else:
+                    if not editor_fault:
                         until(lambda: settled in output[checkpoint:])
                         os.write(master, b"QUESTION_COLLAPSE\r")
                         until(lambda: len(requests) == 3)

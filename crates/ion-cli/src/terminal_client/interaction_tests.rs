@@ -1,22 +1,53 @@
 //! Publication, not layout, makes a retained interaction actionable.
 use super::*;
 
-#[test]
-fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
-    let mut ui = Frontend::default();
+#[tokio::test]
+async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
+    let mut fixture = tests::Fixture::new();
+    let operation_id = fixture
+        .control
+        .compact(None, EditorDraft::at_end(String::new()))
+        .unwrap();
     let operation = ActiveOperation {
         kind: activity::OperationKind::Coding,
         stop_requested: false,
         pending_follow_ups: 0,
     };
-    let dock = Dock::prepare(&mut ui, Some(operation), None, 24, 8);
-    assert!(
-        dock.rows
-            .iter()
-            .any(|row| row.to_string().contains("Ctrl-C cancels"))
-    );
-    assert!(dock.rows.len() + dock.body_rows <= 8);
-    assert!(dock.cursor.is_some());
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        for status in [String::new(), "diagnostic ".repeat(128)] {
+            let mut ui = Frontend {
+                status,
+                mode,
+                ..Frontend::default()
+            };
+            ui.conversation = conversation::fixtures::document(Default::default());
+            ui.conversation.observe(
+                operation_id,
+                &ion_core::AgentEvent::TurnAccepted {
+                    entry: 1,
+                    turn: 1,
+                    input: ion_ai::Message::user_input("request".into(), []),
+                },
+            );
+            for notice in [String::new(), "older notice ".repeat(128)] {
+                ui.conversation.observe(
+                    operation_id,
+                    &ion_core::AgentEvent::ToolCatalogWarning(notice),
+                );
+                for height in [2, 8] {
+                    let dock = Dock::prepare(&mut ui, Some(operation), None, 24, height);
+                    assert!(
+                        dock.rows
+                            .iter()
+                            .any(|row| row.to_string().contains("Ctrl-C cancels"))
+                    );
+                    assert!(dock.rows.len() + dock.body_rows <= height);
+                    assert!(dock.cursor.is_some());
+                }
+            }
+        }
+    }
+    fixture.control.shutdown().await;
 }
 use super::{dock::Dock, interaction::InputTarget, picker::PickerItem};
 use ion_app::{Question, QuestionOption, QuestionRequestId};

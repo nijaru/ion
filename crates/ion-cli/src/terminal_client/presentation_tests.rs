@@ -793,6 +793,76 @@ fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
 }
 
 #[test]
+fn composer_keeps_complete_error_feedback_and_source_cursor_at_common_widths() {
+    let status = "Editor failed: cannot read edited draft /temporary/private-editor/draft.md: not a regular file; original draft retained";
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        let mut ui = Frontend {
+            status: status.into(),
+            mode,
+            ..Frontend::default()
+        };
+        ui.insert("first α\nsecond line\nlast 🦀");
+        ui.editor.cursor = ui.editor.draft.len() - '🦀'.len_utf8();
+        let source = ui.editor.draft.clone();
+        let source_cursor = ui.editor.cursor;
+        for width in [40, 80] {
+            let dock = dock::Dock::prepare(&mut ui, None, None, width, 24);
+            let (row, column) = dock.cursor.expect("composer cursor remains visible");
+            let feedback = dock.rows[..row - 2]
+                .iter()
+                .map(ToString::to_string)
+                .collect::<String>();
+            assert_eq!(feedback, status, "incomplete feedback at {width} columns");
+            assert_eq!(dock.rows[row - 2].to_string(), "› first α");
+            assert_eq!(dock.rows[row - 1].to_string(), "  second line");
+            assert_eq!(dock.rows[row].to_string(), "  last 🦀");
+            assert_eq!(column, 7);
+            assert_eq!(dock.body_rows + dock.rows.len(), 24);
+            assert!(dock.rows.iter().all(|line| line.width() <= width));
+            assert_eq!(ui.editor.draft, source);
+            assert_eq!(ui.editor.cursor, source_cursor);
+        }
+    }
+}
+
+#[test]
+fn composer_bounds_overflowing_feedback_without_hiding_the_caret() {
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        let mut ui = Frontend {
+            status: format!("diagnostic \x1b[31m\t界e\u{301}\n{}", "detail ".repeat(128)),
+            mode,
+            ..Frontend::default()
+        };
+        ui.insert("first\nlast 🦀");
+        ui.editor.cursor = ui.editor.draft.len() - '🦀'.len_utf8();
+        for width in [1, 2, 8, 40] {
+            for height in 1..=8 {
+                let dock = dock::Dock::prepare(&mut ui, None, None, width, height);
+                assert_eq!(dock.body_rows + dock.rows.len(), height);
+                assert!(dock.rows.iter().all(|line| line.width() <= width));
+                let (row, column) = dock.cursor.expect("feedback cannot displace the caret");
+                assert!(row < dock.rows.len() && usize::from(column) < width);
+                assert!(
+                    dock.rows
+                        .iter()
+                        .all(|line| !line.to_string().contains(['\x1b', '\t', '\n']))
+                );
+                if height > 1 {
+                    assert!(dock.rows[row - 1].to_string().ends_with('…'));
+                }
+                if width >= 8 && height >= 4 {
+                    let feedback = dock.rows[..row]
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<String>();
+                    assert!(feedback.starts_with("diagnostic"));
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
     let mut ui = Frontend {
         status: "Ready".into(),

@@ -152,14 +152,28 @@ impl Dock {
             .live()
             .and_then(|live| live.notices().last())
         {
-            status.push(format!("Notice · {notice}"));
+            crate::display_text::push_wrapped(&mut status, &format!("Notice · {notice}"), width);
         }
+        let mut earlier_rows = 0;
         if let Some(value) = visible_status(ui, operation) {
-            status.push(value);
+            earlier_rows = status.len();
+            crate::display_text::push_wrapped(&mut status, &value, width);
         }
         let status_budget = budget.saturating_sub(1);
         if status.len() > status_budget {
-            status.drain(..status.len() - status_budget);
+            // Older notices yield first. Keep the current feedback's prefix
+            // (including stop controls) and one caret row; mark omitted source.
+            let omitted_earlier = earlier_rows.min(status.len() - status_budget);
+            status.drain(..omitted_earlier);
+            if status.len() > status_budget {
+                status.truncate(status_budget);
+                if let Some(last) = status.last_mut() {
+                    *last = crate::display_text::fit_line(&format!("{last}…"), width);
+                }
+            } else if omitted_earlier < earlier_rows {
+                let first = status.first_mut().expect("partially retained older notice");
+                *first = crate::display_text::fit_line(&format!("…{first}"), width);
+            }
         }
         let has_body = operation.is_some()
             || !ui.conversation.mutable_items().is_empty()
@@ -193,10 +207,7 @@ impl Dock {
         );
         let mut rows = Vec::new();
         for text in status {
-            rows.push(Line::styled(
-                crate::display_text::fit_line(&text, width),
-                ui.themes.theme().style(Role::Secondary),
-            ));
+            rows.push(Line::styled(text, ui.themes.theme().style(Role::Secondary)));
         }
         for text in &completion.rows {
             rows.push(Line::styled(
