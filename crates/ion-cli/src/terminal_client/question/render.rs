@@ -73,7 +73,7 @@ impl QuestionModal {
         if self.page == super::Page::Review {
             return self.render_review(width, height, keys, theme);
         }
-        let mut footer = vec![fit_line(&self.controls(keys), width)];
+        let mut footer = self.control_rows(keys, width);
         if self.questions.len() > 1 && !self.editing {
             footer.push(fit_line(
                 &format!(
@@ -95,7 +95,7 @@ impl QuestionModal {
             ));
         }
         if !self.status.is_empty() {
-            footer.push(fit_line(&self.status, width));
+            push_wrapped(&mut footer, &self.status, width);
         }
         footer.truncate(height.saturating_sub(1));
         let viewport = height - footer.len();
@@ -359,13 +359,13 @@ impl QuestionModal {
         }
     }
 
-    fn controls(&self, keys: &KeyBindings) -> String {
+    fn control_rows(&self, keys: &KeyBindings, width: usize) -> Vec<String> {
         let controls = if self.editing {
             format!(
-                "{} answer · {} editor · {} newline",
+                "{} answer · {} newline · {} editor",
                 keys.hint(KeyAction::Submit),
-                keys.hint(KeyAction::External),
-                keys.hint(KeyAction::NewLine)
+                keys.hint(KeyAction::NewLine),
+                keys.hint(KeyAction::External)
             )
         } else if self.multi_select() {
             format!(
@@ -383,12 +383,28 @@ impl QuestionModal {
                 keys.hint(KeyAction::Confirm)
             )
         };
-        format!(
-            "{} stops Turn · {} cancel · {} hide · {controls}",
-            keys.hint(KeyAction::Interrupt),
+        let controls = format!(
+            "{controls} · {} cancel · {} hide · {} stops Turn",
             keys.hint(KeyAction::Cancel),
-            keys.hint(KeyAction::QuestionCollapse)
-        )
+            keys.hint(KeyAction::QuestionCollapse),
+            keys.hint(KeyAction::Interrupt)
+        );
+        let mut rows = Vec::new();
+        let mut line = String::new();
+        // Keep each shortcut with its description when it fits, rather than
+        // clipping the controls or splitting a key name across ordinary widths.
+        for hint in controls.split(" · ") {
+            if !line.is_empty() && line.width() + 3 + hint.width() > width {
+                push_wrapped(&mut rows, &line, width);
+                line.clear();
+            }
+            if !line.is_empty() {
+                line.push_str(" · ");
+            }
+            line.push_str(hint);
+        }
+        push_wrapped(&mut rows, &line, width);
+        rows
     }
 }
 

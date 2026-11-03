@@ -89,21 +89,53 @@ fn custom_sticky_columns_survive_repaint_and_reset_on_width_or_nonvertical_edit(
 }
 
 #[test]
-fn custom_editor_grows_with_the_question_frame_instead_of_a_four_row_cap() {
+fn custom_editor_shows_complete_failure_feedback_at_common_widths() {
+    let keys = KeyBindings::default();
+    let status = "Editor failed: editor exited with exit status: 7; original draft retained";
+    for width in [40, 80] {
+        let mut modal = custom("draft", 5);
+        modal.set_status(status.into());
+        let frame = modal.painted_render(width, 24, &keys, &Theme::default());
+        let painted: String = frame.rows.iter().map(ToString::to_string).collect();
+        assert!(
+            painted.contains(status),
+            "clipped feedback at width {width}: {painted}"
+        );
+        assert!(frame.cursor.is_some());
+        assert_eq!(modal.draft().text.text, "draft");
+    }
+}
+
+#[test]
+fn custom_editor_keeps_multiline_draft_and_editing_hints_visible() {
     let keys = KeyBindings::default();
     let source = "first\nsecond\nthird\nfourth\nfifth\nsixth\nseventh\neighth";
-    let mut modal = custom(source, source.len());
-    let frame = modal.painted_render(40, 24, &keys, &Theme::default());
-    for word in source.lines() {
-        assert!(
-            frame
-                .rows
-                .iter()
-                .any(|line| line.to_string().ends_with(word)),
-            "hidden editor row: {word}"
-        );
+    for width in [40, 80] {
+        let mut modal = custom(source, source.len());
+        let frame = modal.painted_render(width, 24, &keys, &Theme::default());
+        let rows: Vec<_> = frame.rows.iter().map(ToString::to_string).collect();
+        for word in source.lines() {
+            assert!(
+                rows.iter().any(|line| line.ends_with(word)),
+                "hidden editor row: {word}"
+            );
+        }
+        for (action, description) in [
+            (KeyAction::Submit, "answer"),
+            (KeyAction::NewLine, "newline"),
+            (KeyAction::External, "editor"),
+            (KeyAction::Cancel, "cancel"),
+            (KeyAction::QuestionCollapse, "hide"),
+            (KeyAction::Interrupt, "stops Turn"),
+        ] {
+            let hint = format!("{} {description}", keys.hint(action));
+            assert!(
+                rows.iter().any(|line| line.contains(&hint)),
+                "hidden control at width {width}: {hint}"
+            );
+        }
+        assert!(frame.cursor.is_some());
+        assert!(frame.rows.len() < 24);
+        assert_eq!(modal.draft().text.text, source);
     }
-    assert!(frame.cursor.is_some());
-    assert!(frame.rows.len() < 24);
-    assert_eq!(modal.draft().text.text, source);
 }

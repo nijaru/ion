@@ -140,7 +140,8 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
         if panic:
             env["ION_SMOKE_PANIC_AFTER_FIRST_DRAW"] = "1"
         master, slave = pty.openpty()
-        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        columns = 40 if not editor_fault and not panic else 100
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, columns, 0, 0))
 
         def controlling_terminal():
             os.setsid()
@@ -240,7 +241,14 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         until(lambda: b"Which features?" in output and terminal.alternate == (mode == "fullscreen"))
                         os.write(master, b"\x1b[B\x1b[B\x1b[B\r")  # Next confirms none.
                         until(lambda: b"Custom answer?" in output)
+                        checkpoint = len(output)
                         os.write(master, b"\x1b[B\x1b[B\r")
+                        until(lambda: b"Type a custom answer" in output[checkpoint:])
+                        until(lambda: all(hint in output[checkpoint:] for hint in (
+                            b"Enter answer", b"Shift-Enter newline", b"Ctrl-G editor",
+                            b"Esc cancel", b"Ctrl-] hide", b"Ctrl-C stops Turn",
+                        )))
+                        assert len(requests) == 3, "showing editing hints answered the question"
                         os.write(master, "café 🦀".encode() + b"\x1b[D")
                         checkpoint = len(output)
                         os.write(master, b"\x07")
