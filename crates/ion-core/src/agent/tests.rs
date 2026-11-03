@@ -1960,6 +1960,19 @@ async fn truncated_tool_call_is_rejected_and_reissued_without_effect() {
         std::fs::read_to_string(root.join("created.txt")).unwrap(),
         "right"
     );
+    assert_eq!(
+        scripts
+            .requests()
+            .iter()
+            .map(|request| request.route.reason)
+            .collect::<Vec<_>>(),
+        [
+            ModelRouteReason::UserRequest,
+            ModelRouteReason::ToolContinuation,
+            ModelRouteReason::ToolContinuation
+        ],
+        "reissuing rejected calls is a tool-result continuation, not a new user request",
+    );
     assert!(matches!(
         &scripts.requests()[1].messages[1].content[0],
         Content::ToolCall(call) if call.id == "partial"

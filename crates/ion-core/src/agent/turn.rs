@@ -187,6 +187,7 @@ impl Turn<'_> {
                     }
                     plan.record_observed_input(io, &execution, response.usage)
                         .await?;
+                    reason = ModelRouteReason::ToolContinuation;
                     continue;
                 }
                 let final_text = response

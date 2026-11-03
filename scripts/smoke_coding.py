@@ -60,15 +60,28 @@ class Provider(BaseHTTPRequestHandler):
                 names = {tool["function"]["name"] for tool in body["tools"]}
                 assert {"read", "edit", "write", "exec", "subagent"} <= names, names
                 assert body["messages"][-1]["role"] == "user", body["messages"][-1]
+                # Valid-looking arguments are still unsafe when the response
+                # hits its output limit. Neither mutation may be dispatched.
+                self.send_calls([
+                    tool_call("truncated-write", "write", {"path": "truncated-write.txt", "content": "wrong"}),
+                    tool_call("truncated-exec", "exec", {"command": "printf wrong > truncated-exec.txt"}),
+                ], finish_reason="length")
+            elif count == 1:
+                rejected = [message for message in body["messages"] if message["role"] == "tool"]
+                assert [message["tool_call_id"] for message in rejected] == ["truncated-write", "truncated-exec"], rejected
+                for message in rejected:
+                    envelope = json.loads(message["content"])
+                    assert envelope["is_error"] is True, envelope
+                    assert "output token limit" in json.dumps(envelope), envelope
                 calls = [
                     tool_call("read-test", "read", {"path": "test_calculator.py"}),
                     tool_call("read-source", "read", {"path": "calculator.py"}),
                 ]
                 self.send_calls(calls)
-            elif count == 1:
+            elif count == 2:
                 tool_messages = [m for m in body["messages"] if m["role"] == "tool"]
-                assert len(tool_messages) == 2, tool_messages
-                reads = {message["tool_call_id"]: json.loads(message["content"]) for message in tool_messages}
+                assert len(tool_messages) == 4, tool_messages
+                reads = {message["tool_call_id"]: json.loads(message["content"]) for message in tool_messages[2:]}
                 assert set(reads) == {"read-test", "read-source"}, reads
                 for call_id, expected in [("read-test", TEST), ("read-source", SOURCE)]:
                     envelope = reads[call_id]
@@ -95,9 +108,9 @@ class Provider(BaseHTTPRequestHandler):
                     )
                 ]
                 self.send_calls(calls)
-            elif count == 2:
+            elif count == 3:
                 tool_messages = [m for m in body["messages"] if m["role"] == "tool"]
-                assert len(tool_messages) == 3, tool_messages
+                assert len(tool_messages) == 5, tool_messages
                 envelope = json.loads(tool_messages[-1]["content"])
                 assert envelope["is_error"] is False, envelope
                 self.send_calls(
@@ -109,9 +122,9 @@ class Provider(BaseHTTPRequestHandler):
                         )
                     ]
                 )
-            elif count == 3:
+            elif count == 4:
                 tool_messages = [m for m in body["messages"] if m["role"] == "tool"]
-                assert len(tool_messages) == 4, tool_messages
+                assert len(tool_messages) == 6, tool_messages
                 envelope = json.loads(tool_messages[-1]["content"])
                 assert envelope["is_error"] is False, envelope
                 assert envelope["result"]["exit_code"] == 0, envelope
@@ -122,7 +135,7 @@ class Provider(BaseHTTPRequestHandler):
             print(f"mock provider request {count} failed: {error!r}", file=sys.stderr, flush=True)
             self.send_error(500, str(error))
 
-    def send_calls(self, calls):
+    def send_calls(self, calls, finish_reason="tool_calls"):
         for index, call in enumerate(calls):
             call["index"] = index
         events = [
@@ -138,7 +151,7 @@ class Provider(BaseHTTPRequestHandler):
             },
             {
                 "id": "coding",
-                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
             },
         ]
         self.send_events(events)
@@ -242,7 +255,9 @@ def main():
             server.server_close()
             thread.join(timeout=5)
 
-        assert len(requests) == 4, len(requests)
+        assert len(requests) == 5, len(requests)
+        assert not (workspace / "truncated-write.txt").exists()
+        assert not (workspace / "truncated-exec.txt").exists()
         oracle = subprocess.run(
             [sys.executable, "-m", "unittest", "-q"],
             cwd=workspace,
@@ -268,8 +283,14 @@ def main():
         kinds = [entry["kind"] for entry in view["entries"]]
         assert kinds.count("turn_started") == 1, kinds
         assert kinds.count("turn_ended") == 1, kinds
-        assert kinds.count("tool_result") == 4, kinds
-        print("Ion fixed a failing fixture under independent test verification: OK")
+        assert kinds.count("tool_result") == 6, kinds
+        results = [entry["data"]["result"] for entry in view["entries"] if entry["kind"] == "tool_result"]
+        assert [result["outcome"]["state"] for result in results] == ["not_dispatched"] * 2 + ["observed"] * 4, results
+        assistants = [entry["data"] for entry in view["entries"] if entry["kind"] == "assistant"]
+        assert assistants[0]["termination"] == {"Incomplete": "MaxOutputTokens"}, assistants[0]
+        reasons = [assistant["execution"]["route"]["reason"] for assistant in assistants]
+        assert reasons == ["user_request"] + ["tool_continuation"] * 4, reasons
+        print("Ion rejected truncated mutations, continued, and fixed a failing fixture under independent test verification: OK")
 
 
 if __name__ == "__main__":
