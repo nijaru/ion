@@ -269,7 +269,10 @@ impl Screen {
     ///
     /// Native reflow may already have placed some mutable cells in history.
     /// Only the still-visible owned footprint can be erased; this transition
-    /// cannot undo the emulator's earlier scrolling.
+    /// cannot undo the emulator's earlier scrolling. Recognized coordinates
+    /// include display cells, compact glyph indexes, and bottom-retaining
+    /// clipping that resets a cropped caret to top-left. Other incoherent
+    /// evidence is rejected before output or ownership changes.
     pub fn reconcile_inline(
         &mut self,
         out: &mut impl Write,
@@ -297,7 +300,7 @@ impl Screen {
             .ok_or_else(|| {
                 io::Error::other("primary cursor is outside the owned inline footprint")
             })?;
-        let cursor_row = match &self.current {
+        let origin = match &self.current {
             Some(window) => {
                 let buffer = &window.buffer;
                 let display = reflow_cursor(buffer, offset, self.physical_cursor.1, width)?;
@@ -310,32 +313,48 @@ impl Screen {
                 } else {
                     reflow_indexed_cursor(buffer, offset, self.physical_cursor.1, width)?
                 };
-                match (display.1 == cursor.0, indexed.1 == cursor.0) {
-                    (true, true) if display.0 == indexed.0 => display.0,
-                    (true, false) => display.0,
-                    (false, true) => indexed.0,
-                    _ => {
-                        return Err(io::Error::other(format!(
-                            "terminal reflow does not establish a unique inline cursor row: cursor={cursor:?}, display={display:?}, indexed={indexed:?}, prior={:?} at {:?}, size={width}x{height}",
-                            self.physical_cursor,
-                            self.primary_size(),
-                        )));
+                let origin_at = |row| usize::from(cursor.1).saturating_sub(row) as u16;
+                let origin = match (display.1 == cursor.0, indexed.1 == cursor.0) {
+                    (true, true) if origin_at(display.0) == origin_at(indexed.0) => {
+                        Some(origin_at(display.0))
                     }
+                    (true, false) => Some(origin_at(display.0)),
+                    (false, true) => Some(origin_at(indexed.0)),
+                    _ => None,
+                };
+                if let Some(origin) = origin {
+                    origin
+                } else if cursor == (0, 0)
+                    && height > 1
+                    && (width, height) != self.primary_size()
+                    && retained_rows_below_cursor(buffer, offset, self.physical_cursor.1, width)?
+                        >= usize::from(height).saturating_add(indexed.0.saturating_sub(display.0))
+                {
+                    // Bottom-retaining native reflow can crop the caret cell
+                    // and reset CPR to top-left. A nonblank tail filling the
+                    // viewport places its first row strictly after the caret,
+                    // so every visible row is live, regardless of its column.
+                    // At height one, top/bottom clamping is indistinguishable.
+                    0
+                } else {
+                    return Err(io::Error::other(format!(
+                        "terminal reflow does not establish a unique inline origin: cursor={cursor:?}, display={display:?}, indexed={indexed:?}, prior={:?} at {:?}, size={width}x{height}",
+                        self.physical_cursor,
+                        self.primary_size(),
+                    )));
                 }
             }
             // A cleared/discarded surface has no mutable cells left to reclaim.
             // Re-anchor at its measured blank cursor, not a former reservation.
-            None if cursor.0 == 0 => 0,
+            None if cursor.0 == 0 => cursor.1,
             None => {
                 return Err(io::Error::other(
                     "resize has no retained inline cursor evidence",
                 ));
             }
         };
-        // If the established boundary is above the viewport, every visible
-        // row up to the cursor belongs to the old mutable region. Its invisible
-        // part stays terminal-owned; do not clear or reconstruct native history.
-        let origin = usize::from(cursor.1).saturating_sub(cursor_row) as u16;
+        // The invisible part of the old footprint stays terminal-owned;
+        // never clear or reconstruct native history to recover its boundary.
         // There can be no committed content below the primary live anchor.
         // Erase rows, never ED: even ED at row one can archive provisional cells.
         write!(out, "\x1b[0m")?;
@@ -632,9 +651,62 @@ fn reflow_cursor(buf: &Buffer, row: u16, column: u16, width: u16) -> io::Result<
     ))
 }
 
+// Trailing spaces, even styled ones, do not certify retained rows: native
+// height reduction may trim them. Internal hard rows before nonblank content
+// remain ordered. Include the emitted cursor cell even on an otherwise empty
+// row, but never count unused reservation padding below the last nonblank cell.
+fn retained_rows_below_cursor(
+    buf: &Buffer,
+    row: u16,
+    column: u16,
+    width: u16,
+) -> io::Result<usize> {
+    let nonblank_extent = |row| {
+        (0..buf.area.width)
+            .rev()
+            .find_map(|column| {
+                let cell = &buf[(column, row)];
+                cell.symbol()
+                    .bytes()
+                    .any(|byte| byte != b' ')
+                    .then(|| (column + cell.cell_width().max(1)).min(buf.area.width))
+            })
+            .unwrap_or(0)
+    };
+    let last = (row..buf.area.height)
+        .rfind(|row| nonblank_extent(*row) > 0)
+        .unwrap_or(row);
+    let mut mapped_row = 0usize;
+    let mut cursor_row = None;
+    for old_row in row..=last {
+        let extent = nonblank_extent(old_row).max(if old_row == row { column + 1 } else { 0 });
+        let mut old_col = 0;
+        let mut new_col = 0;
+        while old_col < extent {
+            let span = buf[(old_col, old_row)].cell_width().max(1);
+            if span > width {
+                return Err(io::Error::other(
+                    "terminal width cannot retain an emitted wide glyph",
+                ));
+            }
+            if span > width - new_col {
+                mapped_row += 1;
+                new_col = 0;
+            }
+            if old_row == row && old_col <= column && column < old_col + span {
+                cursor_row = Some(mapped_row);
+            }
+            old_col += span;
+            new_col += span;
+        }
+        mapped_row += 1;
+    }
+    Ok(mapped_row - 1 - cursor_row.expect("validated emitted cursor cell was visited"))
+}
+
 // tmux reflow's cursor coordinate follows compact glyph-cell indexes rather
 // than display columns. Keep that alternative separate from the display-width
-// projection and accept it only when CPR establishes the same unique row.
+// projection; CPR must establish the same unique visible erasure origin.
 fn reflow_indexed_cursor(
     buf: &Buffer,
     row: u16,
@@ -1437,6 +1509,127 @@ mod tests {
             assert!(bytes.contains("\x1b[4;1H\x1b[2K"));
             assert!(!bytes.contains("\r\n"));
         }
+    }
+
+    #[test]
+    fn top_clipped_caret_reclaims_only_the_visible_live_suffix() {
+        let footer = || {
+            vec![
+                line("LIVE_BUSY"),
+                line("Ctrl-C cancels · Enter steers · Alt-Enter queues · Working"),
+                line("›  "),
+                line("cwd-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"),
+                line("smoke/fixture /help"),
+            ]
+        };
+        for (live, cursor, width, height) in [
+            (footer(), (2, 2), 24, 2),
+            (footer(), (2, 2), 24, 4),
+            (footer(), (2, 2), 80, 2),
+            (vec![line(&format!("> {}", "x".repeat(70)))], (0, 2), 24, 2),
+            (
+                vec![line(""), footer().remove(3), line("smoke/fixture /help")],
+                (0, 70),
+                24,
+                4,
+            ),
+        ] {
+            let mut screen = Screen::with_live_height(80, 2, 24, live.len());
+            let mut out = Vec::new();
+            screen
+                .draw(
+                    &mut out,
+                    &Frame {
+                        live: &live,
+                        cursor: Some(cursor),
+                    },
+                )
+                .unwrap();
+            out.clear();
+            // Bottom-retaining reflow clips the old caret cell above the
+            // viewport and reports top-left, not the old caret's column.
+            assert!(
+                screen
+                    .reconcile_inline(&mut out, width, height, (0, 0))
+                    .unwrap()
+            );
+            let expected = format!(
+                "\x1b[0m{}",
+                (1..=height)
+                    .map(|row| format!("\x1b[{row};1H\x1b[2K"))
+                    .collect::<String>()
+            );
+            assert_eq!(String::from_utf8(out).unwrap(), expected);
+            assert_eq!(screen.origin, 0);
+        }
+    }
+
+    #[test]
+    fn top_left_report_without_retained_clipping_evidence_cannot_erase() {
+        for (tail, height, reported) in [
+            (vec![line("footer")], 2, (0, 0)),
+            (vec![line(""), line("")], 2, (0, 0)),
+            (vec![line("footer"), line("second footer")], 1, (0, 0)),
+            (vec![line("footer"), line("second footer")], 2, (0, 1)),
+            (
+                vec![
+                    Line::styled(
+                        format!("footer{}", " ".repeat(70)),
+                        Style::default().fg(Color::Blue),
+                    ),
+                    Line::styled(
+                        format!("footer{}", " ".repeat(70)),
+                        Style::default().fg(Color::Blue),
+                    ),
+                ],
+                4,
+                (0, 0),
+            ),
+        ] {
+            let mut live = vec![line("›  ")];
+            live.extend(tail);
+            let mut screen = Screen::with_live_height(80, 2, 24, live.len());
+            let mut out = Vec::new();
+            screen
+                .draw(
+                    &mut out,
+                    &Frame {
+                        live: &live,
+                        cursor: Some((0, 2)),
+                    },
+                )
+                .unwrap();
+            out.clear();
+            assert!(
+                screen
+                    .reconcile_inline(&mut out, 24, height, reported)
+                    .is_err()
+            );
+            assert!(out.is_empty());
+            assert_eq!(screen.primary_size(), (80, 24));
+            assert_eq!(screen.origin, 2);
+            assert!(screen.current.is_some());
+        }
+    }
+
+    #[test]
+    fn coordinate_interpretations_can_share_the_same_clipped_origin() {
+        let mut screen = Screen::with_live_height(10, 3, 10, 1);
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("界界x")],
+                    cursor: Some((0, 2)),
+                },
+            )
+            .unwrap();
+        out.clear();
+        // Different relative cursor rows both establish the same visible
+        // ownership boundary. The row-three report remains ambiguous above.
+        assert!(screen.reconcile_inline(&mut out, 2, 5, (0, 0)).unwrap());
+        assert_eq!(screen.origin, 0);
     }
 
     #[test]
