@@ -18,12 +18,15 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from terminal_style import program_ready
+
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 long_image_path = "long-subject-" + "x" * 96 + "/red.png"
 rpc_request_entered = threading.Event()
 release_rpc_request = threading.Event()
+release_terminal_request = threading.Event()
 raw_inspection_json = {"mime_type": "image/png", "data": "RAW_JSON_VALUE", "nested": {"Image": {"mime_type": "image/jpeg", "data": "NESTED_JSON_VALUE"}}, "images": [{"mime_type": "image/png", "data": "NOT_AN_ATTACHMENT"}]}
 
 
@@ -72,11 +75,21 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
+        held_terminal_request = isinstance(latest_user["content"], list) and latest_user["content"][0].get("text") == "Inspect in terminal."
         try:
-            self.wfile.write(payload)
+            if held_terminal_request:
+                # A visible answer is not settlement. Hold its finish until the
+                # client attaches the next image, exercising attachment while busy.
+                first_event = b"data: " + json.dumps(events[0]).encode() + b"\n\n"
+                self.wfile.write(first_event)
+                self.wfile.flush()
+                assert release_terminal_request.wait(15), "terminal image attachment was never observed"
+                self.wfile.write(payload[len(first_event):])
+            else:
+                self.wfile.write(payload)
         except (BrokenPipeError, ConnectionResetError):
-            # The owned RPC cancellation case deliberately drops its request.
-            if not held_rpc_request:
+            # Owned cancellation/failure cleanup deliberately drops held requests.
+            if not held_rpc_request and not held_terminal_request:
                 raise
 
     def log_message(self, *_args):
@@ -148,16 +161,25 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\x1b[?1049h" in output and not sent_first:
+                if b"\x1b[?1049h" in output and program_ready(output) and not sent_first:
                     os.write(master, b"Inspect in terminal.\r")
                     sent_first = True
                 if sent_first and len(requests) >= 3 and b"IMAGE_OK" in output and not attached_second:
                     os.write(master, b"/image red.png\r")
                     attached_second = True
                 if attached_second and b"image(s) attached to the next prompt" in output and not sent_second:
-                    os.write(master, b"Inspect again.\r")
-                    sent_second = True
-                if sent_second and len(requests) >= 4 and not quit_sent:
+                    if not release_terminal_request.is_set():
+                        assert not program_ready(output), "attachment did not exercise the busy Turn"
+                        release_terminal_request.set()
+                    # Enter during the first Turn would legitimately steer it,
+                    # leaving only one Turn end for this two-Turn fixture to await.
+                    if program_ready(output):
+                        with sqlite3.connect(terminal_session) as connection:
+                            ended = connection.execute("SELECT COUNT(*) FROM entries WHERE json_extract(CAST(body AS TEXT), '$.kind') = 'turn_ended'").fetchone()[0]
+                        assert ended == 1, ended
+                        os.write(master, b"Inspect again.\r")
+                        sent_second = True
+                if sent_second and len(requests) >= 4 and program_ready(output) and not quit_sent:
                     with sqlite3.connect(terminal_session) as connection:
                         ended = connection.execute("SELECT COUNT(*) FROM entries WHERE json_extract(CAST(body AS TEXT), '$.kind') = 'turn_ended'").fetchone()[0]
                     if ended == 2:
@@ -170,7 +192,12 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                 # on a full terminal output queue (notably on macOS).
                 if child.poll() is not None:
                     break
-            child.wait(timeout=5)
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError((dict(sent_first=sent_first, attached_second=attached_second,
+                                           sent_second=sent_second, quit_sent=quit_sent,
+                                           requests=len(requests)), output[-6000:])) from error
             assert child.returncode == 0, output[-1000:]
             assert sent_second and len(requests) == 4 and b"\x1b[?1049l" in output
             user_image_request(requests[2], "Inspect in terminal.")
@@ -178,7 +205,13 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             last_user = [message for message in requests[3]["messages"] if message["role"] == "user"][-1]["content"]
             assert last_user[0] == {"type": "text", "text": "Inspect again."}
             assert last_user[1]["type"] == "image_url"
+            with sqlite3.connect(terminal_session) as connection:
+                facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+            assert [fact["data"]["reason"] for fact in facts if fact["kind"] == "turn_ended"] == ["completed", "completed"]
+            assert len([fact for fact in facts if fact["kind"] == "turn_started"]) == 2
+            assert not any(fact["kind"] == "steering" for fact in facts)
         finally:
+            release_terminal_request.set()
             os.close(master)
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
