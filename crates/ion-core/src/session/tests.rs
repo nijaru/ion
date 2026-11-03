@@ -1536,7 +1536,7 @@ fn idle_model_choice_survives_reopen() {
 }
 
 #[test]
-fn compaction_preserves_current_inputs_without_changing_the_prefix_at_turn_end() {
+fn compaction_preserves_active_inputs_without_changing_the_prefix_at_turn_end() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
     let model = test_execution().route.logical;
@@ -1571,8 +1571,17 @@ fn compaction_preserves_current_inputs_without_changing_the_prefix_at_turn_end()
         .record_assistant(turn, checkpoint(), Usage::unknown(), true)
         .unwrap();
     session
-        .record_steerings(turn, vec![steering.clone()])
+        .record_inputs(
+            turn,
+            vec![steering.clone()],
+            vec![crate::CompletionNotice {
+                source_session: session.id(),
+                run: uuid::Uuid::now_v7(),
+                child_session: uuid::Uuid::now_v7(),
+            }],
+        )
         .unwrap();
+    let readiness = session.context_messages().unwrap().pop().unwrap();
     session
         .record_assistant(turn, checkpoint(), Usage::unknown(), true)
         .unwrap();
@@ -1590,6 +1599,7 @@ fn compaction_preserves_current_inputs_without_changing_the_prefix_at_turn_end()
         summary_message(through, "Old task: edit the project"),
         input.clone(),
         steering.clone(),
+        readiness.clone(),
     ];
     assert_eq!(session.request_basis(&model).unwrap().messages, expected);
     let facts = session.view().unwrap().entries;
@@ -1622,7 +1632,7 @@ fn compaction_preserves_current_inputs_without_changing_the_prefix_at_turn_end()
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
         .unwrap();
-    for original in [&input, &steering] {
+    for original in [&input, &steering, &readiness] {
         assert_eq!(
             plan.messages
                 .iter()
@@ -1650,10 +1660,10 @@ fn compaction_preserves_current_inputs_without_changing_the_prefix_at_turn_end()
         .unwrap()
         .commit()
         .unwrap();
-    assert_eq!(session.context_messages().unwrap(), completed[..3]);
+    assert_eq!(session.context_messages().unwrap(), completed[..4]);
     drop(session);
     let reopened = Session::open(&path).unwrap();
-    assert_eq!(reopened.context_messages().unwrap(), completed[..3]);
+    assert_eq!(reopened.context_messages().unwrap(), completed[..4]);
     drop(reopened);
     fs::remove_dir_all(root).unwrap();
 }
@@ -1665,6 +1675,18 @@ fn historical_compaction_does_not_reconstruct_new_prefix_pins() {
     let (turn, _) = session
         .begin_turn("original input".into(), test_execution().route.logical)
         .unwrap();
+    session
+        .record_inputs(
+            turn,
+            Vec::new(),
+            vec![crate::CompletionNotice {
+                source_session: session.id(),
+                run: uuid::Uuid::now_v7(),
+                child_session: uuid::Uuid::now_v7(),
+            }],
+        )
+        .unwrap();
+    let readiness = session.context_messages().unwrap().pop().unwrap();
     let mut answer = Message {
         role: Role::Assistant,
         content: vec![Content::Text("checkpoint".into())],
@@ -1701,11 +1723,13 @@ fn historical_compaction_does_not_reconstruct_new_prefix_pins() {
         reopened.context_messages().unwrap(),
         vec![summary_message(through, "historical summary"), answer]
     );
+    let archive = reopened.view().unwrap().messages;
     assert_eq!(
-        reopened.view().unwrap().messages.len(),
-        3,
-        "original input remains durable, but must not retroactively change the replay prefix"
+        archive.len(),
+        4,
+        "original inputs remain durable, but must not retroactively change the replay prefix"
     );
+    assert!(archive.contains(&readiness));
     let prefix = reopened.context_messages().unwrap();
     let plan = reopened
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)

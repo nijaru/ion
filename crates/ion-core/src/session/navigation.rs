@@ -31,7 +31,9 @@ impl State {
                 self.active_inputs.clear();
                 self.active_inputs.push(self.sequence + 1);
             }
-            SessionEntry::Steering { .. } => self.active_inputs.push(self.sequence + 1),
+            SessionEntry::Steering { .. } | SessionEntry::Completion { .. } => {
+                self.active_inputs.push(self.sequence + 1)
+            }
             SessionEntry::TurnEnded { .. } => self.active_inputs.clear(),
             SessionEntry::EffectiveModelChanged { model, .. } => self.select_effective_model(model),
             SessionEntry::ProviderReplayRebased { .. } => {

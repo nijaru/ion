@@ -119,16 +119,34 @@ class Fixture:
         Path(self.env["TMPDIR"]).mkdir()
         self.processes, self.rpcs, self.requests, self.failures = [], [], [], []
         self.parent_waiting, self.parent_release = threading.Event(), threading.Event()
+        self.compaction_step, self.compaction_notice, self.compaction_tail = "first", None, None
         fixture = self
         class Provider(BaseHTTPRequestHandler):
             def log_message(self, *_):
                 pass
+
+            def respond(self, delta):
+                finish = "tool_calls" if "tool_calls" in delta else "stop"
+                events = [{"id": "fixture", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}, {"id": "fixture", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]}]
+                payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
 
             def do_POST(self):
                 try:
                     body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                     fixture.requests.append(body)
                     messages = body["messages"]
+                    if any(message["role"] == "system" and text(message).startswith("Summarize the conversation's settled prefix.") for message in messages):
+                        assert fixture.compaction_step == "summarize", fixture.compaction_step
+                        assert any(NOTICE in text(message) for message in messages), "cut did not cross the readiness notice"
+                        fixture.compaction_step = "retrieve"
+                        # Deliberately omit opaque coordinates: retention must not rely on the summary.
+                        self.respond({"content": "Parent task continued; an earlier output batch was folded."})
+                        return
                     index, human = next((index, text(message)) for index, message in reversed(list(enumerate(messages))) if message["role"] == "user" and not text(message).startswith(NOTICE))
                     current = messages[index + 1:]
                     tools = {item["function"]["name"] for item in body.get("tools", [])}
@@ -141,6 +159,39 @@ class Fixture:
                             delta = tool("exec", {"command": command, "timeout_ms": 120000})
                         else:
                             delta = {"content": "CHILD_DONE_" + human}
+                    elif human == "WATCH_COMPACT" and fixture.compaction_step != "done" and (notices or fixture.compaction_notice is not None):
+                        assert len(notices) == 1, "compaction lost the active readiness notice"
+                        notice = notices[0][1]
+                        if fixture.compaction_notice is None:
+                            fixture.compaction_notice = notice
+                        assert notice == fixture.compaction_notice, "readiness coordinates changed"
+                        step = fixture.compaction_step
+                        if step in ("second", "reject"):
+                            output = json.loads(messages[-1]["content"])
+                            assert not output["is_error"] and output["result"]["output"]["exit_code"] == 0, "large-output command failed"
+                            artifact = output["result"]["artifacts"][0]
+                            assert artifact["bytes"] == 70000 and artifact["complete"], artifact
+                        if step in ("first", "second"):
+                            marker = "A" if step == "first" else "B"
+                            command = "python3 -c " + shlex.quote(f"import sys; sys.stdout.write('{marker}' * 70000)")
+                            delta = tool("exec", {"command": command})
+                            fixture.compaction_step = "second" if step == "first" else "reject"
+                        elif step == "reject":
+                            fixture.compaction_tail = messages[-2:]
+                            fixture.compaction_step = "summarize"
+                            payload = json.dumps({"error": {"code": "context_length_exceeded", "message": "Fixture context overflow"}}).encode()
+                            self.send_response(400)
+                            self.send_header("Content-Type", "application/json")
+                            self.send_header("Content-Length", str(len(payload)))
+                            self.end_headers()
+                            self.wfile.write(payload)
+                            return
+                        else:
+                            assert step == "retrieve", step
+                            assert [message for message in current if message["role"] in ("assistant", "tool")] == fixture.compaction_tail, "recent call/result batch changed or old batches survived the cut"
+                            run = re.search(r"run ([0-9a-f-]{36});", notice).group(1)
+                            delta = tool("subagent", {"action": "wait", "ids": [run], "timeout_ms": 1})
+                            fixture.compaction_step = "done"
                     elif notices:
                         notice_index, notice = notices[-1]
                         run = re.search(r"run ([0-9a-f-]{36});", notice).group(1)
@@ -160,7 +211,7 @@ class Fixture:
                         else:
                             output = json.loads(messages[-1]["content"])
                             assert not output["is_error"] and output["result"]["transferred"], output
-                            if human == "WATCH_CONTINUE":
+                            if human in ("WATCH_CONTINUE", "WATCH_COMPACT"):
                                 fixture.parent_waiting.set()
                                 assert fixture.parent_release.wait(5), "active-boundary fixture was not released"
                             delta = {"content": "ROOT_DONE_" + human}
@@ -169,14 +220,7 @@ class Fixture:
                     else:
                         assert human == "FRESH" or human.startswith("FOLLOW_"), human
                         delta = {"content": "FRESH_DONE"}
-                    finish = "tool_calls" if "tool_calls" in delta else "stop"
-                    events = [{"id": "fixture", "choices": [{"index": 0, "delta": delta, "finish_reason": None}]}, {"id": "fixture", "choices": [{"index": 0, "delta": {}, "finish_reason": finish}]}]
-                    payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
-                    self.send_response(200)
-                    self.send_header("Content-Type", "text/event-stream")
-                    self.send_header("Content-Length", str(len(payload)))
-                    self.end_headers()
-                    self.wfile.write(payload)
+                    self.respond(delta)
                 except Exception as error:
                     fixture.failures.append(repr(error))
                     self.send_error(500, str(error))
@@ -184,7 +228,7 @@ class Fixture:
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         endpoint = f"http://127.0.0.1:{self.server.server_port}/v1/chat/completions"
-        subprocess.run([BINARY, "use", "fixture", "coding", "--endpoint", endpoint, "--wire", "chat-completions"], env=self.env, capture_output=True, check=True, timeout=10)
+        subprocess.run([BINARY, "use", "fixture", "coding", "--endpoint", endpoint, "--wire", "chat-completions", "--context-window", "65536", "--max-output-tokens", "4096"], env=self.env, capture_output=True, check=True, timeout=10)
 
     def command(self, *args):
         return [BINARY, "--cwd", self.workspace, *args]
@@ -240,10 +284,11 @@ class Fixture:
 def smoke():
     fixture = Fixture()
     try:
-        for policy in ("inbox", "continue", "wake"):
+        for policy, case in (("inbox", "WATCH_INBOX"), ("continue", "WATCH_CONTINUE"), ("wake", "WATCH_WAKE"), ("continue", "WATCH_COMPACT")):
+            fixture.parent_waiting.clear()
+            fixture.parent_release.clear()
             rpc = Rpc(fixture, policy)
             assert rpc.request("get_state")["completion_delivery"] == policy
-            case = "WATCH_" + policy.upper()
             rpc.send("prompt", message=case)
             if policy == "continue":
                 assert fixture.parent_waiting.wait(5), "parent never reached in-flight response"
@@ -270,12 +315,22 @@ def smoke():
             assert len(starts) == (1 if policy == "continue" else 2), starts
             assert sum(bool(entry.get("completion")) for entry in starts) == (policy == "wake")
             assert sum(entry["kind"] == "completion" for entry in entries) == (policy != "wake")
+            if case == "WATCH_COMPACT":
+                coordinate = next(index + 1 for index, entry in enumerate(entries) if entry["kind"] == "completion")
+                cuts = [entry["data"] for entry in entries if entry["kind"] == "compacted"]
+                assert len(cuts) == 1 and cuts[0]["through_entry"] >= coordinate, cuts
+                assert coordinate in cuts[0]["retained_inputs"], "readiness retention was not durable"
+                assert fixture.compaction_step == "done"
             job = rpc.job()
             assert job["joined"] and job["completion"]["state"] == "offered", "offer must not acknowledge the report"
             fixture.effect(case)
             rpc.request("acknowledge_background", run=job["receipt"]["record"]["run"])
             assert rpc.request("get_background")["background"]["runs"] == []
             rpc.close()
+            if case == "WATCH_COMPACT":
+                reopened = subprocess.run(fixture.command("--session", rpc.path, "inspect"), env=fixture.env, capture_output=True, check=True, text=True, timeout=10)
+                assert json.loads(reopened.stdout)["entries"] == entries, "reopen changed committed compaction evidence"
+                fixture.effect(case)
 
         # Stop revokes the original grant even after a fresh explicit Start.
         rpc = Rpc(fixture, "wake")
@@ -335,7 +390,7 @@ def smoke():
         assert any(entry["kind"] == "completion" or entry["kind"] == "turn_started" and entry["data"].get("completion") for entry in facts(path))
         fixture.effect(case)
         assert not fixture.failures, fixture.failures
-        print("managed completion: inbox, active continuation, idle wake, Stop/new Start, failed admission and headless passed")
+        print("managed completion: inbox, active continuation, context-overflow recovery, idle wake, Stop/new Start, failed admission and headless passed")
     except BaseException:
         print("provider failures:", fixture.failures)
         for rpc in fixture.rpcs:
