@@ -72,6 +72,47 @@ fn published_ui() -> Frontend {
 }
 
 #[test]
+fn transcript_details_cannot_scroll_past_either_end() {
+    let mut ui = Frontend {
+        conversation: conversation::fixtures::document(TranscriptProjection {
+            items: vec![TranscriptItem::Assistant(TranscriptMessage {
+                source: Some(TranscriptSource { entry: 1, part: 0 }),
+                turn: Some(1),
+                steering: false,
+                parts: vec![TranscriptPart::Text(
+                    (0..80).map(|index| format!("ROW_{index:02}\n")).collect(),
+                )],
+            })],
+        }),
+        ..Frontend::default()
+    };
+    ui.open_details(None);
+    let (tail, _) = modal_rows(&mut ui, None, 80, 12);
+    assert!(tail.iter().any(|row| row.to_string() == "ROW_79"));
+
+    for _ in 0..100 {
+        ui.mouse(MouseKind::ScrollUp);
+    }
+    let (top, _) = modal_rows(&mut ui, None, 80, 12);
+    assert!(top[0].to_string().starts_with("Conversation · entries"));
+    assert!(top[8].to_string().starts_with("ROW_"));
+    // Wheel and keyboard share the same bounds, even after a taller resize.
+    for _ in 0..100 {
+        ui.details.as_mut().unwrap().navigate(KeyAction::PageUp);
+    }
+    let (taller, _) = modal_rows(&mut ui, None, 80, 30);
+    assert!(taller[0].to_string().starts_with("Conversation · entries"));
+    assert!(taller[26].to_string().starts_with("ROW_"));
+
+    for _ in 0..100 {
+        ui.mouse(MouseKind::ScrollDown);
+        ui.details.as_mut().unwrap().navigate(KeyAction::PageDown);
+    }
+    let (end, _) = modal_rows(&mut ui, None, 80, 12);
+    assert_eq!(tail, end);
+}
+
+#[test]
 fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state() {
     let long_line = format!("+{}", "x".repeat(240));
     let diff =
@@ -138,7 +179,9 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
         200,
     );
     let wide = view.copy_evidence().unwrap().1.to_owned();
-    view.scroll = 4;
+    view.window(10);
+    view.scroll_by(-4);
+    let inspected = view.window(10).to_vec();
 
     assert_eq!(narrow, wide);
     assert!(wide.contains("Tool 1: edit"));
@@ -172,8 +215,8 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
     assert_eq!(ui.editor.images.len(), 1);
     assert_eq!(ui.conversation.items().count(), 2);
     assert_eq!(ui.status, "inspector ready");
-    let view = ui.details.as_ref().unwrap();
-    assert_eq!(view.scroll, 4);
+    let view = ui.details.as_mut().unwrap();
+    assert_eq!(view.window(10), inspected);
     assert_eq!(view.copy_evidence().unwrap().1, wide);
 }
 

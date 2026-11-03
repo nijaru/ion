@@ -1132,12 +1132,10 @@ impl Frontend {
         self.invalidate_interaction_paint();
         match self.input_target() {
             interaction::InputTarget::Details => {
-                let view = self.details.as_mut().expect("derived inspector focus");
-                view.scroll = if down {
-                    view.scroll.saturating_sub(3)
-                } else {
-                    view.scroll.saturating_add(3)
-                };
+                self.details
+                    .as_mut()
+                    .expect("derived inspector focus")
+                    .scroll_by(if down { 3 } else { -3 });
             }
             interaction::InputTarget::Picker => self.pickers.move_selection(down),
             interaction::InputTarget::Question => self.view.scroll(if down { 3 } else { -3 }),
@@ -1593,21 +1591,15 @@ fn modal_rows(
     let status_height =
         (usize::from(controls.is_some()) + usize::from(status.is_some())).min(height);
     let viewport = height.saturating_sub(status_height);
-    let content: Vec<_> = ui
+    let content = ui
         .details
-        .as_ref()
+        .as_mut()
         .expect("inspector owns viewport")
-        .rows()
-        .iter()
-        .map(|row| Line::raw(fit_line(row, width)))
-        .collect();
-    let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
-    let end = content.len().saturating_sub(scroll.min(content.len()));
-    let start = end.saturating_sub(viewport);
+        .window(viewport);
     let mut rows = vec![Line::raw(""); height];
-    let padding = viewport.saturating_sub(end - start);
-    for (index, row) in content[start..end].iter().enumerate() {
-        rows[padding + index] = row.clone();
+    let padding = viewport - content.len();
+    for (index, row) in content.iter().enumerate() {
+        rows[padding + index] = Line::raw(fit_line(row, width));
     }
 
     let mut next_row = viewport;

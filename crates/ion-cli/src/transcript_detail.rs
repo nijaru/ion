@@ -14,7 +14,8 @@ const PAGE_ENTRIES: usize = 32;
 pub struct DetailView {
     tool: Option<NonZeroUsize>,
     page_end: Option<usize>,
-    pub scroll: usize,
+    scroll: usize,
+    viewport: usize,
     page: Option<Page>,
 }
 
@@ -50,12 +51,8 @@ impl DetailView {
         let Some(page) = &self.page else { return };
         match action {
             KeyAction::DetailUp | KeyAction::PageUp => {
-                self.page_end = Some(page.end);
                 let step = if action == KeyAction::DetailUp { 1 } else { 12 };
-                self.scroll = self
-                    .scroll
-                    .saturating_add(step)
-                    .min(page.rows.len().saturating_sub(1));
+                self.scroll_by(-step);
             }
             KeyAction::DetailDown | KeyAction::PageDown => {
                 let step = if action == KeyAction::DetailDown {
@@ -63,7 +60,7 @@ impl DetailView {
                 } else {
                     12
                 };
-                self.scroll = self.scroll.saturating_sub(step);
+                self.scroll_by(step);
             }
             KeyAction::Earlier if self.tool.is_none() && page.start > 0 => {
                 self.page_end = Some(page.start);
@@ -78,6 +75,32 @@ impl DetailView {
             }
             _ => {}
         }
+    }
+
+    /// Positive movement reads newer rows; negative movement reads older rows.
+    pub(crate) fn scroll_by(&mut self, movement: isize) {
+        let Some(page) = &self.page else { return };
+        let limit = page.rows.len().saturating_sub(self.viewport.max(1));
+        self.scroll = if movement < 0 {
+            self.scroll.saturating_add(movement.unsigned_abs())
+        } else {
+            self.scroll.saturating_sub(movement.unsigned_abs())
+        }
+        .min(limit);
+        if movement < 0 && self.scroll > 0 {
+            self.page_end = Some(page.end);
+        }
+    }
+
+    /// The inspector owns both navigation and the fitted viewport bounds.
+    pub(crate) fn window(&mut self, height: usize) -> &[String] {
+        self.viewport = height;
+        let page = self.page.as_ref().expect("prepare precedes display");
+        self.scroll = self
+            .scroll
+            .min(page.rows.len().saturating_sub(height.max(1)));
+        let end = page.rows.len() - self.scroll;
+        &page.rows[end.saturating_sub(height)..end]
     }
 
     pub fn prepare<'a>(
@@ -250,7 +273,8 @@ impl DetailView {
         }
     }
 
-    pub fn rows(&self) -> &[String] {
+    #[cfg(test)]
+    pub(crate) fn rows(&self) -> &[String] {
         &self.page.as_ref().expect("prepare precedes display").rows
     }
 
@@ -403,6 +427,38 @@ mod tests {
         StoredToolActivity, ToolActivity, ToolActivityKind, TranscriptMessage, TranscriptPart,
         UserShellActivity,
     };
+
+    #[test]
+    fn inspector_bounds_follow_reflow_and_replaced_output() {
+        let mut history = TranscriptProjection {
+            items: vec![TranscriptItem::Assistant(TranscriptMessage {
+                source: Some(ion_core::TranscriptSource { entry: 1, part: 0 }),
+                turn: Some(1),
+                steering: false,
+                parts: vec![TranscriptPart::Text("x".repeat(400))],
+            })],
+        };
+        let mut view = DetailView::default();
+        view.prepare(history.items.iter(), &[], 0, 10);
+        view.window(8);
+        view.scroll_by(isize::MIN);
+        let first_window = view.rows()[..8].to_vec();
+        assert_eq!(view.window(8), first_window);
+
+        // Widening and a shorter replacement must not leave stale scroll debt.
+        view.prepare(history.items.iter(), &[], 0, 200);
+        assert_eq!(view.window(8).len(), view.rows().len());
+        if let TranscriptItem::Assistant(message) = &mut history.items[0] {
+            message.parts = vec![TranscriptPart::Text("short".into())];
+        }
+        view.invalidate();
+        view.prepare(history.items.iter(), &[], 1, 200);
+        view.scroll_by(isize::MIN);
+        assert!(view.window(8).iter().any(|row| row == "short"));
+        assert!(view.window(0).is_empty());
+        view.scroll_by(isize::MAX);
+        assert_eq!(view.window(8).len(), view.rows().len());
+    }
 
     #[test]
     fn conversation_tracks_active_facts_and_preserves_full_results() {
