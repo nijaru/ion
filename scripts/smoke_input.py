@@ -1402,6 +1402,15 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait(lambda: "read login credential" in terminal.text())
                 terminal.paint()
                 assert (work / "ion/credentials/smoke.key").read_bytes() == b"ACTUAL_DISPOSABLE", "rejected/cancelled entry replaced the saved credential"
+                print(f"Intake {mode}: mixed line endings", flush=True)
+                terminal.send("\x1b[200~first α\rsecond 👩‍💻\r\n\tthird e\u0301\nlast 終\x1b[201~")
+                terminal.paint()
+                assert len(requests) == before + 1, "paste admitted before Enter"
+                terminal.send(b"\r")
+                terminal.wait(lambda: len(requests) == before + 2)
+                expected = "first α\nsecond 👩‍💻\n\tthird e\u0301\nlast 終"
+                assert user_text(requests[-1]) == expected, user_text(requests[-1])
+                terminal.wait_ready(lambda: "DONE_first α" in terminal.text())
                 terminal.finish()
                 assert termios.tcgetattr(terminal.master) == terminal.original_modes, "chat secret entry did not restore terminal"
             finally:

@@ -1,6 +1,25 @@
 //! Literal editor bytes projected through the shared control-safe text layout.
 use crate::display_text::{Wrapping, layout};
 
+/// Ingest editable text without losing logical lines or admitting terminal
+/// controls. Tabs remain literal; CRLF and standalone CR become one LF.
+pub(super) fn clean_text(text: &str) -> String {
+    let mut clean = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                chars.next_if_eq(&'\n');
+                clean.push('\n');
+            }
+            '\n' | '\t' => clean.push(ch),
+            ch if !ch.is_control() => clean.push(ch),
+            _ => {}
+        }
+    }
+    clean
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct VisualPosition {
     pub row: usize,

@@ -13,7 +13,7 @@ use super::{
     editing::{self, Edit},
     paint::{Prepared, Visibility},
 };
-use crate::terminal_input::EditorVisualMap;
+use crate::terminal_input::{EditorVisualMap, clean_text};
 
 pub(super) struct QuestionModal {
     request: QuestionRequestId,
@@ -470,12 +470,6 @@ impl QuestionModal {
     fn current_options(&self) -> &[ion_app::QuestionOption] {
         &self.questions[self.index].options
     }
-}
-
-fn clean_text(text: &str) -> String {
-    text.chars()
-        .filter(|ch| matches!(ch, '\n' | '\t') || !ch.is_control())
-        .collect()
 }
 
 #[cfg(test)]

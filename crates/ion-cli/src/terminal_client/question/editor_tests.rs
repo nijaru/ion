@@ -23,6 +23,25 @@ fn custom(source: &str, cursor: usize) -> QuestionModal {
 }
 
 #[test]
+fn mixed_line_endings_custom_paste_retains_breaks() {
+    let mut modal = custom("", 0);
+    modal.paste("first α\rsecond 👩‍💻\r\n\tthird e\u{301}\nlast 終\r\0\u{7}");
+    let expected = "first α\nsecond 👩‍💻\n\tthird e\u{301}\nlast 終\n";
+    assert_eq!(modal.draft().text.text, expected);
+    assert_eq!(modal.draft().text.cursor, expected.len());
+    let QuestionAction::Answer(_, answers) = press(&mut modal, enter(), &KeyBindings::default())
+    else {
+        panic!("custom text was not confirmed")
+    };
+    assert_eq!(
+        answers,
+        vec![QuestionAnswer::Text {
+            text: expected.into()
+        }]
+    );
+}
+
+#[test]
 fn custom_vertical_movement_uses_only_the_actual_painted_visual_width() {
     let keys = KeyBindings::default();
     let theme = Theme::default();

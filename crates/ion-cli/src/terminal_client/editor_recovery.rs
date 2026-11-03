@@ -187,16 +187,6 @@ impl EditorRecovery {
     }
 }
 
-fn sanitize(text: &str) -> String {
-    text.chars()
-        .filter_map(|ch| match ch {
-            '\n' | '\t' => Some(ch),
-            ch if ch.is_control() => None,
-            ch => Some(ch),
-        })
-        .collect()
-}
-
 impl Editor {
     /// Keyboard/tool focus changed: later typing and kills start new groups.
     pub(super) fn break_edit_focus(&mut self) {
@@ -272,7 +262,7 @@ impl Editor {
         self.error = None;
         self.preferred_column = None;
         self.completion.edited(self.cursor);
-        let clean = sanitize(text);
+        let clean = crate::terminal_input::clean_text(text);
         if clean.is_empty() {
             self.recovery.interrupt();
             return;
@@ -571,6 +561,39 @@ mod tests {
             );
             assert_eq!(ui.editor.images.len(), 1);
         }
+    }
+
+    #[test]
+    fn mixed_line_endings_paste_is_one_reversible_edit() {
+        let mut ui = Frontend::default();
+        ui.insert("left right");
+        ui.editor.cursor = "left ".len();
+        ui.insert("first α\rsecond 👩‍💻\r\n\tthird e\u{301}\nlast 終\r\0\u{7}");
+        let expected = "left first α\nsecond 👩‍💻\n\tthird e\u{301}\nlast 終\nright";
+        let cursor = expected.len() - "right".len();
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            (expected, cursor)
+        );
+        assert!(composer_key(
+            &mut ui,
+            key(KeyCode::Char('\x1f'), Modifiers::NONE)
+        ));
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("left right", 5)
+        );
+        assert!(composer_key(
+            &mut ui,
+            key(
+                KeyCode::Char('_'),
+                Modifiers::ALT | Modifiers::CONTROL | Modifiers::SHIFT
+            )
+        ));
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            (expected, cursor)
+        );
     }
 
     #[test]

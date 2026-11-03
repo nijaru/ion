@@ -48,9 +48,9 @@ async fn edit_with_command(command: &str, content: &str, max_bytes: usize) -> Re
     ensure!(status.success(), "editor exited with {status}");
     // Editors may atomically replace the draft. Validate and bound the opened
     // descriptor, not a separate path stat that can race or admit a FIFO.
-    // Normalization removes at most a three-byte BOM and one final newline.
+    // Cleanup removes at most a three-byte BOM and one final CRLF.
     let read_limit = max_bytes
-        .checked_add(4)
+        .checked_add(5)
         .context("editor draft byte bound overflow")?;
     let bytes = ion_app::file_io::read_bounded(&path, read_limit)
         .with_context(|| format!("cannot read edited draft within {max_bytes}-byte limit"))?;
@@ -58,7 +58,9 @@ async fn edit_with_command(command: &str, content: &str, max_bytes: usize) -> Re
     if edited.starts_with('\u{feff}') {
         edited.remove(0);
     }
-    if edited.ends_with('\n') {
+    if edited.ends_with("\r\n") {
+        edited.truncate(edited.len() - 2);
+    } else if edited.ends_with(['\r', '\n']) {
         edited.pop();
     }
     if edited.len() > max_bytes {
@@ -94,6 +96,21 @@ mod tests {
             .await
             .unwrap(),
             "abcd"
+        );
+        for command in [
+            r#"/bin/sh -c 'printf "\357\273\277abcd\r\n" > "$0"'"#,
+            r#"/bin/sh -c 'printf "\357\273\277abcd\r" > "$0"'"#,
+        ] {
+            assert_eq!(
+                edit_with_command(command, "original", 4).await.unwrap(),
+                "abcd"
+            );
+        }
+        assert_eq!(
+            edit_with_command(r#"/bin/sh -c 'printf "a\r\nb\r\n" > "$0"'"#, "original", 4)
+                .await
+                .unwrap(),
+            "a\r\nb"
         );
         assert!(
             edit_with_command("/bin/sh -c 'exit 7'", "original", 64)
