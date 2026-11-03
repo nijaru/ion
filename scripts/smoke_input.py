@@ -528,7 +528,7 @@ def exercise_tasks(work, env):
             terminal = Terminal(cwd, env, mode)
             pid = None
             try:
-                terminal.paint()
+                terminal.wait_ready(lambda: "›" in terminal.text())
                 terminal.send(f"TASK_PARENT_{mode}_{stop}\r")
                 terminal.wait(lambda: (cwd / "task.ready").exists() and b"state=done" in terminal.output)
                 pid = int((cwd / "task.pid").read_text())
