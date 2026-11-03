@@ -35,6 +35,7 @@ class Terminal:
         self.alternate = False
         self.stacks = [[4], [8]]  # Caller-owned keyboard entries must survive.
         self.queries = 0
+        self.cursor_queries = 0
 
     def pump(self):
         if not select.select([self.master], [], [], 0.03)[0]:
@@ -65,6 +66,7 @@ class Terminal:
             elif final == b"l" and parameters == b"?1049":
                 self.alternate = False
             elif final == b"n" and parameters == b"6":
+                self.cursor_queries += 1
                 os.write(self.master, b"\x1b[2;1R")
         start = self.pending.rfind(b"\x1b")
         self.pending = self.pending[start:] if start >= 0 else b""
@@ -156,8 +158,10 @@ def exercise(mode):
 
             def foreground():
                 queries = terminal.queries
+                cursor_queries = terminal.cursor_queries
                 terminal.send("fg\n")
                 terminal.until(lambda: terminal.queries == queries + 1 and
+                               terminal.cursor_queries > cursor_queries and
                                terminal.stacks[terminal.alternate][-1] == 1)
                 assert os.tcgetpgrp(master) == job, "fg replaced the original job"
 
@@ -223,6 +227,89 @@ def exercise(mode):
             thread.join()
 
 
+def exercise_startup(choice):
+    with tempfile.TemporaryDirectory(prefix="ion-startup-job-control-") as temporary:
+        work = Path(temporary)
+        env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL") if key in os.environ}
+        env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), TMPDIR=str(work),
+                   XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"),
+                   TERM="xterm-256color", PS1=PROMPT.decode(), PS2="CONT> ")
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+        original = termios.tcgetattr(slave)
+
+        def attach():
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+        shell = None
+        job = None
+        try:
+            shell = subprocess.Popen(["/bin/bash", "--noprofile", "--norc", "--noediting", "-i"],
+                                     env=env, cwd=work, stdin=slave, stdout=slave, stderr=slave,
+                                     preexec_fn=attach)
+            terminal = Terminal(master)
+            terminal.until(lambda: PROMPT in terminal.output)
+            args = [str(BINARY), "--cwd", str(work)]
+            if choice == "Session":
+                args.append("--resume")
+            terminal.send(shlex.join([*args, "chat"]) + "\n")
+            title = b"Resume session" if choice == "Session" else b"Choose default model"
+            terminal.until(lambda: title in terminal.output)
+            job = os.tcgetpgrp(master)
+            assert job != shell.pid and job > 0, "chooser is not a distinct foreground job"
+            query = "STARTUP_🦀".encode()
+            terminal.send(query)
+            terminal.until(lambda: query in CSI.sub(b"", terminal.output))
+            checkpoint = len(terminal.output)
+            terminal.send(b"\x1a")
+            terminal.until(lambda: PROMPT in terminal.output[checkpoint:])
+            assert b"T" in subprocess.check_output(["ps", "-o", "stat=", "-p", str(job)])
+            assert os.tcgetpgrp(master) == shell.pid
+            assert termios.tcgetattr(slave) == original
+            assert terminal.stacks == [[4], [8]] and not terminal.alternate
+            assert CLEAR in terminal.output[checkpoint:]
+            released = terminal.output[checkpoint:].split(CLEAR, 1)[0]
+            assert b"\x1b[2K" in released, "chooser did not release its live rows before suspension"
+            checkpoint = len(terminal.output)
+            terminal.send("printf 'SHELL_%s\\n' STARTUP_OK\n")
+            terminal.until(lambda: b"SHELL_STARTUP_OK" in terminal.output[checkpoint:])
+            checkpoint = len(terminal.output)
+            queries = terminal.cursor_queries
+            terminal.send("fg\n")
+            # Geometry is unchanged: resumption must still measure a NEW shell
+            # anchor, not reuse the chooser's old surface over foreign output.
+            terminal.until(lambda: terminal.cursor_queries > queries and
+                           query in CSI.sub(b"", terminal.output[checkpoint:]))
+            assert os.tcgetpgrp(master) == job
+            checkpoint = len(terminal.output)
+            terminal.send(b"\x1b")
+            terminal.until(lambda: PROMPT in terminal.output[checkpoint:])
+            assert terminal.stacks == [[4], [8]] and not terminal.alternate
+            assert termios.tcgetattr(slave) == original
+            terminal.send("exit\n")
+            terminal.until(lambda: shell.poll() is not None)
+            assert shell.wait() == 0, terminal.output[-2000:]
+            job = None
+            assert not list((work / "ion").rglob("*.sqlite")), "chooser allocated a Session"
+            assert not (work / "ion/models.json").exists(), "chooser changed model defaults"
+            print(f"Startup {choice} Ctrl-Z/fg: fresh shell anchor, retained query, no admission: OK")
+        finally:
+            if job is not None:
+                try:
+                    os.killpg(job, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            if shell is not None:
+                if shell.poll() is None:
+                    shell.kill()
+                shell.wait(timeout=5)
+            os.close(master)
+            os.close(slave)
+
+
 if __name__ == "__main__":
+    exercise_startup("model")
+    exercise_startup("Session")
     exercise("inline")
     exercise("fullscreen")

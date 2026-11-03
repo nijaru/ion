@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use super::{
     Frontend, PickerValue, ProgramStatusState, draw, invalidate_resized_input, login_in_terminal,
-    new_inline_screen, release_surface,
+    new_inline_screen, release_surface, suspend_terminal,
 };
 
 /// Returns None on cancellation. Ready launches never acquire a terminal here.
@@ -92,9 +92,7 @@ pub async fn choose_session(
             invalidate_resized_input(&terminal, &mut screen, &mut ui)?;
             match event.context("Session picker input ended")?? {
                 InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
-                    terminal.suspend_to_job_control().await?;
-                    screen.invalidate();
-                    program.published = None;
+                    suspend_terminal(&mut terminal, &mut screen, &mut ui, &mut program).await?;
                 }
                 InputEvent::Key(key) => {
                     if let Some(PickerValue::Session { path, .. }) = ui.pickers.key(key, keys) {
@@ -247,9 +245,7 @@ async fn run(
         invalidate_resized_input(terminal, screen, &mut ui)?;
         match event {
             InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
-                terminal.suspend_to_job_control().await?;
-                screen.invalidate();
-                program.published = None;
+                suspend_terminal(terminal, screen, &mut ui, &mut program).await?;
             }
             InputEvent::Key(key) => {
                 if let Some(PickerValue::Model(model)) = ui.pickers.key(key, keys) {

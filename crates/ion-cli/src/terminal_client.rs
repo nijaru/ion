@@ -333,11 +333,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             match event? {
                 InputEvent::Key(key) => {
                     if ui.keys.matches(KeyAction::Suspend, key) {
-                        ui.editor.break_edit_focus();
-                        terminal.release_inline(screen).await?;
-                        terminal.suspend_to_job_control().await.context("suspend terminal job")?;
-                        program.published = None;
-                        *screen = new_inline_screen(terminal).await.context("restore chat after job suspension")?;
+                        suspend_terminal(terminal, screen, &mut ui, &mut program).await?;
                         poll_control = true;
                         continue;
                     }
@@ -560,6 +556,28 @@ async fn release_surface(terminal: &mut TerminalSession, screen: &mut Screen) ->
     })
     .await
     .context("terminal surface could not be qualified for cleanup")?
+}
+
+async fn suspend_terminal(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+    program: &mut ProgramStatusState,
+) -> Result<()> {
+    ui.editor.break_edit_focus();
+    ui.invalidate_interaction_paint();
+    terminal.release_inline(screen).await?;
+    terminal
+        .suspend_to_job_control()
+        .await
+        .context("suspend terminal job")?;
+    program.published = None;
+    // The shell may have written anywhere while we were stopped. Its current
+    // cursor, not the old live footprint, establishes our new ownership boundary.
+    *screen = new_inline_screen(terminal)
+        .await
+        .context("restore terminal after job suspension")?;
+    Ok(())
 }
 
 async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
