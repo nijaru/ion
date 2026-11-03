@@ -325,10 +325,18 @@ fn finalized_parts_reject_late_deltas_and_unfinished_calls_never_handoff() {
 }
 
 #[tokio::test]
-async fn http_requires_terminal_evidence_and_publishes_failure_output_before_error() {
+async fn http_preserves_failure_evidence_without_authorizing_completion() {
     let r = request();
-    for output in [vec![], vec![call_item("a", "{}")]] {
-        let value = json!({"type":"response.failed","response":{"id":"resp_1","status":"failed","output":output,"error":{"code":"server_error","message":"failed"}}});
+    for (output, reported) in [
+        (vec![], false),
+        (vec![], true),
+        (vec![call_item("a", "{}")], false),
+        (vec![call_item("a", "{}")], true),
+    ] {
+        let mut value = json!({"type":"response.failed","response":{"id":"resp_1","status":"failed","output":output,"error":{"code":"server_error","message":"failed"}}});
+        if reported {
+            value["response"]["usage"] = json!({"input_tokens":17,"output_tokens":0,"input_tokens_details":{"cached_tokens":0}});
+        }
         let endpoint = serve(event(&value), "200 OK").await;
         let service =
             HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
@@ -344,6 +352,26 @@ async fn http_requires_terminal_evidence_and_publishes_failure_output_before_err
                 .any(|event| matches!(event, Ok(ModelStreamEvent::OutputObserved))),
             !output.is_empty()
         );
+        let usage = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(ModelStreamEvent::Usage(usage)) => Some(*usage),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            usage,
+            if reported {
+                vec![Usage {
+                    input_tokens: Some(17),
+                    output_tokens: Some(0),
+                    cache_read_input_tokens: Some(0),
+                    ..Usage::unknown()
+                }]
+            } else {
+                Vec::new()
+            }
+        );
         assert!(events.last().unwrap().is_err());
         assert!(
             !events
@@ -351,12 +379,23 @@ async fn http_requires_terminal_evidence_and_publishes_failure_output_before_err
                 .any(|e| matches!(e, Ok(ModelStreamEvent::Completed(_))))
         );
     }
-    let endpoint = serve(event(&added(0, call_item("a", "{}"))), "200 OK").await;
+    let prefix = json!({"type":"response.created","response":{"id":"resp_1","usage":{"input_tokens":13,"input_tokens_details":{"cached_tokens":0}}}});
+    let payload = event(&prefix) + &event(&added(0, call_item("a", "{}")));
+    let endpoint = serve(payload, "200 OK").await;
     let service =
         HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
     let events = service.stream(r).await.unwrap().collect::<Vec<_>>().await;
     assert!(matches!(
         events.first().unwrap(),
+        Ok(ModelStreamEvent::Usage(Usage {
+            input_tokens: Some(13),
+            output_tokens: None,
+            cache_read_input_tokens: Some(0),
+            cache_write_input_tokens: None,
+        }))
+    ));
+    assert!(matches!(
+        events.get(1).unwrap(),
         Ok(ModelStreamEvent::OutputObserved)
     ));
     assert_eq!(

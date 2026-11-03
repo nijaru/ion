@@ -192,7 +192,7 @@ impl ResponsesState {
         let mut events = Vec::new();
         match kind {
             "response.created" | "response.in_progress" => {
-                self.metadata(&value["response"])?;
+                self.metadata(&value["response"], &mut events)?;
                 if value["response"]["output"]
                     .as_array()
                     .is_some_and(|output| !output.is_empty())
@@ -456,7 +456,7 @@ impl ResponsesState {
             }
             "response.completed" | "response.incomplete" => {
                 let response = &value["response"];
-                self.metadata(response)?;
+                self.metadata(response, &mut events)?;
                 let completed = kind == "response.completed";
                 let expected = if completed { "completed" } else { "incomplete" };
                 if string(response, "status")? != expected {
@@ -505,12 +505,11 @@ impl ResponsesState {
                 if response.is_complete() {
                     validate_output(request, &response)?;
                 }
-                events.push(ModelStreamEvent::Usage(self.usage));
                 events.push(ModelStreamEvent::Completed(response));
             }
             "response.failed" | "error" => {
                 let mut failure = if kind == "response.failed" {
-                    self.metadata(&value["response"])?;
+                    self.metadata(&value["response"], &mut events)?;
                     chat_stream_error(&json!({"error":value["response"]["error"]}))
                 } else {
                     chat_stream_error(&json!({"error":value}))
@@ -537,7 +536,11 @@ impl ResponsesState {
         Ok(events)
     }
 
-    fn metadata(&mut self, value: &Value) -> Result<(), ProviderError> {
+    fn metadata(
+        &mut self,
+        value: &Value,
+        events: &mut Vec<ModelStreamEvent>,
+    ) -> Result<(), ProviderError> {
         if !value.is_object() {
             return Err(invalid("invalid Responses response object"));
         }
@@ -545,6 +548,8 @@ impl ResponsesState {
         bind(&mut self.model, value, "model", &mut self.budget)?;
         if let Some(usage) = value.get("usage").filter(|v| !v.is_null()) {
             set_usage(&mut self.usage, usage)?;
+            // Metadata may report accounting before completion or on failure.
+            events.push(ModelStreamEvent::Usage(self.usage));
         }
         Ok(())
     }

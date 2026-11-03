@@ -41,9 +41,9 @@ def finish(output, *, incomplete=False, output_tokens=8):
     return event("response.incomplete" if incomplete else "response.completed", response=response)
 
 
-def failed(output):
+def failed(output, usage):
     return event("response.failed", response=dict(id="resp_1", status="failed", output=output,
-                 error=dict(code="server_error", message="fixture failure")))
+                 usage=usage, error=dict(code="server_error", message="fixture failure")))
 
 
 def png():
@@ -68,10 +68,15 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/v1/responses":
                 payload = self.main_response(body, step)
             elif self.path == "/retry/v1/responses":
-                payload = failed([]) if step == 1 else finish([message("msg_retry", "RETRIED")])
+                if step == 1:
+                    prefix = event("response.created", response=dict(id="resp_1", usage=dict(input_tokens=11, output_tokens=2, input_tokens_details=dict(cached_tokens=0))))
+                    payload = prefix + failed([], dict(input_tokens=17, output_tokens=0))
+                else:
+                    payload = finish([message("msg_retry", "RETRIED")])
             elif self.path == "/post-output/v1/responses":
                 # No earlier delta: the failed snapshot itself must fence retry.
-                payload = failed([call(dict(path="forbidden.txt", content="NEVER"))])
+                payload = failed([call(dict(path="forbidden.txt", content="NEVER"))],
+                                 dict(input_tokens=23, output_tokens=5, input_tokens_details=dict(cached_tokens=7)))
             elif self.path == "/namespace/v1/responses":
                 foreign = call(dict(path="namespace-forbidden.txt", content="NEVER"))
                 foreign["namespace"] = "foreign"
@@ -169,6 +174,10 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
     def submit(name, prompt, *args, success=True):
         return run(env, "--json", "--cwd", workspace, "--session", work / f"{name}.sqlite", *args, "run", prompt, success=success)
 
+    def inspect(name):
+        result = subprocess.run([binary, "--cwd", workspace, "--session", work / f"{name}.sqlite", "inspect"], env=env, capture_output=True, text=True, check=True, timeout=20)
+        return json.loads(result.stdout)["entries"]
+
     try:
         select()
         first = submit("main", "Create created.txt and read this image.", "--image", "red.png")
@@ -177,8 +186,7 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         reopened = submit("main", "Continue")
         assert reopened[-1] == dict(type="run_end", status="completed"), reopened
         assert len(requests["/v1/responses"]) == 4
-        inspected = subprocess.run([binary, "--cwd", workspace, "--session", work / "main.sqlite", "inspect"], env=env, capture_output=True, text=True, check=True, timeout=20)
-        entries = json.loads(inspected.stdout)["entries"]
+        entries = inspect("main")
         replay = next(entry["data"]["message"]["provider_replay"] for entry in entries
                       if entry["kind"] == "assistant" and entry["data"]["message"]["provider_replay"])
         assert replay["data"]["output"][0]["encrypted_content"] == "TERMINAL_CIPHER"
@@ -188,12 +196,28 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         retried = submit("retry", "Retry before output")
         assert sum(item["type"] == "provider_retry" for item in retried) == 1, retried
         assert requests["/retry/v1/responses"][0] == requests["/retry/v1/responses"][1]
+        entries = inspect("retry")
+        discarded = [entry["data"] for entry in entries if entry["kind"] == "uncommitted_usage"]
+        assert len(discarded) == 1, discarded
+        assert discarded[0]["purpose"] == "assistant"
+        assert discarded[0]["execution"]["route"]["reason"] == "user_request"
+        assert discarded[0]["usage"] == dict(input_tokens=17, output_tokens=0, cache_read_input_tokens=0, cache_write_input_tokens=None), discarded
+        accepted = [entry["data"] for entry in entries if entry["kind"] == "assistant"]
+        assert len(accepted) == 1 and accepted[0]["execution"]["route"]["reason"] == "retry", accepted
+        assert sum(sample["usage"]["input_tokens"] for sample in [*discarded, *accepted]) == 27
+        assert sum(sample["usage"]["output_tokens"] for sample in [*discarded, *accepted]) == 8
+        assert inspect("retry") == entries, "read-only reopen changed accounting"
 
         select("/post-output")
         failed_run = submit("failed", "Do not execute incomplete output", success=False)
         assert not any(item["type"] in ("provider_retry", "tool_started", "tool_finished") for item in failed_run), failed_run
         assert len(requests["/post-output/v1/responses"]) == 1
         assert not (workspace / "forbidden.txt").exists()
+        entries = inspect("failed")
+        discarded = [entry["data"] for entry in entries if entry["kind"] == "uncommitted_usage"]
+        assert len(discarded) == 1, discarded
+        assert discarded[0]["usage"] == dict(input_tokens=23, output_tokens=5, cache_read_input_tokens=7, cache_write_input_tokens=None), discarded
+        assert not any(entry["kind"] in ("assistant", "tool_result") for entry in entries), "failed output entered durable model context"
 
         select("/namespace")
         namespace = submit("namespace", "Reject foreign function identities", success=False)
@@ -213,4 +237,4 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         thread.join(timeout=2)
         assert not thread.is_alive()
 
-print("Responses stateless replay, native images, real write, reopen and failed/truncated effect fences: ok")
+print("Responses stateless replay, native images, real write, reopen, failed-attempt usage and failed/truncated effect fences: ok")
