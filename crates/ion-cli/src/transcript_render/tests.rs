@@ -72,8 +72,7 @@ fn custom_theme_reaches_nested_markdown_without_theming_source_inspection() {
         }
     }
     for user in [false, true] {
-        let mut source = Vec::new();
-        render_source_message(&mut source, &message, user, 120);
+        let source = source_message_layout(&message, user, 120).rows;
         assert!(
             source
                 .iter()
@@ -411,8 +410,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
     let TranscriptItem::Assistant(message) = &projection.items[1] else {
         panic!()
     };
-    let mut source = Vec::new();
-    render_source_message(&mut source, message, false, 80);
+    let source = source_message_layout(message, false, 80).rows;
     assert!(
         source
             .iter()
@@ -795,8 +793,7 @@ fn markdown_is_assistant_presentation_not_user_or_inspection_source() {
     assert!(!formatted.contains("**"));
     assert!(formatted.contains("state │ verified"));
     assert!(!formatted.contains("| --- |"));
-    let mut raw = Vec::new();
-    render_source_message(&mut raw, &message, false, 80);
+    let raw = source_message_layout(&message, false, 80).rows;
     assert_eq!(
         raw.iter()
             .map(ToString::to_string)
@@ -1148,8 +1145,7 @@ fn submitted_prompts_keep_literal_text_and_connected_rails_without_padding() {
                 assert!(narrow.iter().all(|row| row.to_string().starts_with("┃ ")));
             }
         }
-        let mut source = Vec::new();
-        render_source_message(&mut source, &message, true, 80);
+        let source = source_message_layout(&message, true, 80).rows;
         assert!(
             source[0]
                 .to_string()

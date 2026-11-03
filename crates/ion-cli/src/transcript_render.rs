@@ -1,6 +1,8 @@
 //! Pure compact rendering for the typed coding transcript.
 use crate::{
-    display_text::{Component, Field, MappedLine, Origin, Wrapping, fit_line, wrap_mapped},
+    display_text::{
+        Component, Field, MappedLine, Origin, SourceKind, Wrapping, fit_line, wrap_mapped,
+    },
     presentation_style::{Role, Theme},
     tool_output::{OutputDetail, RenderOptions},
 };
@@ -80,8 +82,16 @@ pub(super) enum ContentRoot {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TextPoint {
     Raw(usize),
-    Component { component: Component, byte: usize },
+    Component {
+        component: Component,
+        byte: usize,
+    },
     Node(usize),
+    Expansion {
+        source: SourceKind,
+        byte: usize,
+        offset: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,16 +109,17 @@ pub(super) struct BlockLayout {
 
 impl BlockLayout {
     pub fn literal(text: &str, width: usize) -> Self {
+        Self::mapped(
+            MappedLine::raw(Line::from(Span::raw(text.to_owned())), 0..text.len()),
+            width,
+        )
+    }
+
+    pub fn mapped(source: MappedLine, width: usize) -> Self {
         let mut block = Self::default();
         block.extend(
             ContentRoot::Block,
-            wrap_mapped(
-                "",
-                "",
-                MappedLine::raw(Line::from(Span::raw(text.to_owned())), 0..text.len()),
-                width,
-                Wrapping::Literal,
-            ),
+            wrap_mapped("", "", source, width, Wrapping::Literal),
         );
         block
     }
@@ -158,6 +169,15 @@ impl BlockLayout {
                     byte: bytes.start,
                 },
                 Origin::Node(node) => TextPoint::Node(*node),
+                Origin::Expansion {
+                    source,
+                    bytes,
+                    offset,
+                } => TextPoint::Expansion {
+                    source: *source,
+                    byte: bytes.start,
+                    offset: offset.start,
+                },
             },
         }
     }
@@ -174,31 +194,53 @@ impl BlockLayout {
                     if *root != point.root {
                         return None;
                     }
-                    let (byte, range) = match (point.point, origin) {
-                        (TextPoint::Raw(byte), Origin::Raw(range)) => (byte, range.clone()),
-                        (
-                            TextPoint::Component { component, byte },
-                            Origin::Component {
-                                component: actual,
-                                bytes,
-                            },
-                        ) if component == *actual => (byte, bytes.clone()),
-                        (TextPoint::Node(byte), Origin::Node(node)) => (byte, *node..*node),
-                        _ => return None,
-                    };
-                    let distance =
+                    let distance = |byte: usize, range: &std::ops::Range<usize>| {
                         if range.contains(&byte) || (range.is_empty() && range.start == byte) {
                             0
                         } else {
                             byte.abs_diff(range.start)
                                 .min(byte.abs_diff(range.end.saturating_sub(1)))
-                                + 1
-                        };
-                    Some((distance, row))
+                                .saturating_add(1)
+                        }
+                    };
+                    if let (TextPoint::Node(byte), Origin::Node(node)) = (point.point, origin) {
+                        return Some((distance(byte, &(*node..*node)), 0, row));
+                    }
+                    let (source, byte, expansion) = match point.point {
+                        TextPoint::Raw(byte) => (SourceKind::Raw, byte, None),
+                        TextPoint::Component { component, byte } => {
+                            (SourceKind::Component(component), byte, None)
+                        }
+                        TextPoint::Expansion {
+                            source,
+                            byte,
+                            offset,
+                        } => (source, byte, Some(offset)),
+                        TextPoint::Node(_) => return None,
+                    };
+                    let (actual, bytes, offset) = match origin {
+                        Origin::Raw(bytes) => (SourceKind::Raw, bytes, None),
+                        Origin::Component { component, bytes } => {
+                            (SourceKind::Component(*component), bytes, None)
+                        }
+                        Origin::Expansion {
+                            source,
+                            bytes,
+                            offset,
+                        } => (*source, bytes, Some(offset)),
+                        Origin::Node(_) => return None,
+                    };
+                    if source != actual {
+                        return None;
+                    }
+                    let interior = expansion.map_or(0, |point| {
+                        offset.map_or(usize::MAX, |range| distance(point, range))
+                    });
+                    Some((distance(byte, bytes), interior, row))
                 })
             })
             .min()
-            .map(|(_, row)| row)
+            .map(|(_, _, row)| row)
             // A disclosure may hide an entire field while its occurrence stays
             // visible. Project to that root's boundary, never another field's
             // byte offset. ConversationView retains the original hidden point.
@@ -529,47 +571,61 @@ fn render_message_layout(
 }
 
 /// Inspection keeps the original human-visible source, not the formatted view.
-pub(super) fn render_source_message(
-    rows: &mut Vec<Line<'static>>,
+pub(super) fn source_message_layout(
     message: &TranscriptMessage,
     user: bool,
     width: usize,
-) {
-    let mut first = true;
-    for part in &message.parts {
-        match part {
+) -> BlockLayout {
+    let mut block = BlockLayout::default();
+    for (index, part) in message.parts.iter().enumerate() {
+        let root = ContentRoot::Part(index);
+        let prefix = if !user {
+            ""
+        } else if index == 0 {
+            if message.steering { "↳ " } else { "› " }
+        } else {
+            "  "
+        };
+        let continuation = if user { "  " } else { "" };
+        let (prefix, continuation, source) = match part {
             TranscriptPart::Thinking(text) => {
-                push_wrapped(rows, "Thinking", width);
-                push_prefixed(rows, "  ", "  ", text, width);
+                block.extend(
+                    root,
+                    wrap_mapped(
+                        "",
+                        "",
+                        MappedLine::component(Line::raw("Thinking"), Component::Generated(0), 0),
+                        width,
+                        Wrapping::Literal,
+                    ),
+                );
+                (
+                    "  ",
+                    "  ",
+                    MappedLine::raw(Line::from(Span::raw(text.clone())), 0..text.len()),
+                )
             }
-            TranscriptPart::Text(text) => {
-                if user {
-                    let prefix = if first {
-                        if message.steering { "↳ " } else { "› " }
-                    } else {
-                        "  "
-                    };
-                    push_prefixed(rows, prefix, "  ", text, width);
-                } else {
-                    push_wrapped(rows, text, width);
-                }
-            }
-            TranscriptPart::Image { mime_type } => {
-                let image = format!("[image: {mime_type}]");
-                if user {
-                    let prefix = if first {
-                        if message.steering { "↳ " } else { "› " }
-                    } else {
-                        "  "
-                    };
-                    push_prefixed(rows, prefix, "  ", &image, width);
-                } else {
-                    push_wrapped(rows, &image, width);
-                }
-            }
-        }
-        first = false;
+            TranscriptPart::Text(text) => (
+                prefix,
+                continuation,
+                MappedLine::raw(Line::from(Span::raw(text.clone())), 0..text.len()),
+            ),
+            TranscriptPart::Image { mime_type } => (
+                prefix,
+                continuation,
+                MappedLine::component(
+                    Line::from(Span::raw(format!("[image: {mime_type}]"))),
+                    Component::Generated(0),
+                    0,
+                ),
+            ),
+        };
+        block.extend(
+            root,
+            wrap_mapped(prefix, continuation, source, width, Wrapping::Literal),
+        );
     }
+    block
 }
 
 fn render_shell(
@@ -1270,24 +1326,6 @@ fn activity_style(state: ActivityState, notice: bool, observation: bool, theme: 
         }
     };
     theme.style(role)
-}
-fn push_prefixed(
-    rows: &mut Vec<Line<'static>>,
-    prefix: &str,
-    continuation: &str,
-    text: &str,
-    width: usize,
-) {
-    crate::display_text::push_styled(
-        rows,
-        prefix,
-        continuation,
-        Line::from(Span::raw(text)),
-        width,
-    );
-}
-fn push_wrapped(rows: &mut Vec<Line<'static>>, text: &str, width: usize) {
-    push_prefixed(rows, "", "", text, width);
 }
 fn push_activity(
     rows: &mut Vec<MappedLine>,

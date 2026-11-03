@@ -167,6 +167,7 @@ pub(super) fn apply(
             }
         }
         ControlUpdate::Automated { .. } => {
+            ui.discard_provisional();
             ui.conversation.clear_live();
             ui.status = "Managed-work readiness · automatic Turn".into();
         }
@@ -196,14 +197,19 @@ pub(super) fn apply(
             {
                 ui.note(note);
             }
-            if matches!(event.as_ref(), AgentEvent::ResponseRestarted) {
-                ui.view.discard_provisional();
+            if matches!(event.as_ref(), AgentEvent::ResponseRestarted)
+                && ui.conversation.live_for(operation)
+            {
+                ui.discard_provisional();
             }
             if matches!(event.as_ref(), AgentEvent::AssistantCommitted { .. })
                 && ui.conversation.live_for(operation)
                 && let Some(live) = ui.conversation.live()
             {
                 ui.view.commit_response(live, &event);
+                if let Some(details) = &mut ui.details {
+                    details.commit_response(live, &event);
+                }
             }
             if ui.conversation.observe(operation, &event) {
                 ui.session_io.request_refresh();
@@ -214,8 +220,8 @@ pub(super) fn apply(
             // at a committed boundary, but LiveTranscript's tool/child indexes
             // require an uninterrupted Turn. Stay on committed facts until the
             // next Turn instead of inventing a second full-history snapshot.
+            ui.discard_provisional();
             ui.conversation.clear_live();
-            ui.view.discard_provisional();
             ui.note("Live updates skipped; showing committed Session facts".into());
             ui.session_io.request_refresh();
         }
@@ -260,6 +266,7 @@ pub(super) fn apply(
             ui.unresolved_inputs.push(input);
         }
         ControlUpdate::Settled(mut settlement) => {
+            ui.discard_provisional();
             ui.conversation.clear_live();
             let not_dispatched = matches!(&settlement.outcome, OperationOutcome::NotDispatched(_));
             let result = match settlement.outcome {
@@ -322,6 +329,7 @@ pub(super) fn apply(
         }
         ControlUpdate::QuestionChanged => {}
         ControlUpdate::Idle => {
+            ui.discard_provisional();
             ui.conversation.clear_live();
         }
     }
@@ -439,6 +447,143 @@ mod tests {
                     .contains("steers")
             );
         }
+        fixture.control.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn details_reading_survives_commit_and_retires_restarted_or_lost_streams() {
+        use ion_ai::{Content, Message, ResponseTermination};
+        let mut fixture = super::super::tests::Fixture::new();
+        let operation = fixture
+            .control
+            .compact(None, EditorDraft::at_end(String::new()))
+            .unwrap();
+        let mut ui = Frontend::default();
+        ui.load_history(
+            fixture.control.session(),
+            &fixture.control.session().view().unwrap(),
+        );
+        let event = |event| {
+            ControlUpdate::Activity(Observation::Event {
+                operation,
+                event: Arc::new(event),
+            })
+        };
+        let body = (0..100)
+            .map(|index| format!("BODY_{index:03}\n"))
+            .collect::<String>();
+        for value in [
+            AgentEvent::TurnAccepted {
+                entry: 1,
+                turn: 1,
+                input: Message::user_input("request".into(), []),
+            },
+            AgentEvent::ThinkingDelta {
+                block: 0,
+                text: "thinking\n".repeat(40),
+            },
+            AgentEvent::TextDelta(body.clone()),
+        ] {
+            apply(&mut ui, &fixture.control, event(value)).unwrap();
+        }
+        ui.open_details(None);
+        super::super::modal_rows(&mut ui, None, 80, 12);
+        ui.details.as_mut().unwrap().scroll_by(-30);
+        let before = super::super::modal_rows(&mut ui, None, 80, 12).0[0].to_string();
+        assert!(before.starts_with("BODY_"));
+        apply(
+            &mut ui,
+            &fixture.control,
+            event(AgentEvent::AssistantCommitted {
+                entry: 2,
+                turn: 1,
+                content: vec![
+                    Content::Thinking("thinking\n".repeat(40)),
+                    Content::Text(body),
+                ],
+                tool_activities: vec![],
+                termination: ResponseTermination::Completed,
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            super::super::modal_rows(&mut ui, None, 80, 12).0[0].to_string(),
+            before
+        );
+        // Commit splits the streamed parts into separately sourced entries.
+        // A refresh must keep the text part, not adopt the earlier thinking part.
+        ui.details.as_mut().unwrap().invalidate();
+        assert_eq!(
+            super::super::modal_rows(&mut ui, None, 30, 16).0[0].to_string(),
+            before
+        );
+        apply(
+            &mut ui,
+            &fixture.control,
+            event(AgentEvent::TextDelta("RETRY_BODY\n".repeat(100))),
+        )
+        .unwrap();
+        super::super::modal_rows(&mut ui, None, 80, 12);
+        // Reading pins the older page; Later deliberately enters the new response.
+        ui.details
+            .as_mut()
+            .unwrap()
+            .navigate(crate::keybindings::KeyAction::Later);
+        super::super::modal_rows(&mut ui, None, 80, 12);
+        ui.details.as_mut().unwrap().scroll_by(-30);
+        assert!(
+            super::super::modal_rows(&mut ui, None, 80, 12).0[0]
+                .to_string()
+                .starts_with("RETRY_BODY")
+        );
+        apply(
+            &mut ui,
+            &fixture.control,
+            event(AgentEvent::ResponseRestarted),
+        )
+        .unwrap();
+        apply(
+            &mut ui,
+            &fixture.control,
+            event(AgentEvent::TextDelta("NEW_RESPONSE\n".repeat(100))),
+        )
+        .unwrap();
+        let retired = super::super::modal_rows(&mut ui, None, 80, 12).0;
+        assert!(
+            !retired
+                .iter()
+                .any(|row| row.to_string().contains("NEW_RESPONSE"))
+        );
+        assert!(retired.iter().any(|row| row.to_string().contains("BODY_")));
+        // Losing an anchored stream follows the same retirement path.
+        ui.details
+            .as_mut()
+            .unwrap()
+            .navigate(crate::keybindings::KeyAction::Later);
+        super::super::modal_rows(&mut ui, None, 80, 12);
+        ui.details.as_mut().unwrap().scroll_by(-30);
+        assert!(
+            super::super::modal_rows(&mut ui, None, 80, 12).0[0]
+                .to_string()
+                .starts_with("NEW_RESPONSE")
+        );
+        apply(
+            &mut ui,
+            &fixture.control,
+            ControlUpdate::Activity(Observation::Gap { skipped: 3 }),
+        )
+        .unwrap();
+        let after_gap = super::super::modal_rows(&mut ui, None, 80, 12).0;
+        assert!(
+            !after_gap
+                .iter()
+                .any(|row| row.to_string().contains("NEW_RESPONSE"))
+        );
+        assert!(
+            after_gap
+                .iter()
+                .any(|row| row.to_string().contains("BODY_"))
+        );
         fixture.control.shutdown().await;
     }
 

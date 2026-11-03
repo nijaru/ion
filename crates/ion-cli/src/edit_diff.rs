@@ -251,7 +251,10 @@ mod tests {
                 activities: vec![activity.clone()],
             })],
         };
-        let mut detail = crate::transcript_detail::DetailView::new(std::num::NonZeroUsize::new(1));
+        let mut detail = crate::transcript_detail::DetailView::new(Some((
+            std::num::NonZeroUsize::new(1).unwrap(),
+            activity.identity,
+        )));
         detail.prepare(history.items.iter(), &[], 0, 80);
         let inspection = detail.rows().join("\n");
         assert!(inspection.contains("Recorded edit diff · capture truncated"));

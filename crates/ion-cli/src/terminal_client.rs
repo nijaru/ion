@@ -1192,6 +1192,13 @@ impl Frontend {
         });
     }
 
+    fn discard_provisional(&mut self) {
+        self.view.discard_provisional();
+        if let Some(details) = &mut self.details {
+            details.discard_provisional();
+        }
+    }
+
     fn open_details(&mut self, number: Option<usize>) {
         let selected = match number {
             None => None,
@@ -1200,11 +1207,11 @@ impl Frontend {
                     self.status = "Tool result not found; use /tools to list tools".into();
                     return;
                 };
-                if tools(self.conversation.items()).nth(index - 1).is_none() {
+                let Some(activity) = tools(self.conversation.items()).nth(index - 1) else {
                     self.status = "Tool result not found; use /tools to list tools".into();
                     return;
-                }
-                Some(number)
+                };
+                Some((number, activity.identity))
             }
         };
         self.details = Some(DetailView::new(selected));

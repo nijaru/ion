@@ -92,6 +92,7 @@ impl View<'_> {
                     Origin::Raw(raw) | Origin::Component { bytes: raw, .. } => {
                         raw.end -= mapping.display.end - end
                     }
+                    Origin::Expansion { offset, .. } => offset.end -= mapping.display.end - end,
                     Origin::Node(_) => {}
                 }
             }

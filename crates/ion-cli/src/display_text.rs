@@ -91,9 +91,20 @@ impl Field {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Component {
-    Parsed { node: usize, kind: ParsedComponent },
+    Parsed {
+        node: usize,
+        kind: ParsedComponent,
+    },
     Field(Field),
     Readiness,
+    /// A named writer component, measured before wrapping (not Session bytes).
+    Generated(usize),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SourceKind {
+    Raw,
+    Component(Component),
 }
 
 /// Untouched text bytes, component-local bytes before fitting, or a generated
@@ -106,6 +117,13 @@ pub(super) enum Origin {
         bytes: Range<usize>,
     },
     Node(usize),
+    /// Position inside a writer/kernel expansion of one source unit. This is
+    /// independent of wrapping: e.g. the second space of a tab or `n` in `\\n`.
+    Expansion {
+        source: SourceKind,
+        bytes: Range<usize>,
+        offset: Range<usize>,
+    },
 }
 
 impl Origin {
@@ -117,6 +135,28 @@ impl Origin {
                 bytes: bytes.start + relative.start..bytes.start + relative.end,
             },
             Self::Node(node) => Self::Node(*node),
+            Self::Expansion {
+                source,
+                bytes,
+                offset,
+            } => Self::Expansion {
+                source: *source,
+                bytes: bytes.clone(),
+                offset: offset.start + relative.start..offset.start + relative.end,
+            },
+        }
+    }
+
+    fn expanded(self, offset: Range<usize>) -> Self {
+        let (source, bytes) = match self {
+            Self::Raw(bytes) => (SourceKind::Raw, bytes),
+            Self::Component { component, bytes } => (SourceKind::Component(component), bytes),
+            other => return other,
+        };
+        Self::Expansion {
+            source,
+            bytes,
+            offset,
         }
     }
 }
@@ -130,20 +170,31 @@ pub(super) struct Mapping {
 }
 
 impl Mapping {
-    fn project(&self, source: &Range<usize>, display: Range<usize>) -> Option<Self> {
+    fn project(
+        &self,
+        source: &Range<usize>,
+        display: Range<usize>,
+        expansion: Option<Range<usize>>,
+    ) -> Option<Self> {
         let start = self.display.start.max(source.start);
         let end = self.display.end.min(source.end);
         if start >= end {
             return None;
         }
-        let origin = if self.linear {
-            self.origin
-                .slice(start - self.display.start..end - self.display.start)
+        let relative = start - self.display.start..end - self.display.start;
+        let origin = if self.linear || matches!(self.origin, Origin::Expansion { .. }) {
+            self.origin.slice(relative)
         } else {
-            self.origin.clone()
+            self.origin.clone().expanded(relative)
+        };
+        let linear = self.linear && expansion.is_none() && end - start == display.len();
+        let origin = if let Some(offset) = expansion {
+            origin.expanded(offset)
+        } else {
+            origin
         };
         Some(Self {
-            linear: self.linear && end - start == display.len(),
+            linear,
             display,
             origin,
         })
@@ -225,6 +276,7 @@ pub(super) struct DisplayUnit<'a> {
     pub source: Range<usize>,
     pub text: &'a str,
     pub cells: usize,
+    expansion: Option<Range<usize>>,
     whitespace: bool,
 }
 
@@ -248,12 +300,13 @@ pub(super) fn layout(text: &str, width: usize, policy: Wrapping) -> Vec<TextRow<
         } else {
             display
         };
-        for _ in 0..if grapheme == "\t" { 4 } else { 1 } {
+        for expansion in 0..if grapheme == "\t" { 4 } else { 1 } {
             let display = if grapheme == "\t" { " " } else { display };
             units.push(DisplayUnit {
                 source: byte..byte + grapheme.len(),
                 text: display,
                 cells: UnicodeWidthStr::width(display),
+                expansion: (grapheme == "\t").then_some(expansion..expansion + 1),
                 whitespace: grapheme.chars().all(char::is_whitespace),
             });
         }
@@ -455,6 +508,7 @@ fn wrap_rows(
                 if let Some(mapping) = mapping.project(
                     &unit.source,
                     display_offset..display_offset + unit.text.len(),
+                    unit.expansion.clone(),
                 ) {
                     map.push(mapping);
                 }
@@ -524,12 +578,13 @@ fn fit_units(text: &str, width: usize) -> (Vec<DisplayUnit<'_>>, Option<usize>) 
             "\n" | "\r" | "\r\n" => " ",
             _ => visible(grapheme),
         };
-        for _ in 0..if grapheme == "\t" { 4 } else { 1 } {
+        for expansion in 0..if grapheme == "\t" { 4 } else { 1 } {
             let value = if grapheme == "\t" { " " } else { value };
             units.push(DisplayUnit {
                 source: byte..byte + grapheme.len(),
                 text: value,
                 cells: UnicodeWidthStr::width(value).max(1),
+                expansion: (grapheme == "\t").then_some(expansion..expansion + 1),
                 whitespace: false,
             });
             cells += UnicodeWidthStr::width(value).max(1);
@@ -588,11 +643,13 @@ pub(super) fn fit_mapped(source: MappedLine, width: usize) -> (MappedLine, bool)
             styles.next();
         }
         style = styles.peek().map_or(Style::default(), |(_, style)| *style);
-        row.map.extend(
-            source.map.iter().filter_map(|mapping| {
-                mapping.project(&unit.source, offset..offset + unit.text.len())
-            }),
-        );
+        row.map.extend(source.map.iter().filter_map(|mapping| {
+            mapping.project(
+                &unit.source,
+                offset..offset + unit.text.len(),
+                unit.expansion.clone(),
+            )
+        }));
         append(&mut row.line, unit.text, style);
         offset += unit.text.len();
     }
@@ -722,7 +779,39 @@ mod tests {
             assert_eq!(row.line.to_string(), expected);
             assert_eq!(clipped, omitted);
             assert!(row.line.width() <= width);
-            assert!(row.map.iter().all(|mapping| matches!(&mapping.origin, Origin::Component { component: actual, bytes } if *actual == component && bytes.start >= 100 && bytes.end <= 100 + text.len())));
+            assert!(row.map.iter().all(|mapping| match &mapping.origin {
+                Origin::Component {
+                    component: actual,
+                    bytes,
+                }
+                | Origin::Expansion {
+                    source: SourceKind::Component(actual),
+                    bytes,
+                    ..
+                } => {
+                    *actual == component && bytes.start >= 100 && bytes.end <= 100 + text.len()
+                }
+                _ => false,
+            }));
+            if text.contains('\t') {
+                let expansions = row
+                    .map
+                    .iter()
+                    .filter_map(|mapping| match &mapping.origin {
+                        Origin::Expansion {
+                            source: SourceKind::Component(actual),
+                            bytes,
+                            offset,
+                        } => {
+                            assert_eq!(*actual, component);
+                            assert_eq!(*bytes, 102..103);
+                            Some(offset.clone())
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(expansions, [0..1, 1..2]);
+            }
             if text.contains('\u{1b}') {
                 assert!(row.map.iter().any(|mapping| mapping.origin
                     == Origin::Component {
