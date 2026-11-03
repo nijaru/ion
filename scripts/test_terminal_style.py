@@ -1,6 +1,6 @@
 import unittest
 
-from terminal_style import has_foreground, program_ready
+from terminal_style import has_foreground, painted_text, program_ready
 
 
 class ForegroundTest(unittest.TestCase):
@@ -22,6 +22,28 @@ class ForegroundTest(unittest.TestCase):
     def test_rgb_encodings_are_compared_by_components(self):
         for code in [b"38;2;1;2;3", b"38:2::1:2:3"]:
             self.assertTrue(has_foreground(b"\x1b[" + code + b"mvalue", b"value", ("rgb", 1, 2, 3)))
+
+
+class PaintedRowsTest(unittest.TestCase):
+    def test_refresh_readiness_uses_current_rows_in_a_completed_paint(self):
+        blocked = (b"\x1b[1;1H\x1b[2KSession refresh failed"
+                   b"\x1b[2;1H\x1b[2KRecorded usage"
+                   b"\x1b[3;1H\x1b[2KPrompt retained; not sent\x1b[20;3H")
+        # Both old smoke cues already occur while admission remains blocked.
+        self.assertIn("Recorded usage", painted_text(blocked))
+        self.assertIn("Prompt retained; not sent", painted_text(blocked))
+        self.assertIn("Session refresh failed", painted_text(blocked))
+        clearing = b"\x1b[1;1H\x1b[2K"
+        self.assertIn("Session refresh failed", painted_text(blocked + clearing))
+        self.assertNotIn("Session refresh", painted_text(blocked + clearing + b"\x1b[20;3H"))
+        self.assertIn("Prompt retained; not sent", painted_text(blocked + clearing + b"\x1b[20;3H"))
+
+    def test_replaced_rows_preserve_unicode_but_not_styles_or_lifecycle_bytes(self):
+        first = (b"\x1b[2;1H\x1b[2Kold row\x1b[3;1H\x1b[2Kkeep\x1b[20;3H"
+                 b"\x1b]7501;state=error:app=ion\x1b\\")
+        update = (b"\x1b[2;1H\x1b[2K\x1b[2;1H\x1b[38;5;4m" + "draft 🦀".encode()
+                  + b"\x1b[0m\x1b[20;7H\x1b]7501;state=error:app=ion\x1b\\")
+        self.assertEqual(painted_text(first + update), "draft 🦀\nkeep")
 
 
 class LifecycleTest(unittest.TestCase):

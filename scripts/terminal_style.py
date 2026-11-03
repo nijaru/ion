@@ -1,4 +1,4 @@
-"""Inspect terminal styling and lifecycle protocols, not screen pixels."""
+"""Inspect terminal styling, full-row paints and lifecycle protocols."""
 import re
 
 CSI = re.compile(rb"\x1b\[([0-?]*)(?:[ -/]*)([@-~])")
@@ -10,6 +10,27 @@ def program_ready(output):
     return start >= 0 and re.match(
         rb"\x1b]7501;state=(idle|done):[^\x1b]*\x1b\\", output[start:]
     ) is not None
+
+
+def painted_text(output):
+    """Observe Ion's completed full-row paints, not a general VT screen.
+
+    Row painting uses column-one CUP/EL; a nonzero-column caret placement
+    finishes the paint. Keep earlier rows until that boundary so a partial
+    clear cannot masquerade as completed Session recovery.
+    """
+    caret = re.compile(rb"\x1b\[[0-9]+;([0-9]+)H")
+    end = max((match.end() for match in caret.finditer(output)
+               if int(match[1]) > 1), default=0)
+    output = output[:end]
+    updates = list(re.finditer(rb"\x1b\[([0-9]+);1H\x1b\[2K", output))
+    rows = {}
+    for index, update in enumerate(updates):
+        stop = updates[index + 1].start() if index + 1 < len(updates) else end
+        text = output[update.end():stop]
+        text = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", text)
+        rows[int(update[1])] = CSI.sub(b"", text).decode("utf-8", errors="replace")
+    return "\n".join(rows[row] for row in sorted(rows))
 
 
 def foreground_after(parameters, foreground):

@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from smoke_input_files import exercise_file_input
-from terminal_style import program_ready
+from terminal_style import painted_text, program_ready
 
 
 root = Path(__file__).resolve().parent.parent
@@ -1621,8 +1621,12 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     # program marker still describes the failed prior operation.
                     terminal.output.clear()
                     terminal.send("\x15/session\r")
-                    terminal.wait(lambda: "Recorded usage" in terminal.text()
-                                  and "Prompt retained; not sent" in terminal.text())
+                    # Usage is printed before the separate canonical refresh
+                    # completes. Wait for a painted, unblocked status, not those
+                    # same words in the earlier blocked frame or raw history.
+                    terminal.wait(lambda: "Recorded usage" in (visible := painted_text(terminal.lifecycle_output))
+                                  and "Prompt retained; not sent" in visible
+                                  and "Session refresh" not in visible)
                     terminal.output.clear()
                     terminal.send("\x19\r")
                     terminal.wait(lambda: len(requests) == before + 1)
@@ -1664,9 +1668,10 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     connection.commit()
                     terminal.output.clear()
                     terminal.send("\x15/session\r")
-                    terminal.wait(lambda: "Recorded usage" in terminal.text()
-                                  and ("Prompt retained; not sent" in terminal.text()
-                                       or "Previous operation interrupted" in terminal.text()))
+                    terminal.wait(lambda: "Recorded usage" in (visible := painted_text(terminal.lifecycle_output))
+                                  and ("Prompt retained; not sent" in visible
+                                       or "Previous operation interrupted" in visible)
+                                  and "Session refresh" not in visible)
                     assert len(requests) == before + 1, "inspection replayed accepted input"
                     terminal.finish()
                 finally:
