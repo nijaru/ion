@@ -929,9 +929,23 @@ mod tests {
         assert_eq!(rustix::io::write(&slave, output).unwrap(), output.len());
         capture_final(&master, &terminal, &raw).unwrap();
         assert_eq!(raw.read(0, 65_536, 65_536).unwrap().bytes, output);
-        drop(slave);
         capture_final(&master, &terminal, &raw).unwrap();
-        assert!(raw.meta().complete);
+        assert!(!raw.meta().complete, "an open, quiet terminal is not EOF");
+        drop(slave);
+        // Other tests spawn concurrently. CLOEXEC still permits an inherited
+        // slave between fork and exec, so EOF need not be ready at this drop.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            capture_final(&master, &terminal, &raw).unwrap();
+            if raw.meta().complete || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(
+            raw.meta().complete,
+            "terminal EOF did not become observable"
+        );
         assert_eq!(terminal.page(0, 1).unwrap().text, "TAIL");
     }
 }
