@@ -316,10 +316,19 @@ impl Document {
             path: path.clone(),
             closing,
         };
+        let multiline_text = |value: &Value| {
+            field == JsonField::Result && value.as_str().is_some_and(|text| text.contains('\n'))
+        };
         match value {
             Value::Object(values) if !values.is_empty() => {
                 self.generated(key, coordinate(false), &format!("{prefix}{{"), width);
-                for (index, (name, value)) in values.iter().enumerate() {
+                // Keep status/capture metadata before literal output, so the
+                // inspector's tail shows diagnostics rather than protocol flags.
+                let fields = values
+                    .iter()
+                    .filter(|(_, value)| !multiline_text(value))
+                    .chain(values.iter().filter(|(_, value)| multiline_text(value)));
+                for (index, (name, value)) in fields.enumerate() {
                     path.push(PathPart::Key(name.clone()));
                     self.json_value(
                         key,
@@ -360,6 +369,20 @@ impl Document {
                     &format!("{indent}]{suffix}"),
                     width,
                 );
+            }
+            Value::String(text) if multiline_text(value) => {
+                // This is a readable value view; evidence copying still uses
+                // the original JSON. Padding is layout, not scalar source bytes.
+                let mut layout = BlockLayout::mapped(
+                    MappedLine::component(
+                        Line::from(Span::raw(format!("{prefix}(text)"))),
+                        Component::Generated(0),
+                        0,
+                    ),
+                    width,
+                );
+                layout.append_literal(&format!("{indent}  "), text, width);
+                self.push(key, coordinate(false), layout);
             }
             Value::String(text) => {
                 self.push(

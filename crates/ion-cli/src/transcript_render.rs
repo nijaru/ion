@@ -109,10 +109,22 @@ pub(super) struct BlockLayout {
 
 impl BlockLayout {
     pub fn literal(text: &str, width: usize) -> Self {
-        Self::mapped(
-            MappedLine::raw(Line::from(Span::raw(text.to_owned())), 0..text.len()),
-            width,
-        )
+        let mut block = Self::default();
+        block.append_literal("", text, width);
+        block
+    }
+
+    pub fn append_literal(&mut self, prefix: &str, text: &str, width: usize) {
+        self.extend(
+            ContentRoot::Block,
+            wrap_mapped(
+                prefix,
+                prefix,
+                MappedLine::raw(Line::from(Span::raw(text.to_owned())), 0..text.len()),
+                width,
+                Wrapping::Literal,
+            ),
+        );
     }
 
     pub fn mapped(source: MappedLine, width: usize) -> Self {

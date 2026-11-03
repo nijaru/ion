@@ -693,6 +693,77 @@ mod tests {
     }
 
     #[test]
+    fn multiline_results_are_readable_and_keep_exact_evidence_and_source_positions() {
+        let mut tool = activity(0);
+        let identity = tool.identity;
+        let stderr = "Traceback (most recent call last):\n  File \"test_calculator.py\", line 7\n    path = r\"C:\\temp\\n\"\n\u{1b}]52;c;Zm9v\u{7}\nAssertionError: 😀 != 5\n";
+        let value =
+            serde_json::json!({"exit_code":1,"stderr":stderr,"stdout":"","cancelled":false});
+        tool.state = ion_core::ActivityState::Failed;
+        let result = tool.result.as_mut().unwrap();
+        result.is_error = true;
+        result.value = value.clone();
+        let mut history = tool_history(vec![tool]);
+        let mut view = DetailView::new(Some((NonZeroUsize::new(1).unwrap(), identity)));
+        view.prepare(history.items.iter(), &[], 0, 80);
+        let rows = view.rows();
+        for expected in [
+            "Traceback (most recent call last):",
+            "File \"test_calculator.py\", line 7",
+            r#"path = r"C:\temp\n""#,
+            "AssertionError: 😀 != 5",
+        ] {
+            assert!(
+                rows.iter().any(|row| row.trim() == expected),
+                "missing readable result line {expected:?}: {rows:?}"
+            );
+        }
+        assert!(rows.join("\n").contains("\"exit_code\": 1"));
+        assert!(rows.join("\n").contains("\"cancelled\": false"));
+        assert!(rows.iter().all(|row| !row.contains(['\u{1b}', '\u{7}'])));
+        assert!(
+            rows.iter()
+                .position(|row| row.contains("\"stdout\""))
+                .unwrap()
+                < rows
+                    .iter()
+                    .position(|row| row.contains("Traceback"))
+                    .unwrap()
+        );
+        assert!(view.copy_evidence().unwrap().1.contains(&json_text(&value)));
+        let marker = rows
+            .iter()
+            .position(|row| row.contains("AssertionError"))
+            .unwrap();
+        view.window(2);
+        view.scroll_by(isize::MIN);
+        view.scroll_by(isize::try_from(marker).unwrap());
+        let visible = view.window(2)[0].clone();
+        assert!(visible.contains("AssertionError"));
+        let anchor = view.anchor.clone();
+        assert_eq!(
+            anchor.as_ref().unwrap().point.unwrap().point,
+            crate::transcript_render::TextPoint::Raw(stderr.find("AssertionError").unwrap())
+        );
+        let TranscriptItem::ActivityGroup(group) = &mut history.items[0] else {
+            panic!()
+        };
+        group.activities[0].result.as_mut().unwrap().value["earlier"] =
+            serde_json::json!("preceding metadata\n".repeat(100));
+        view.invalidate();
+        for width in [12, 1, 120, 80] {
+            view.prepare(history.items.iter(), &[], 1, width);
+            assert_eq!(view.anchor, anchor);
+            assert!(
+                view.window(2)
+                    .iter()
+                    .all(|row| { unicode_width::UnicodeWidthStr::width(row.as_str()) <= width })
+            );
+        }
+        assert_eq!(view.window(2)[0], visible);
+    }
+
+    #[test]
     fn inspection_json_matches_pretty_values_without_emitting_controls() {
         let controls: String = ('\0'..='\u{1f}').collect();
         let mut tool = activity(0);
