@@ -18,7 +18,7 @@ pub(super) enum Edit {
     },
 }
 
-fn previous_grapheme(text: &str, cursor: usize) -> usize {
+pub(super) fn previous_grapheme(text: &str, cursor: usize) -> usize {
     text[..cursor]
         .grapheme_indices(true)
         .next_back()

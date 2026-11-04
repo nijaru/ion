@@ -1,5 +1,6 @@
 //! Modal choices and cooperative discovery shared with non-modal completion.
 //! One retained scan joins before its replacement can start.
+use super::editing::previous_grapheme;
 use super::paint::{Prepared, Visibility};
 use crate::presentation_style::{Role, Theme};
 use ratatui::text::Line;
@@ -721,7 +722,9 @@ impl Pickers {
                 self.move_selection(action == Some(KeyAction::SelectDown));
             }
             Some(KeyAction::Backspace) => {
-                picker.query.pop();
+                picker
+                    .query
+                    .truncate(previous_grapheme(&picker.query, picker.query.len()));
                 picker.selected = 0;
                 self.visibility.invalidate();
             }
@@ -951,6 +954,46 @@ mod tests {
                 .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn query_backspace_removes_one_whole_grapheme_and_requires_repaint() {
+        for (keys, key) in [
+            (
+                KeyBindings::default(),
+                KeyEvent::new(KeyCode::Backspace, Modifiers::NONE),
+            ),
+            (
+                KeyBindings::parse(br#"{"tui.editor.deleteCharBackward":["ctrl+q"]}"#).unwrap(),
+                KeyEvent::new(KeyCode::Char('q'), Modifiers::CONTROL),
+            ),
+        ] {
+            for suffix in ["e\u{301}", "👍🏽", "👩‍💻", "🇺🇸🇨🇦", "กำ", ""]
+            {
+                let mut pickers = open_labels(&["anchor first", "anchor second"]);
+                pickers.insert("anchor ");
+                pickers.insert(suffix);
+                pickers.painted_rows(80, 10, &Theme::default());
+                pickers.key(key, &keys);
+                let expected = match suffix {
+                    "🇺🇸🇨🇦" => "anchor 🇺🇸",
+                    "" => "anchor",
+                    _ => "anchor ",
+                };
+                assert_eq!(pickers.active().unwrap().query, expected, "{suffix:?}");
+                assert!(
+                    pickers
+                        .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys)
+                        .is_none(),
+                    "an edited query must revoke the old painted candidate"
+                );
+                assert!(pickers.active().is_some());
+            }
+        }
+        let mut pickers = open_labels(&["anchor"]);
+        let keys = KeyBindings::default();
+        pickers.key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE), &keys);
+        assert!(pickers.active().unwrap().query.is_empty());
     }
 
     #[test]
