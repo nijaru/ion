@@ -68,6 +68,8 @@ impl Chord {
     }
 
     fn normalize(mut event: KeyEvent, infer_shift: bool) -> Self {
+        // Bindings name a chord; the action owner decides whether it may repeat.
+        event.repeat = false;
         if event.code == KeyCode::BackTab {
             event.code = KeyCode::Tab;
             event.modifiers |= Modifiers::SHIFT;

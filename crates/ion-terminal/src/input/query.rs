@@ -1,10 +1,10 @@
-//! Recognize terminal replies without consuming unrelated type-ahead.
+//! Frame terminal replies and enhanced key metadata without losing type-ahead.
 use std::time::Duration;
 
 use tokio::time::Instant;
 
 use crate::colors::observe_osc;
-use crate::{Appearance, InputError, TerminalColors};
+use crate::{Appearance, InputError, Modifiers, TerminalColors};
 
 const MAX_OSC_BYTES: usize = 1024;
 const ALL_COLORS: u32 = (1 << 18) - 1;
@@ -104,7 +104,12 @@ impl ModeProbe {
 #[derive(Debug)]
 pub(super) enum KeyFrame {
     Bytes(Vec<u8>),
-    Reply,
+    Boundary,
+    Key {
+        bytes: Vec<u8>,
+        modifiers: Modifiers,
+        repeat: bool,
+    },
     ColorsChanged,
     Rejected(InputError),
 }
@@ -173,10 +178,16 @@ enum State {
 
 impl TerminalReplyFilter {
     pub(super) fn quarantine(&mut self) {
+        if matches!(self.state, State::Body { private: false, .. }) {
+            // Consume a partial key, not merely its decoded events. Its suffix
+            // stays in bounded discard custody, never in the next input lease.
+            self.state = State::PrivateDiscard;
+            return;
+        }
         // Forget key disambiguation, not terminal control-string custody.
         let unowned = match &self.state {
             State::Esc | State::Csi | State::OscPrefix { .. } => true,
-            State::Body { private, bytes } => !Self::setting_csi(*private, bytes),
+            State::Body { private, bytes } => !Self::owned_csi(*private, bytes),
             _ => false,
         };
         if unowned {
@@ -282,7 +293,7 @@ impl TerminalReplyFilter {
         self.reply_window = None;
         if incomplete {
             vec![
-                KeyFrame::Reply,
+                KeyFrame::Boundary,
                 KeyFrame::Rejected(InputError::IncompleteTerminalReply),
             ]
         } else {
@@ -324,7 +335,7 @@ impl TerminalReplyFilter {
             | State::OscEscape { .. }
             | State::PrivateDiscard
             | State::RejectedCr => true,
-            State::Body { private, bytes } => Self::setting_csi(*private, bytes),
+            State::Body { private, bytes } => Self::owned_csi(*private, bytes),
             _ => false,
         }
     }
@@ -409,10 +420,10 @@ impl TerminalReplyFilter {
                     }
                 }
                 State::Body { private, mut bytes } => {
-                    if matches!(byte, b'\r' | b'\n') && Self::setting_csi(private, &bytes) {
+                    if matches!(byte, b'\r' | b'\n') && Self::owned_csi(private, &bytes) {
                         self.reject_newline(byte, &mut frames, &mut output)
                     } else if byte == b'\x1b' || byte.is_ascii_control() {
-                        if !Self::setting_csi(private, &bytes) {
+                        if !Self::owned_csi(private, &bytes) {
                             Self::emit(&mut output, private, &bytes);
                         }
                         Self::removed(&mut frames, &mut output, false);
@@ -425,16 +436,21 @@ impl TerminalReplyFilter {
                     } else {
                         bytes.push(byte);
                         if (0x40..=0x7e).contains(&byte) || bytes.len() >= 128 {
-                            let owned = Self::setting_csi(private, &bytes);
+                            let owned = Self::owned_csi(private, &bytes);
                             let previous = (self.colors, self.colors_need_refresh());
                             let retry_was_ready = self.appearance_mode.retry_ready();
-                            if self.reply(private, &bytes, cursor_query) || owned {
+                            if self.reply(private, &bytes, cursor_query)
+                                || Self::setting_csi(private, &bytes)
+                            {
                                 Self::removed(
                                     &mut frames,
                                     &mut output,
                                     previous != (self.colors, self.colors_need_refresh())
                                         || (!retry_was_ready && self.appearance_mode.retry_ready()),
                                 );
+                            } else if let Some(key) = Self::key_event(private, &bytes) {
+                                Self::removed(&mut frames, &mut output, false);
+                                frames.push(key);
                             } else {
                                 Self::emit(&mut output, private, &bytes);
                             }
@@ -555,7 +571,7 @@ impl TerminalReplyFilter {
                 State::Esc => output.push(b'\x1b'),
                 State::Csi => output.extend_from_slice(b"\x1b["),
                 State::Body { private, bytes } => {
-                    if Self::setting_csi(private, &bytes) {
+                    if Self::owned_csi(private, &bytes) {
                         // A terminal reply has its own deadline, not the much
                         // shorter Escape-key grace period.
                         self.state = State::Body { private, bytes };
@@ -618,6 +634,78 @@ impl TerminalReplyFilter {
         }
     }
 
+    fn owned_csi(private: bool, bytes: &[u8]) -> bool {
+        // Until its final byte, a numeric CSI may be a release report. The
+        // Escape grace period cannot authorize replaying its parameters as text.
+        Self::setting_csi(private, bytes)
+            || (!private && bytes.first().is_some_and(u8::is_ascii_digit))
+    }
+
+    fn event_csi(private: bool, bytes: &[u8]) -> bool {
+        !private
+            && bytes
+                .split(|byte| *byte == b';')
+                .nth(1)
+                .is_some_and(|field| field.contains(&b':'))
+    }
+
+    // Only normalize event metadata. The retained key parser still owns key
+    // identity; an unsupported framed key must never fall back to draft text.
+    fn key_event(private: bool, bytes: &[u8]) -> Option<KeyFrame> {
+        if !Self::event_csi(private, bytes) {
+            return None;
+        }
+        let normalized = || -> Option<KeyFrame> {
+            let (&last, body) = bytes.split_last()?;
+            if !matches!(
+                last,
+                b'u' | b'~' | b'A' | b'B' | b'C' | b'D' | b'H' | b'F' | b'P' | b'Q' | b'S'
+            ) {
+                return None;
+            }
+            let text = std::str::from_utf8(body).ok()?;
+            let (key, modifier) = text.split_once(';')?;
+            if key.is_empty() || !key.bytes().all(|byte| byte.is_ascii_digit()) {
+                return None;
+            }
+            // Only the outer bounded framer may enter or leave paste mode.
+            if last == b'~' && matches!(key.parse::<u16>(), Ok(200 | 201)) {
+                return None;
+            }
+            let (modifier, event) = modifier.split_once(':')?;
+            let modifier = modifier.parse::<u16>().ok()?.checked_sub(1)?;
+            if modifier > 255 || modifier & 0x38 != 0 {
+                // Super/Hyper/Meta must not alias an unmodified binding.
+                return None;
+            }
+            let repeat = match event {
+                "1" => false,
+                "2" => true,
+                _ => return None, // Releases and unknown event types are inert.
+            };
+            let mut modifiers = Modifiers::NONE;
+            for (bit, flag) in [
+                (1, Modifiers::SHIFT),
+                (2, Modifiers::ALT),
+                (4, Modifiers::CONTROL),
+            ] {
+                if modifier & bit != 0 {
+                    modifiers |= flag;
+                }
+            }
+            // Decode the unmodified identity: some legacy keys have no
+            // ";1" spelling. Caps/Num Lock are state, not binding modifiers.
+            // Flags 3 do not request alternate identities or text payloads.
+            let bytes = format!("\x1b[{key}{}", char::from(last)).into_bytes();
+            Some(KeyFrame::Key {
+                bytes,
+                modifiers,
+                repeat,
+            })
+        };
+        Some(normalized().unwrap_or(KeyFrame::Boundary))
+    }
+
     fn setting_csi(private: bool, bytes: &[u8]) -> bool {
         private
             && (bytes.starts_with(b"997;")
@@ -647,7 +735,7 @@ impl TerminalReplyFilter {
         }
         // A removed protocol frame is a key-parser boundary: fragments on
         // either side must not synthesize keys or unchecked paste openers.
-        frames.push(KeyFrame::Reply);
+        frames.push(KeyFrame::Boundary);
         if changed {
             frames.push(KeyFrame::ColorsChanged);
         }
@@ -767,7 +855,7 @@ mod tests {
         assert!(matches!(
             replies.finish().as_slice(),
             [
-                KeyFrame::Reply,
+                KeyFrame::Boundary,
                 KeyFrame::Rejected(InputError::IncompleteTerminalReply)
             ]
         ));

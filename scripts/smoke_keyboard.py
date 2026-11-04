@@ -194,7 +194,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                 assert b"ION smoke panic" in output
             else:
                 until(lambda: "›".encode() in output)
-                expected = 1 if supported else (8 if mode == "fullscreen" else 4)
+                expected = 3 if supported else (8 if mode == "fullscreen" else 4)
                 assert terminal.stacks[terminal.alternate][-1] == expected, "composer lacks its own keyboard mode"
                 assert terminal.grapheme_mode == (1 if grapheme_mode == 2 else grapheme_mode), "grapheme mode was not negotiated before painting"
                 if supported:
@@ -211,6 +211,16 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                     assert not requests, "composer recovery admitted before Enter"
                     # CSI-u Backspace must edit, not insert a control byte.
                     os.write(master, b"firstX\x1b[127u\x1b[13;2usecondX\x1b[8u")
+                    # A held Ctrl-C cannot confirm clearing the draft, and its
+                    # release must not type the report's parameters. Ordinary
+                    # held navigation and deletion still edit at the source caret.
+                    os.write(master, b"\x1b[99;5:1u\x1b[99;5:2u\x1b[99;5:2u\x1b[99;5:3u")
+                    until(lambda: b"Clear draft?" in output)
+                    checkpoint = len(output)
+                    os.write(master, b"\x1b[99;5:1u\x1b[99;5:3u")
+                    until(lambda: b"Draft cleared" in output[checkpoint:])
+                    os.write(master, b"\x1b[99;5:2u\x1b[99;5:3u\x1f")
+                    os.write(master, b"\x1b[1;1:2DY\x1b[127;1:2u\x1b[1;1:2C")
                     drain(0.25)
                     assert not requests, "Shift-Enter admitted a Turn instead of a draft newline"
                     os.write(master, b"\r")
@@ -232,7 +242,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                         os.write(master, b"  retained\x1b[13;2udraft\x1b[D\x07")
                     else:
                         os.write(master, b"/editor\r")
-                    until(lambda: marker.exists() and terminal.stacks[terminal.alternate][-1] == 1)
+                    until(lambda: marker.exists() and terminal.stacks[terminal.alternate][-1] == 3)
                     assert marker.read_text() == "4", "editor inherited Ion's keyboard push"
                     assert grapheme_marker.read_text() == str(grapheme_mode), "editor inherited Ion's grapheme mode"
                     until(lambda: terminal.cursor_queries == 2)
@@ -288,7 +298,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                         os.write(master, b"\x1b[D\x1d")
                         checkpoint = len(output)
                         until(lambda: b"Question hidden" in output[checkpoint:] and terminal.alternate == (mode == "fullscreen"))
-                        assert terminal.stacks[terminal.alternate][-1] == 1
+                        assert terminal.stacks[terminal.alternate][-1] == 3
                         os.write(master, b"ignored\r\t\x1b[200~hidden paste\x1b[201~")
                         drain(0.25)
                         assert len(requests) == 3, "hidden input submitted the question or composer"
@@ -321,7 +331,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                     os.write(master, b"\x0f")
                     until(lambda: terminal.alternate)
                     drain()
-                    assert terminal.stacks[1][-1] == (1 if supported else 8)
+                    assert terminal.stacks[1][-1] == (3 if supported else 8)
                     os.write(master, b"\x1b[27u" if supported else b"\x1b")
                     until(lambda: not terminal.alternate)
                 # Visible answer text can precede Host settlement. Explicit

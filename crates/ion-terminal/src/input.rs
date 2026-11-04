@@ -91,18 +91,23 @@ impl std::ops::BitOrAssign for Modifiers {
     }
 }
 
-/// A decoded key press. Key release/repeat distinctions are deliberately
-/// normalized until the UI has an owner that needs them.
+/// A decoded press or repeat. Release reports are consumed at the input boundary.
+/// Legacy terminals cannot distinguish auto-repeat from a fresh press.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyEvent {
     pub code: KeyCode,
     pub modifiers: Modifiers,
+    pub repeat: bool,
 }
 
 impl KeyEvent {
     #[must_use]
     pub const fn new(code: KeyCode, modifiers: Modifiers) -> Self {
-        Self { code, modifiers }
+        Self {
+            code,
+            modifiers,
+            repeat: false,
+        }
     }
 }
 
@@ -632,7 +637,30 @@ impl InputStream {
         for frame in frames {
             match frame {
                 query::KeyFrame::Bytes(bytes) => self.parse_key_bytes(&bytes, maybe_more),
-                query::KeyFrame::Reply => self.parse_key_bytes(&[], false),
+                query::KeyFrame::Boundary => self.parse_key_bytes(&[], false),
+                query::KeyFrame::Key {
+                    bytes,
+                    modifiers,
+                    repeat,
+                } => {
+                    self.parse_key_bytes(&[], false);
+                    if !self.utf8.is_empty() {
+                        self.utf8.clear();
+                        self.pending
+                            .push_back(InputEvent::Rejected(InputError::InvalidUtf8));
+                    }
+                    let events = self.parser.parse_as_vec(&bytes, false);
+                    if let [event] = events.as_slice()
+                        && let Some(InputEvent::Key(mut key)) = Self::decode(event.clone())
+                    {
+                        key.modifiers = modifiers;
+                        if key.code == KeyCode::Tab && modifiers.contains(Modifiers::SHIFT) {
+                            key.code = KeyCode::BackTab;
+                        }
+                        key.repeat = repeat;
+                        self.pending.push_back(InputEvent::Key(key));
+                    }
+                }
                 query::KeyFrame::ColorsChanged => {
                     if self.pending.back() != Some(&InputEvent::ColorsChanged) {
                         self.pending.push_back(InputEvent::ColorsChanged);
@@ -702,7 +730,7 @@ impl InputStream {
                 } else {
                     decode_code(key.key)
                 };
-                Some(InputEvent::Key(KeyEvent { code, modifiers }))
+                Some(InputEvent::Key(KeyEvent::new(code, modifiers)))
             }
             // Paste openers never reach this decoder: the bounded framer owns
             // them, and removed replies cannot bridge key sequence boundaries.
@@ -840,6 +868,184 @@ mod tests {
             eof: false,
             escape_grace: Duration::from_millis(100),
         }
+    }
+
+    #[tokio::test]
+    async fn enhanced_key_release_reports_never_become_keyboard_input() {
+        for release in [b"\x1b[99;5:3u".as_slice(), b"\x1b[1;5:3D", b"\x1b[5;1:3~"] {
+            let (_sender, chunks) = mpsc::channel(4);
+            let mut input = stream(chunks);
+            for byte in release {
+                input.parse(&[*byte], true);
+            }
+            input.parse(b"z", false);
+            assert_eq!(
+                input.pending,
+                VecDeque::from([InputEvent::Key(KeyEvent::new(
+                    KeyCode::Char('z'),
+                    Modifiers::NONE,
+                ))]),
+                "release report {release:?}",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn enhanced_keys_keep_event_type_and_identity_across_chunk_boundaries() {
+        for (sequence, code, modifiers, repeat) in [
+            (
+                b"\x1b[99;5:1u".as_slice(),
+                KeyCode::Char('c'),
+                Modifiers::CONTROL,
+                false,
+            ),
+            (
+                b"\x1b[99;5:2u",
+                KeyCode::Char('c'),
+                Modifiers::CONTROL,
+                true,
+            ),
+            (
+                b"\x1b[99;197:2u",
+                KeyCode::Char('c'),
+                Modifiers::CONTROL,
+                true,
+            ),
+            (b"\x1b[27;1:2u", KeyCode::Esc, Modifiers::NONE, true),
+            (b"\x1b[9;2:2u", KeyCode::BackTab, Modifiers::SHIFT, true),
+            (b"\x1b[13;3:1u", KeyCode::Enter, Modifiers::ALT, false),
+            (b"\x1b[1;1:2D", KeyCode::Left, Modifiers::NONE, true),
+            (b"\x1b[1;5:2A", KeyCode::Up, Modifiers::CONTROL, true),
+            (b"\x1b[1;2:2H", KeyCode::Home, Modifiers::SHIFT, true),
+            (b"\x1b[1;1:2F", KeyCode::End, Modifiers::NONE, true),
+            (b"\x1b[5;1:2~", KeyCode::PageUp, Modifiers::NONE, true),
+            (b"\x1b[6;1:2~", KeyCode::PageDown, Modifiers::NONE, true),
+            (b"\x1b[1;1:2P", KeyCode::F(1), Modifiers::NONE, true),
+            (b"\x1b[13;1:2~", KeyCode::F(3), Modifiers::NONE, true),
+        ] {
+            for split in 0..=sequence.len() {
+                let (_sender, chunks) = mpsc::channel(4);
+                let mut input = stream(chunks);
+                input.parse(b"x", false);
+                input.parse(&sequence[..split], true);
+                input.parse(&sequence[split..], false);
+                input.parse(b"z", false);
+                assert_eq!(
+                    input.pending,
+                    VecDeque::from([
+                        InputEvent::Key(KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE)),
+                        InputEvent::Key(KeyEvent {
+                            code,
+                            modifiers,
+                            repeat
+                        }),
+                        InputEvent::Key(KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE)),
+                    ]),
+                    "sequence {sequence:?}, split {split}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_event_reports_are_inert_and_oversized_reports_recover() {
+        for sequence in [
+            b"\x1b[99;5:0u".as_slice(),
+            b"\x1b[99;5:4u",
+            b"\x1b[99;5:2:1u",
+            b"\x1b[99;13:2u", // Ctrl-Super-C must not alias Ctrl-C.
+            b"\x1b[99;0:2u",
+            b"\x1b[99;257:2u",
+            b"\x1b[999999;1:2u",
+        ] {
+            let (_sender, chunks) = mpsc::channel(4);
+            let mut input = stream(chunks);
+            input.parse(sequence, false);
+            input.parse(b"z", false);
+            assert_eq!(
+                input.pending,
+                VecDeque::from([InputEvent::Key(KeyEvent::new(
+                    KeyCode::Char('z'),
+                    Modifiers::NONE,
+                ))]),
+                "unsupported event {sequence:?}"
+            );
+        }
+        let (_sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        input.parse(b"\x1b[99;5:", true);
+        input.parse(&vec![b'2'; 512], true);
+        input.parse(b"uz", false);
+        assert_eq!(
+            input.pending,
+            VecDeque::from([
+                InputEvent::Rejected(InputError::TerminalReplyTooLarge),
+                InputEvent::Key(KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE)),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn enhanced_event_identity_cannot_start_the_legacy_paste_parser() {
+        let (_sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        input.parse(b"\x1b[200;1:2~z", false);
+        input.parse(b"\x1b[99;5:1u", false);
+        assert_eq!(
+            input.pending,
+            VecDeque::from([
+                InputEvent::Key(KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE)),
+                InputEvent::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn partial_event_reports_keep_custody_before_the_event_colon_arrives() {
+        for timeout in [false, true] {
+            let (_sender, chunks) = mpsc::channel(4);
+            let mut input = stream(chunks);
+            input.parse(b"\x1b[99;5", true);
+            let mut expected = VecDeque::new();
+            if timeout {
+                let frames = input
+                    .replies
+                    .expire(tokio::time::Instant::now() + Duration::from_millis(101));
+                input.parse_reply_frames(frames, false);
+                expected.push_back(InputEvent::Rejected(InputError::IncompleteTerminalReply));
+            }
+            input.parse(&[], false); // Escape grace is not permission to replay a CSI prefix.
+            input.parse(b":3uz", false);
+            expected.push_back(InputEvent::Key(KeyEvent::new(
+                KeyCode::Char('z'),
+                Modifiers::NONE,
+            )));
+            assert_eq!(input.pending, expected, "reply deadline expired: {timeout}");
+        }
+    }
+
+    #[tokio::test]
+    async fn event_reports_do_not_parse_inside_paste_or_reorder_incomplete_text() {
+        let (_sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        input.parse(b"\x1b[200~\x1b[99;5:3u\x1b[201~", false);
+        assert_eq!(
+            input.pending.pop_front(),
+            Some(InputEvent::Paste("\x1b[99;5:3u".into()))
+        );
+        input.parse(&[0xc3], true);
+        input.parse(b"\x1b[99;5:2uz", false);
+        assert_eq!(
+            input.pending,
+            VecDeque::from([
+                InputEvent::Rejected(InputError::InvalidUtf8),
+                InputEvent::Key(KeyEvent {
+                    repeat: true,
+                    ..KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)
+                }),
+                InputEvent::Key(KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE)),
+            ])
+        );
     }
 
     #[tokio::test]
@@ -1058,6 +1264,23 @@ mod tests {
                 Modifiers::NONE
             )))
         );
+        for (prefix, suffix) in [
+            (b"\x1b[99;5".as_slice(), b":1uz".as_slice()),
+            (b"\x1b[99;5:1", b"uz"),
+            (b"\x1b[99;5:2", b"uz"),
+        ] {
+            input.parse(prefix, true);
+            input.discard_for_credentials().unwrap();
+            input.parse(suffix, false);
+            assert_eq!(
+                input.pending,
+                VecDeque::from([InputEvent::Key(KeyEvent::new(
+                    KeyCode::Char('z'),
+                    Modifiers::NONE,
+                ))])
+            );
+            input.pending.clear();
+        }
     }
 
     #[tokio::test]
@@ -1247,7 +1470,10 @@ mod tests {
                     query::KeyFrame::Bytes(bytes) => {
                         events.extend(parser.parse_as_vec(&bytes, false))
                     }
-                    query::KeyFrame::Reply => events.extend(parser.parse_as_vec(&[], false)),
+                    query::KeyFrame::Boundary => events.extend(parser.parse_as_vec(&[], false)),
+                    query::KeyFrame::Key { .. } => {
+                        panic!("no enhanced key in a reply/mouse fixture")
+                    }
                     query::KeyFrame::ColorsChanged | query::KeyFrame::Rejected(_) => {}
                 }
             }
@@ -1269,7 +1495,7 @@ mod tests {
         let mut replies = TerminalReplyFilter::default();
         assert!(replies.feed(b"\x1b[?1;", false, false).is_empty());
         assert!(
-            matches!(replies.feed(b"2cA", false, false).as_slice(), [query::KeyFrame::Reply, query::KeyFrame::Bytes(bytes)] if bytes == b"A")
+            matches!(replies.feed(b"2cA", false, false).as_slice(), [query::KeyFrame::Boundary, query::KeyFrame::Bytes(bytes)] if bytes == b"A")
         );
         replies.feed(b"\x1b[?1;2c\x1b[?1u\x1b[?1;2c", true, false);
         assert_eq!(replies.keyboard, Some(true));

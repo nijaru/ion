@@ -115,6 +115,9 @@ impl Gestures {
 
     pub(super) fn confirm(&mut self, target: Target, key: KeyEvent, now: Instant) -> bool {
         self.key(key, now);
+        if key.repeat {
+            return false;
+        }
         if let Some(pending) = &mut self.pending {
             let confirmed = !pending.consumed && pending.target == target;
             pending.consumed = true;
@@ -213,6 +216,34 @@ mod tests {
 
     fn key(ch: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(ch), Modifiers::CONTROL)
+    }
+
+    #[test]
+    fn repeat_events_neither_arm_nor_confirm_a_destructive_intent() {
+        let now = Instant::now();
+        for target in [Target::Clear(1), Target::Exit] {
+            for press in [key('c'), KeyEvent::new(KeyCode::Esc, Modifiers::NONE)] {
+                let repeat = KeyEvent {
+                    repeat: true,
+                    ..press
+                };
+                let mut gestures = Gestures::default();
+                assert!(!gestures.confirm(target.clone(), repeat, now));
+                assert!(gestures.prompt().is_none());
+                assert!(!gestures.confirm(target.clone(), press, now));
+                for second in 0..3 {
+                    assert!(!gestures.confirm(
+                        target.clone(),
+                        repeat,
+                        now + Duration::from_secs(second)
+                    ));
+                    assert!(gestures.prompt().is_some());
+                }
+                assert!(gestures.confirm(target.clone(), press, now + Duration::from_secs(2)));
+                assert!(!gestures.confirm(target.clone(), repeat, now + Duration::from_secs(4)));
+                assert!(gestures.prompt().is_none());
+            }
+        }
     }
 
     #[test]

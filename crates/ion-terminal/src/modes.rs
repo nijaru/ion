@@ -180,7 +180,10 @@ impl<W: Write> TerminalState<W> {
         *custody = Keyboard::Indeterminate;
         execute!(
             self.output,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            )
         )?;
         *custody = Keyboard::Owned;
         Ok(())
@@ -593,7 +596,7 @@ mod tests {
         state.restore().unwrap();
         let bytes = &state.output.output;
         let text = String::from_utf8_lossy(bytes);
-        assert_eq!(text.matches("\x1b[>1u").count(), 3);
+        assert_eq!(text.matches("\x1b[>3u").count(), 3);
         assert_eq!(text.matches("\x1b[<1u").count(), 3);
         assert!(
             text.ends_with("\x1b[<1u\x1b[?1049l\x1b[<1u\x1b[?25h\x1b[0m"),
@@ -664,7 +667,7 @@ mod tests {
         state.restore().unwrap();
         state.restore().unwrap();
         let text = String::from_utf8_lossy(&state.output.output.bytes);
-        assert_eq!(text.matches("\x1b[>1u").count(), 1);
+        assert_eq!(text.matches("\x1b[>3u").count(), 1);
         assert_eq!(text.matches("\x1b[<1u").count(), 1);
         assert!(text.contains("\x1b[?1049l\x1b[<1u"), "{text:?}");
     }

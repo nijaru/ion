@@ -166,7 +166,8 @@ def exercise(mode):
                 terminal.send("printf 'SHELL_%s\\n' INPUT_OK\n")
                 terminal.until(lambda: b"SHELL_INPUT_OK" in terminal.output[checkpoint:])
 
-            def foreground():
+            def foreground(ready=b"\x1b]7501;state=idle:app=ion\x1b\\"):
+                checkpoint = len(terminal.output)
                 queries = terminal.queries
                 cursor_queries = terminal.cursor_queries
                 grapheme_queries = terminal.grapheme_queries
@@ -175,7 +176,10 @@ def exercise(mode):
                                terminal.cursor_queries > cursor_queries and
                                terminal.grapheme_queries == grapheme_queries + 1 and
                                terminal.grapheme_mode == 1 and
-                               terminal.stacks[terminal.alternate][-1] == 1)
+                               terminal.stacks[terminal.alternate][-1] == 3)
+                # Restoring terminal modes precedes the asynchronous Session
+                # refresh. Do not submit a prompt through that deliberate gate.
+                terminal.until(lambda: ready in terminal.output[checkpoint:])
                 assert os.tcgetpgrp(master) == job, "fg replaced the original job"
 
             terminal.send("\x1b[200~  keep 🦀\ntail\x1b[201~")
@@ -205,8 +209,7 @@ def exercise(mode):
             release.set()
             assert response_sent.wait(5), "fixture response did not finish while Ion was stopped"
             checkpoint = len(terminal.output)
-            foreground()
-            terminal.until(lambda: DONE in terminal.output[checkpoint:])
+            foreground(ready=DONE)
             assert len(requests) == 1, "resuming replayed the running request"
             terminal.send("X\r")
             terminal.until(lambda: len(requests) == 2 and terminal.output[checkpoint:].count(DONE) == 2)

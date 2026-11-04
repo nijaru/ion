@@ -318,6 +318,31 @@ mod tests {
         );
     }
     #[test]
+    fn repeats_match_the_same_default_and_remapped_editing_chords() {
+        for keys in [
+            KeyBindings::default(),
+            KeyBindings::parse(br#"{"tui.select.pageDown":"ctrl+f"}"#).unwrap(),
+        ] {
+            for (context, press) in [
+                (COMPOSER, KeyEvent::new(KeyCode::Left, Modifiers::NONE)),
+                (COMPOSER, KeyEvent::new(KeyCode::Backspace, Modifiers::NONE)),
+                (PICKER, KeyEvent::new(KeyCode::PageDown, Modifiers::NONE)),
+                (
+                    PICKER,
+                    KeyEvent::new(KeyCode::Char('f'), Modifiers::CONTROL),
+                ),
+            ] {
+                let repeat = KeyEvent {
+                    repeat: true,
+                    ..press
+                };
+                assert_eq!(keys.action(context, press), keys.action(context, repeat));
+                assert_eq!(key_label(press), key_label(repeat));
+            }
+        }
+    }
+
+    #[test]
     fn file_loading_is_bounded_and_missing_is_the_only_default_fallback() {
         let root = std::env::temp_dir().join(format!("ion-key-config-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(&root).unwrap();
