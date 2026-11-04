@@ -22,8 +22,10 @@ CSI = re.compile(rb"\x1b\[([0-?]*)([ -/]*)([@-~])")
 
 
 class KeyboardTerminal:
-    def __init__(self, master, supported, typeahead=False):
+    def __init__(self, master, supported, typeahead=False, grapheme_mode=2):
         self.master, self.supported = master, supported
+        self.grapheme_mode = grapheme_mode
+        self.grapheme_changes = []
         self.typeahead = typeahead
         self.keyboard_queries = self.cursor_queries = 0
         self.alternate = False
@@ -34,9 +36,15 @@ class KeyboardTerminal:
     def accept(self, data):
         self.pending += data
         while match := CSI.search(self.pending):
-            parameters, _, final = match.groups()
+            parameters, intermediate, final = match.groups()
             self.pending = self.pending[match.end():]
-            if final == b"u":
+            if final == b"p" and intermediate == b"$" and parameters == b"?2027":
+                os.write(self.master, f"\x1b[?2027;{self.grapheme_mode}$y".encode())
+            elif final in (b"h", b"l") and parameters == b"?2027":
+                assert self.grapheme_mode in (1, 2), "changed an unchangeable terminal mode"
+                self.grapheme_mode = 1 if final == b"h" else 2
+                self.grapheme_changes.append(self.grapheme_mode)
+            elif final == b"u":
                 if parameters == b"?":
                     self.keyboard_queries += 1
                     if self.supported:
@@ -65,7 +73,7 @@ class KeyboardTerminal:
         self.pending = self.pending[start:] if start >= 0 else b""
 
 
-def exercise(mode, supported=True, panic=False, editor_fault=None):
+def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode=2):
     with tempfile.TemporaryDirectory(prefix="ion-keyboard-") as temporary:
         work = Path(temporary)
         requests = []
@@ -107,6 +115,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
         env = {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "TMPDIR") if key in os.environ}
         env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color")
         marker = work / "editor-flags"
+        grapheme_marker = work / "editor-graphemes"
         question_edits = work / "question-edits.jsonl"
         editor = work / "editor"
         editor.write_text(
@@ -114,9 +123,10 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
             "import os,re,termios,tty\n"
             "old=termios.tcgetattr(0)\n"
             "try:\n"
-            " tty.setraw(0); os.write(1,b'\\x1b[?u'); data=b''\n"
-            " while not re.search(rb'\\x1b\\[\\?(\\d+)u',data): data+=os.read(0,128)\n"
+            " tty.setraw(0); os.write(1,b'\\x1b[?u\\x1b[?2027$p'); data=b''\n"
+            " while not (re.search(rb'\\x1b\\[\\?(\\d+)u',data) and re.search(rb'\\x1b\\[\\?2027;([0-4])\\$y',data)): data+=os.read(0,128)\n"
             f" open({str(marker)!r},'w').write(re.search(rb'\\x1b\\[\\?(\\d+)u',data)[1].decode())\n"
+            f" open({str(grapheme_marker)!r},'w').write(re.search(rb'\\x1b\\[\\?2027;([0-4])\\$y',data)[1].decode())\n"
             "finally: termios.tcsetattr(0,termios.TCSANOW,old)\n"
             "import json,sys\nfrom pathlib import Path\n"
             "path=Path(sys.argv[-1]); seed=path.read_text()\n"
@@ -153,7 +163,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
             child = subprocess.Popen([BINARY, "--cwd", work, "chat", "--tui-mode", mode], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
             os.close(slave)
             slave = None
-            terminal = KeyboardTerminal(master, supported, supported and not panic)
+            terminal = KeyboardTerminal(master, supported, supported and not panic, grapheme_mode)
             output = bytearray()
 
             def drain(seconds=0.1):
@@ -186,6 +196,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 until(lambda: "›".encode() in output)
                 expected = 1 if supported else (8 if mode == "fullscreen" else 4)
                 assert terminal.stacks[terminal.alternate][-1] == expected, "composer lacks its own keyboard mode"
+                assert terminal.grapheme_mode == (1 if grapheme_mode == 2 else grapheme_mode), "grapheme mode was not negotiated before painting"
                 if supported:
                     # Reversible composer custody: kills, yanks, legacy/CSI-u
                     # undo/redo and an atomic paste stay local until Enter.
@@ -223,6 +234,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         os.write(master, b"/editor\r")
                     until(lambda: marker.exists() and terminal.stacks[terminal.alternate][-1] == 1)
                     assert marker.read_text() == "4", "editor inherited Ion's keyboard push"
+                    assert grapheme_marker.read_text() == str(grapheme_mode), "editor inherited Ion's grapheme mode"
                     until(lambda: terminal.cursor_queries == 2)
                     if editor_fault:
                         def rejected_feedback_visible():
@@ -320,6 +332,11 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                 assert child.wait() == 0, output[-2000:]
             assert not terminal.alternate
             assert terminal.stacks == [[4], [8]], terminal.stacks
+            assert terminal.grapheme_mode == grapheme_mode, "did not restore the caller's grapheme mode"
+            if grapheme_mode == 2:
+                assert terminal.grapheme_changes and terminal.grapheme_changes == [1, 2] * (len(terminal.grapheme_changes) // 2)
+            else:
+                assert not terminal.grapheme_changes, "changed a mode Ion did not acquire"
             outcome = editor_fault or ('panic' if panic else 'draft/question-editor/modal/exit')
             print(f"Ion {mode} {'supported' if supported else 'unsupported'} keyboard custody {outcome}: OK")
         finally:
@@ -338,8 +355,8 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
 
 
 exercise("inline")
-exercise("fullscreen")
+exercise("fullscreen", grapheme_mode=1)
 exercise("fullscreen", panic=True)
-exercise("fullscreen", supported=False, panic=True)
+exercise("fullscreen", supported=False, panic=True, grapheme_mode=0)
 exercise("inline", editor_fault="fifo")
 exercise("fullscreen", editor_fault="symlink-fifo")

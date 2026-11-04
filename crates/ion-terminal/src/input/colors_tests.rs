@@ -174,7 +174,7 @@ async fn late_mode_report_wakes_one_safe_fresh_capture_without_authorizing_stale
         InputEvent::ColorsChanged
     );
     assert_eq!(
-        input.replies.appearance_mode, None,
+        input.replies.appearance_mode.value, None,
         "late reset is never authority"
     );
     assert!(input.colors_need_refresh());
@@ -218,7 +218,7 @@ async fn cancelled_mode_capture_can_drain_in_ordinary_or_secret_intake_then_retr
             );
         }
         assert_eq!(
-            input.replies.appearance_mode, None,
+            input.replies.appearance_mode.value, None,
             "cancelled capture cannot accept late authority"
         );
         assert!(input.colors_need_refresh());
@@ -260,6 +260,47 @@ async fn unsupported_and_malformed_mode_answers_do_not_rearm_capture() {
         input.parse(b"x", false);
         assert_eq!(input.pending.drain(..).collect::<Vec<_>>(), [key('x')]);
     }
+}
+
+#[tokio::test]
+async fn grapheme_reports_preserve_typeahead_and_cannot_claim_another_modes_capture() {
+    for report in [0, 1, 2, 3, 4, 9] {
+        let (sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        assert!(input.begin_grapheme_probe());
+        sender
+            .send(Ok(format!("a\x1b[?2027;{report}$yb").into_bytes()))
+            .await
+            .unwrap();
+        assert_eq!(
+            input.grapheme_observation().await.unwrap(),
+            (report <= 4).then_some(report)
+        );
+        assert_eq!(input.next().await.unwrap().unwrap(), key('a'));
+        assert_eq!(input.next().await.unwrap().unwrap(), key('b'));
+    }
+
+    let (sender, chunks) = mpsc::channel(4);
+    let mut input = stream(chunks);
+    assert!(input.begin_grapheme_probe());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(5), input.grapheme_observation())
+            .await
+            .is_err()
+    );
+    assert!(input.begin_color_probe(true)); // Abandons, not reuses, 2027.
+    let mut replies = all_replies();
+    replies.extend_from_slice(b"\x1b[?2027;2$y\x1b[?2031;1$y");
+    sender.send(Ok(replies)).await.unwrap();
+    assert_eq!(input.color_observations(true).await.unwrap(), Some(1));
+    assert_eq!(input.replies.grapheme_mode.value, None);
+    input.reacquire_colors();
+    assert!(
+        input.begin_grapheme_probe(),
+        "the old reply has been drained"
+    );
+    sender.send(Ok(b"\x1b[?2027;1$y".to_vec())).await.unwrap();
+    assert_eq!(input.grapheme_observation().await.unwrap(), Some(1));
 }
 
 #[tokio::test]
@@ -553,7 +594,7 @@ async fn absolute_color_and_mode_budget_cannot_be_extended_by_ready_input() {
     ));
     drop(probe);
     assert_eq!(
-        input.replies.appearance_mode, None,
+        input.replies.appearance_mode.value, None,
         "a late DECRQM cannot authorize mode changes"
     );
     // A receive already polled before expiry can transfer custody when polling
@@ -659,7 +700,7 @@ async fn fragmented_notifications_and_mode_reports_never_become_keys() {
     for byte in b"\x1b[?2031;2$y\x1b[?997;1n" {
         input.parse(&[*byte], true);
     }
-    assert_eq!(input.replies.appearance_mode, Some(2));
+    assert_eq!(input.replies.appearance_mode.value, Some(2));
     assert_eq!(input.colors().appearance, Some(Appearance::Dark));
     assert_eq!(
         input.pending.drain(..).collect::<Vec<_>>(),
@@ -763,10 +804,10 @@ async fn expired_or_cancelled_mode_capture_cannot_authorize_a_new_mode_change() 
         "an old DECRQM is still outstanding"
     );
     input.parse(b"\x1b[?2031;2$y", false);
-    assert_eq!(input.replies.appearance_mode, None);
+    assert_eq!(input.replies.appearance_mode.value, None);
     assert!(input.begin_color_probe(true));
     input.parse(b"\x1b[?2031;1$y", false);
-    assert_eq!(input.replies.appearance_mode, Some(1));
+    assert_eq!(input.replies.appearance_mode.value, Some(1));
     assert!(
         !input.begin_color_probe(true),
         "a fresh completed capture is settled"
@@ -778,7 +819,7 @@ async fn expired_or_cancelled_mode_capture_cannot_authorize_a_new_mode_change() 
         "abandon a cancelled capture too"
     );
     input.parse(b"\x1b[?2031;2$y", false);
-    assert_eq!(input.replies.appearance_mode, None);
+    assert_eq!(input.replies.appearance_mode.value, None);
     assert_eq!(
         input.pending.drain(..).collect::<Vec<_>>(),
         [InputEvent::ColorsChanged]

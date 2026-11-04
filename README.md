@@ -38,6 +38,8 @@ ion --continue compact               # request context summary
 
 Run `ion --help` and `ion COMMAND --help` for complete supported options. The current CLI supports `@file` context arguments, images, explicit model and reasoning selection, and tool include/exclude filters. Headless/RPC mode needs an already configured model and credentials.
 
+Terminal chat temporarily enables grapheme clustering (mode 2027) when the terminal reports it as supported and currently off, and restores the prior setting when yielding the terminal. Without reported support, rendering stays best-effort; complex emoji alignment depends on the terminal and its Unicode width tables.
+
 The coding recipe runs native commands **with your host permissions**. Tool selection/read-only flags are model loadout controls, not a sandbox. Cancellation does not undo filesystem effects; interrupted effects may have unknown outcomes and are not blindly replayed.
 
 Compaction summarizes bounded excerpts; original result envelopes and retained captures remain in the Session's SQLite database. Native command overflow/raw bytes, omitted web snapshots (converted text, not raw HTML), and retained MCP responses/resources use typed artifact receipts. Capture completeness is separate from command or server success. Partial, unfinished and unclaimed captures are retained conservatively, not automatically deleted or replayed.

@@ -384,9 +384,12 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             tmux("kill-session", "-t", target)
             print(f"Ion {mode} two-row cursor-containing composer: OK")
 
+        exit_deadline = time.monotonic() + 5
         tmux("send-keys", "-t", "ion", "C-d", "C-d")
         while not exit_path.exists():
-            assert time.monotonic() < deadline, "inline client did not exit"
+            assert time.monotonic() < exit_deadline, (
+                "inline client did not exit", tmux("capture-pane", "-p", "-t", "ion"),
+            )
             time.sleep(0.02)
         assert exit_path.read_text().strip() == "0", "inline client failed on exit"
         session = next((work / "ion/sessions").rglob("*.sqlite"))

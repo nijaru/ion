@@ -415,7 +415,22 @@ impl InputStream {
         )
         .await?;
         self.replies.finish_color_probe();
-        Ok(self.replies.appearance_mode)
+        Ok(self.replies.appearance_mode.value)
+    }
+
+    pub(crate) fn begin_grapheme_probe(&mut self) -> bool {
+        self.replies.grapheme_mode.begin()
+    }
+
+    pub(crate) async fn grapheme_observation(&mut self) -> io::Result<Option<u8>> {
+        self.await_reply(
+            |replies| replies.grapheme_mode.value,
+            false,
+            Duration::from_millis(100),
+        )
+        .await?;
+        self.replies.grapheme_mode.end();
+        Ok(self.replies.grapheme_mode.value)
     }
 
     pub(crate) async fn keyboard_support(&mut self) -> io::Result<Option<bool>> {

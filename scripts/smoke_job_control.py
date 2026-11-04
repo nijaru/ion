@@ -36,6 +36,8 @@ class Terminal:
         self.stacks = [[4], [8]]  # Caller-owned keyboard entries must survive.
         self.queries = 0
         self.cursor_queries = 0
+        self.grapheme_queries = 0
+        self.grapheme_mode = 2
 
     def pump(self):
         if not select.select([self.master], [], [], 0.03)[0]:
@@ -49,9 +51,14 @@ class Terminal:
         self.output.extend(data)
         self.pending += data
         while match := CSI.search(self.pending):
-            parameters, _, final = match.groups()
+            parameters, intermediate, final = match.groups()
             self.pending = self.pending[match.end():]
-            if final == b"u":
+            if final == b"p" and intermediate == b"$" and parameters == b"?2027":
+                self.grapheme_queries += 1
+                os.write(self.master, f"\x1b[?2027;{self.grapheme_mode}$y".encode())
+            elif final in (b"h", b"l") and parameters == b"?2027":
+                self.grapheme_mode = 1 if final == b"h" else 2
+            elif final == b"u":
                 if parameters == b"?":
                     self.queries += 1
                     os.write(self.master, f"\x1b[?{self.stacks[self.alternate][-1]}u".encode())
@@ -139,6 +146,8 @@ def exercise(mode):
             command = shlex.join([str(BINARY), "--cwd", str(work), "chat", "--tui-mode", mode])
             terminal.send(command + "\n")
             terminal.until(lambda: "›".encode() in terminal.output and terminal.queries == 1)
+            assert terminal.grapheme_mode == 1, "initial composer lacks grapheme clustering"
+            caller_mode = 2
             job = os.tcgetpgrp(master)
             assert job != shell.pid and job > 0, "Ion is not a distinct foreground job"
 
@@ -151,6 +160,7 @@ def exercise(mode):
                 assert os.tcgetpgrp(master) == shell.pid
                 assert termios.tcgetattr(slave) == original, "shell did not regain cooked termios"
                 assert terminal.stacks == [[4], [8]] and not terminal.alternate
+                assert terminal.grapheme_mode == caller_mode, "shell inherited Ion's grapheme mode"
                 assert CLEAR in terminal.output[checkpoint:], "suspended job left a stale status record"
                 checkpoint = len(terminal.output)
                 terminal.send("printf 'SHELL_%s\\n' INPUT_OK\n")
@@ -159,9 +169,12 @@ def exercise(mode):
             def foreground():
                 queries = terminal.queries
                 cursor_queries = terminal.cursor_queries
+                grapheme_queries = terminal.grapheme_queries
                 terminal.send("fg\n")
                 terminal.until(lambda: terminal.queries == queries + 1 and
                                terminal.cursor_queries > cursor_queries and
+                               terminal.grapheme_queries == grapheme_queries + 1 and
+                               terminal.grapheme_mode == 1 and
                                terminal.stacks[terminal.alternate][-1] == 1)
                 assert os.tcgetpgrp(master) == job, "fg replaced the original job"
 
@@ -169,6 +182,10 @@ def exercise(mode):
             terminal.send(b"\x1b[D" * 4)
             suspend(b"\x1a")
             assert not requests, "suspension admitted an unsent draft"
+            # The shell may change this terminal-global bit while Ion is stopped.
+            terminal.send("printf '\\033[?2027h'\n")
+            terminal.until(lambda: terminal.grapheme_mode == 1)
+            caller_mode = 1
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 84, 0, 0))
             # `bg` must not let an interactive job steal the shell terminal.
             checkpoint = len(terminal.output)
@@ -197,6 +214,7 @@ def exercise(mode):
             checkpoint = len(terminal.output)
             terminal.send(b"\x04\x04")
             terminal.until(lambda: PROMPT in terminal.output[checkpoint:])
+            assert terminal.grapheme_mode == caller_mode, "exit reset the shell's new setting"
             assert terminal.stacks == [[4], [8]] and not terminal.alternate
             terminal.send("exit\n")
             terminal.until(lambda: shell.poll() is not None)

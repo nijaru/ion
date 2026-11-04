@@ -19,6 +19,30 @@ use crate::capabilities::{CapabilitySupport, TerminalCapabilities};
 use crate::requirements::TerminalRequirements;
 use crate::session::TerminalOutput;
 
+#[derive(Clone, Copy)]
+pub(crate) enum PrivateMode {
+    Graphemes,
+    AppearanceNotifications,
+}
+
+impl PrivateMode {
+    const ALL: [Self; 2] = [Self::Graphemes, Self::AppearanceNotifications];
+
+    fn set_sequence(self) -> &'static [u8] {
+        match self {
+            Self::Graphemes => b"\x1b[?2027h",
+            Self::AppearanceNotifications => b"\x1b[?2031h",
+        }
+    }
+
+    fn reset_sequence(self) -> &'static [u8] {
+        match self {
+            Self::Graphemes => b"\x1b[?2027l",
+            Self::AppearanceNotifications => b"\x1b[?2031l",
+        }
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Surface {
     Primary,
@@ -86,10 +110,10 @@ pub(crate) struct TerminalState<W> {
     raw: Option<RawMode>,
     paste: bool,
     mouse: bool,
-    // True only after DECRQM captured a supported, reset 2031 bit. Unlike a
-    // keyboard pop, restoring this captured absolute bit is safe to retry even
+    // True only after DECRQM captured a supported, reset bit. Unlike a
+    // keyboard pop, restoring a captured absolute bit is safe to retry even
     // when enable/reset writes have an ambiguous physical outcome.
-    appearance_notifications: bool,
+    modified_modes: [bool; 2],
     surface: Surface,
     primary_keyboard: Keyboard,
     alternate_keyboard: Keyboard,
@@ -112,7 +136,7 @@ impl<W: Write> TerminalState<W> {
             raw: None,
             paste: false,
             mouse: false,
-            appearance_notifications: false,
+            modified_modes: [false; 2],
             surface: Surface::Primary,
             primary_keyboard: Keyboard::Unowned,
             alternate_keyboard: Keyboard::Unowned,
@@ -274,17 +298,18 @@ impl<W: Write> TerminalState<W> {
         Ok(())
     }
 
-    pub(crate) fn set_appearance_mode(&mut self, prior: Option<u8>) -> io::Result<()> {
+    pub(crate) fn set_mode(&mut self, mode: PrivateMode, prior: Option<u8>) -> io::Result<()> {
         self.usable()?;
         // 0 = unknown, 1 = set, 2 = reset, 3/4 = permanently set/reset.
         // Never change a bit whose prior reset state was not captured.
-        if prior != Some(2) || self.appearance_notifications {
+        let modified = &mut self.modified_modes[mode as usize];
+        if prior != Some(2) || *modified {
             return Ok(());
         }
-        self.appearance_notifications = true;
+        *modified = true;
         let result = self
             .output
-            .write_all(b"\x1b[?2031h")
+            .write_all(mode.set_sequence())
             .and_then(|()| self.output.flush());
         if result.is_err() {
             self.fail();
@@ -310,15 +335,18 @@ impl<W: Write> TerminalState<W> {
                 first_error = Some(error);
             }
         };
-        if self.appearance_notifications {
-            let result = self
-                .output
-                .write_all(b"\x1b[?2031l")
-                .and_then(|()| self.output.flush());
-            if result.is_ok() {
-                self.appearance_notifications = false;
+        for mode in PrivateMode::ALL {
+            let modified = &mut self.modified_modes[mode as usize];
+            if *modified {
+                let result = self
+                    .output
+                    .write_all(mode.reset_sequence())
+                    .and_then(|()| self.output.flush());
+                if result.is_ok() {
+                    *modified = false;
+                }
+                record(result);
             }
-            record(result);
         }
         if self.mouse {
             let result = execute!(self.output, DisableMouseCapture);
@@ -383,6 +411,15 @@ impl<W: Write> TerminalState<W> {
 mod tests {
     use super::*;
 
+    const CAPTURED_MODES: [(PrivateMode, &str, &str); 2] = [
+        (PrivateMode::Graphemes, "\x1b[?2027h", "\x1b[?2027l"),
+        (
+            PrivateMode::AppearanceNotifications,
+            "\x1b[?2031h",
+            "\x1b[?2031l",
+        ),
+    ];
+
     fn active() -> TerminalState<Vec<u8>> {
         let mut state = TerminalState::new(
             TerminalOutput::new(Vec::new(), None).unwrap(),
@@ -396,149 +433,155 @@ mod tests {
     }
 
     #[test]
-    fn appearance_mode_changes_only_a_captured_reset_bit_and_restores_once() {
-        for prior in [None, Some(0), Some(1), Some(3), Some(4)] {
+    fn captured_modes_change_only_a_captured_reset_bit_and_restores_once() {
+        for (mode, set, reset) in CAPTURED_MODES {
+            for prior in [None, Some(0), Some(1), Some(3), Some(4)] {
+                let mut state = active();
+                state.set_mode(mode, prior).unwrap();
+                state.restore().unwrap();
+                assert!(
+                    !String::from_utf8_lossy(&state.output.output).contains(set)
+                        && !String::from_utf8_lossy(&state.output.output).contains(reset),
+                    "{prior:?}"
+                );
+            }
             let mut state = active();
-            state.set_appearance_mode(prior).unwrap();
+            state.set_mode(mode, Some(2)).unwrap();
+            state.set_mode(mode, Some(2)).unwrap();
+            state.enter_alt_screen().unwrap();
+            state.leave_alt_screen().unwrap();
             state.restore().unwrap();
-            assert!(
-                !String::from_utf8_lossy(&state.output.output).contains("2031"),
-                "{prior:?}"
+            state.restore().unwrap();
+            let text = String::from_utf8_lossy(&state.output.output);
+            assert_eq!(text.matches(set).count(), 1);
+            assert_eq!(text.matches(reset).count(), 1);
+            assert!(!state.modified_modes[mode as usize]);
+            // A new acquisition must capture again, not reuse the previous bit.
+            state.lifecycle = Lifecycle::Active;
+            state.set_mode(mode, Some(1)).unwrap();
+            state.restore().unwrap();
+            let text = String::from_utf8_lossy(&state.output.output);
+            assert_eq!(text.matches(set).count(), 1);
+            assert_eq!(text.matches(reset).count(), 1);
+        }
+    }
+
+    #[test]
+    fn captured_modes_panic_restoration_uses_the_same_custody() {
+        for (mode, _, reset) in CAPTURED_MODES {
+            let mut state = active();
+            state.set_mode(mode, Some(2)).unwrap();
+            let owner = std::sync::Mutex::new(state);
+            super::super::record_panic(&owner.lock().unwrap().panic_generation);
+            super::super::restore_on_panic(&owner);
+            super::super::restore_on_panic(&owner);
+            let state = owner.lock().unwrap();
+            assert!(state.usable().is_err());
+            assert_eq!(
+                String::from_utf8_lossy(&state.output.output)
+                    .matches(reset)
+                    .count(),
+                1
             );
         }
-        let mut state = active();
-        state.set_appearance_mode(Some(2)).unwrap();
-        state.set_appearance_mode(Some(2)).unwrap();
-        state.enter_alt_screen().unwrap();
-        state.leave_alt_screen().unwrap();
-        state.restore().unwrap();
-        state.restore().unwrap();
-        let text = String::from_utf8_lossy(&state.output.output);
-        assert_eq!(text.matches("\x1b[?2031h").count(), 1);
-        assert_eq!(text.matches("\x1b[?2031l").count(), 1);
-        assert!(!state.appearance_notifications);
-        // A new acquisition must capture again, not reuse the previous bit.
-        state.lifecycle = Lifecycle::Active;
-        state.set_appearance_mode(Some(1)).unwrap();
-        state.restore().unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&state.output.output)
-                .matches("2031")
-                .count(),
-            2
-        );
     }
 
     #[test]
-    fn appearance_mode_panic_restoration_uses_the_same_custody() {
-        let mut state = active();
-        state.set_appearance_mode(Some(2)).unwrap();
-        let owner = std::sync::Mutex::new(state);
-        super::super::record_panic(&owner.lock().unwrap().panic_generation);
-        super::super::restore_on_panic(&owner);
-        super::super::restore_on_panic(&owner);
-        let state = owner.lock().unwrap();
-        assert!(state.usable().is_err());
-        assert_eq!(
-            String::from_utf8_lossy(&state.output.output)
-                .matches("\x1b[?2031l")
-                .count(),
-            1
-        );
+    fn captured_modes_capture_failure_keeps_restoration_authority() {
+        for (mode, _, reset) in CAPTURED_MODES {
+            let mut state = active();
+            state.output.capture = Some(
+                std::fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap(),
+            );
+            assert!(state.set_mode(mode, Some(2)).is_err());
+            assert!(state.modified_modes[mode as usize]);
+            assert!(state.usable().is_err());
+            state.output.capture = None;
+            state.restore().unwrap();
+            assert!(!state.modified_modes[mode as usize]);
+            assert_eq!(
+                String::from_utf8_lossy(&state.output.output)
+                    .matches(reset)
+                    .count(),
+                1
+            );
+        }
     }
 
     #[test]
-    fn appearance_mode_capture_failure_keeps_restoration_authority() {
-        let mut state = active();
-        state.output.capture =
-            Some(std::fs::File::open(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml")).unwrap());
-        assert!(state.set_appearance_mode(Some(2)).is_err());
-        assert!(state.appearance_notifications);
-        assert!(state.usable().is_err());
-        state.output.capture = None;
-        state.restore().unwrap();
-        assert!(!state.appearance_notifications);
-        assert_eq!(
-            String::from_utf8_lossy(&state.output.output)
-                .matches("\x1b[?2031l")
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn appearance_mode_partial_writes_and_flush_faults_fail_closed_and_restore() {
-        struct Fault {
-            bytes: Vec<u8>,
-            remaining: usize,
-            flush_fault: bool,
-        }
-        impl Write for Fault {
-            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-                let count = bytes.len().min(self.remaining);
-                if count == 0 {
-                    return Err(io::Error::other("write fault"));
-                }
-                self.bytes.extend_from_slice(&bytes[..count]);
-                self.remaining -= count;
-                Ok(count)
+    fn captured_modes_partial_writes_and_flush_faults_fail_closed_and_restore() {
+        for (mode, set, reset) in CAPTURED_MODES {
+            struct Fault {
+                bytes: Vec<u8>,
+                remaining: usize,
+                flush_fault: bool,
             }
-            fn flush(&mut self) -> io::Result<()> {
-                if self.flush_fault {
-                    Err(io::Error::other("flush fault"))
-                } else {
-                    Ok(())
+            impl Write for Fault {
+                fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                    let count = bytes.len().min(self.remaining);
+                    if count == 0 {
+                        return Err(io::Error::other("write fault"));
+                    }
+                    self.bytes.extend_from_slice(&bytes[..count]);
+                    self.remaining -= count;
+                    Ok(count)
+                }
+                fn flush(&mut self) -> io::Result<()> {
+                    if self.flush_fault {
+                        Err(io::Error::other("flush fault"))
+                    } else {
+                        Ok(())
+                    }
                 }
             }
-        }
-        // Exercise every short-write boundary, plus physically complete writes
-        // followed by failed flush, for both enable and restoration.
-        for restoring in [false, true] {
-            for budget in 0..=b"\x1b[?2031h".len() {
-                let mut state = TerminalState::new(
-                    TerminalOutput::new(
-                        Fault {
-                            bytes: Vec::new(),
-                            remaining: usize::MAX,
-                            flush_fault: false,
-                        },
-                        None,
-                    )
-                    .unwrap(),
-                    TerminalRequirements::default(),
-                    Default::default(),
-                );
-                state.lifecycle = Lifecycle::Active;
-                if restoring {
-                    state.set_appearance_mode(Some(2)).unwrap();
+            // Exercise every short-write boundary, plus physically complete writes
+            // followed by failed flush, for both enable and restoration.
+            for restoring in [false, true] {
+                for budget in 0..=set.len() {
+                    let mut state = TerminalState::new(
+                        TerminalOutput::new(
+                            Fault {
+                                bytes: Vec::new(),
+                                remaining: usize::MAX,
+                                flush_fault: false,
+                            },
+                            None,
+                        )
+                        .unwrap(),
+                        TerminalRequirements::default(),
+                        Default::default(),
+                    );
+                    state.lifecycle = Lifecycle::Active;
+                    if restoring {
+                        state.set_mode(mode, Some(2)).unwrap();
+                    }
+                    state.output.output.remaining = budget;
+                    state.output.output.flush_fault = budget == set.len();
+                    let result = if restoring {
+                        state.restore()
+                    } else {
+                        state.set_mode(mode, Some(2))
+                    };
+                    assert!(result.is_err());
+                    assert!(state.modified_modes[mode as usize]);
+                    assert!(state.usable().is_err());
+                    let after_fault = state.output.output.bytes.len();
+                    state.output.output.remaining = usize::MAX;
+                    state.output.output.flush_fault = false;
+                    state.restore().unwrap();
+                    let restored = state.output.output.bytes.clone();
+                    state.restore().unwrap();
+                    assert_eq!(state.output.output.bytes, restored);
+                    assert!(restored[after_fault..].starts_with(reset.as_bytes()));
+                    assert!(!state.modified_modes[mode as usize]);
+                    assert!(
+                        state.usable().is_err(),
+                        "restoration cannot revive a failed owner"
+                    );
                 }
-                state.output.output.remaining = budget;
-                state.output.output.flush_fault = budget == b"\x1b[?2031h".len();
-                let result = if restoring {
-                    state.restore()
-                } else {
-                    state.set_appearance_mode(Some(2))
-                };
-                assert!(result.is_err());
-                assert!(state.appearance_notifications);
-                assert!(state.usable().is_err());
-                let after_fault = state.output.output.bytes.len();
-                state.output.output.remaining = usize::MAX;
-                state.output.output.flush_fault = false;
-                state.restore().unwrap();
-                let restored = state.output.output.bytes.clone();
-                state.restore().unwrap();
-                assert_eq!(state.output.output.bytes, restored);
-                assert!(restored[after_fault..].starts_with(b"\x1b[?2031l"));
-                assert!(!state.appearance_notifications);
-                assert!(
-                    state.usable().is_err(),
-                    "restoration cannot revive a failed owner"
-                );
             }
         }
     }
-
     #[test]
     fn keyboard_custody_follows_surfaces_and_restoration_is_idempotent() {
         let mut state = active();

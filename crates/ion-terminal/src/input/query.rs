@@ -35,6 +35,72 @@ enum ModeCapture {
     Settled,
 }
 
+/// A DECRQM capture has no request identity. Keep each mode's outstanding
+/// request separate, including across cancellation and terminal reacquisition.
+#[derive(Debug)]
+pub(super) struct ModeProbe {
+    pub(super) value: Option<u8>,
+    capture: ModeCapture,
+}
+
+impl Default for ModeProbe {
+    fn default() -> Self {
+        Self {
+            value: None,
+            capture: ModeCapture::Ready { notify: false },
+        }
+    }
+}
+
+impl ModeProbe {
+    pub(super) fn begin(&mut self) -> bool {
+        self.value = None;
+        self.end();
+        if let ModeCapture::Ready { notify } = self.capture {
+            self.capture = ModeCapture::Waiting { retry: notify };
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(super) fn end(&mut self) {
+        if let ModeCapture::Waiting { retry } = self.capture {
+            self.capture = ModeCapture::Abandoned { retry };
+        }
+    }
+
+    fn reacquire(&mut self) {
+        self.value = None;
+        self.capture = match self.capture {
+            ModeCapture::Waiting { .. } | ModeCapture::Abandoned { .. } => {
+                ModeCapture::Abandoned { retry: false }
+            }
+            _ => ModeCapture::Ready { notify: false },
+        };
+    }
+
+    fn retry_ready(&self) -> bool {
+        self.capture == ModeCapture::Ready { notify: true }
+    }
+
+    fn observe(&mut self, value: Option<u8>) {
+        self.capture = match self.capture {
+            ModeCapture::Waiting { .. } => {
+                self.value = value;
+                ModeCapture::Settled
+            }
+            // Drain old reports without granting authority. Allow one fresh
+            // capture, not an endless probe loop on persistently slow terminals.
+            ModeCapture::Abandoned { retry: false } if value.is_some_and(|mode| mode != 0) => {
+                ModeCapture::Ready { notify: true }
+            }
+            ModeCapture::Abandoned { .. } => ModeCapture::Settled,
+            state => state,
+        };
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum KeyFrame {
     Bytes(Vec<u8>),
@@ -49,8 +115,8 @@ pub(super) struct TerminalReplyFilter {
     reply_window: Option<ReplyWindow>,
     pub(super) keyboard: Option<bool>,
     pub(super) cursor: Option<(u16, u16)>,
-    pub(super) appearance_mode: Option<u8>,
-    mode_capture: ModeCapture,
+    pub(super) appearance_mode: ModeProbe,
+    pub(super) grapheme_mode: ModeProbe,
     pub(super) colors: TerminalColors,
     colors_need_refresh: bool,
     received_colors: u32,
@@ -65,8 +131,8 @@ impl Default for TerminalReplyFilter {
             reply_window: None,
             keyboard: None,
             cursor: None,
-            appearance_mode: None,
-            mode_capture: ModeCapture::Ready { notify: false },
+            appearance_mode: ModeProbe::default(),
+            grapheme_mode: ModeProbe::default(),
             colors: TerminalColors::default(),
             colors_need_refresh: true,
             received_colors: 0,
@@ -110,7 +176,7 @@ impl TerminalReplyFilter {
         // Forget key disambiguation, not terminal control-string custody.
         let unowned = match &self.state {
             State::Esc | State::Csi | State::OscPrefix { .. } => true,
-            State::Body { private, bytes } => !Self::color_csi(*private, bytes),
+            State::Body { private, bytes } => !Self::setting_csi(*private, bytes),
             _ => false,
         };
         if unowned {
@@ -127,17 +193,13 @@ impl TerminalReplyFilter {
     }
 
     pub(super) fn colors_need_refresh(&self) -> bool {
-        self.colors_need_refresh || self.mode_capture == ModeCapture::Ready { notify: true }
+        self.colors_need_refresh || self.appearance_mode.retry_ready()
     }
 
     pub(super) fn reacquire(&mut self) {
         self.invalidate_colors();
-        self.mode_capture = match self.mode_capture {
-            ModeCapture::Waiting { .. } | ModeCapture::Abandoned { .. } => {
-                ModeCapture::Abandoned { retry: false }
-            }
-            _ => ModeCapture::Ready { notify: false },
-        };
+        self.appearance_mode.reacquire();
+        self.grapheme_mode.reacquire();
     }
 
     pub(super) fn begin_color_probe(&mut self, query_mode: bool) -> bool {
@@ -145,27 +207,18 @@ impl TerminalReplyFilter {
         self.accept_colors = true;
         self.probe_interrupted = false;
         self.colors_need_refresh = true;
-        self.appearance_mode = None;
-        // DECRQM has no request identity either. After timeout/cancellation,
-        // drain the outstanding report before issuing another capture. Never
-        // mistake an old reset observation for permission to change a new bit.
+        self.appearance_mode.value = None;
         self.end_mode_capture();
-        if query_mode && let ModeCapture::Ready { notify } = self.mode_capture {
-            self.mode_capture = ModeCapture::Waiting { retry: notify };
-            true
-        } else {
-            false
-        }
+        query_mode && self.appearance_mode.begin()
     }
 
     pub(super) fn color_probe_complete(&self, query_mode: bool) -> bool {
-        self.received_colors == ALL_COLORS && (!query_mode || self.appearance_mode.is_some())
+        self.received_colors == ALL_COLORS && (!query_mode || self.appearance_mode.value.is_some())
     }
 
     pub(super) fn end_mode_capture(&mut self) {
-        if let ModeCapture::Waiting { retry } = self.mode_capture {
-            self.mode_capture = ModeCapture::Abandoned { retry };
-        }
+        self.appearance_mode.end();
+        self.grapheme_mode.end();
     }
 
     pub(super) fn finish_color_probe(&mut self) {
@@ -271,7 +324,7 @@ impl TerminalReplyFilter {
             | State::OscEscape { .. }
             | State::PrivateDiscard
             | State::RejectedCr => true,
-            State::Body { private, bytes } => Self::color_csi(*private, bytes),
+            State::Body { private, bytes } => Self::setting_csi(*private, bytes),
             _ => false,
         }
     }
@@ -356,10 +409,10 @@ impl TerminalReplyFilter {
                     }
                 }
                 State::Body { private, mut bytes } => {
-                    if matches!(byte, b'\r' | b'\n') && Self::color_csi(private, &bytes) {
+                    if matches!(byte, b'\r' | b'\n') && Self::setting_csi(private, &bytes) {
                         self.reject_newline(byte, &mut frames, &mut output)
                     } else if byte == b'\x1b' || byte.is_ascii_control() {
-                        if !Self::color_csi(private, &bytes) {
+                        if !Self::setting_csi(private, &bytes) {
                             Self::emit(&mut output, private, &bytes);
                         }
                         Self::removed(&mut frames, &mut output, false);
@@ -372,18 +425,15 @@ impl TerminalReplyFilter {
                     } else {
                         bytes.push(byte);
                         if (0x40..=0x7e).contains(&byte) || bytes.len() >= 128 {
-                            let owned = Self::color_csi(private, &bytes);
+                            let owned = Self::setting_csi(private, &bytes);
                             let previous = (self.colors, self.colors_need_refresh());
-                            let retry_was_ready =
-                                self.mode_capture == ModeCapture::Ready { notify: true };
+                            let retry_was_ready = self.appearance_mode.retry_ready();
                             if self.reply(private, &bytes, cursor_query) || owned {
                                 Self::removed(
                                     &mut frames,
                                     &mut output,
                                     previous != (self.colors, self.colors_need_refresh())
-                                        || (!retry_was_ready
-                                            && self.mode_capture
-                                                == ModeCapture::Ready { notify: true }),
+                                        || (!retry_was_ready && self.appearance_mode.retry_ready()),
                                 );
                             } else {
                                 Self::emit(&mut output, private, &bytes);
@@ -505,7 +555,7 @@ impl TerminalReplyFilter {
                 State::Esc => output.push(b'\x1b'),
                 State::Csi => output.extend_from_slice(b"\x1b["),
                 State::Body { private, bytes } => {
-                    if Self::color_csi(private, &bytes) {
+                    if Self::setting_csi(private, &bytes) {
                         // A terminal reply has its own deadline, not the much
                         // shorter Escape-key grace period.
                         self.state = State::Body { private, bytes };
@@ -568,8 +618,11 @@ impl TerminalReplyFilter {
         }
     }
 
-    fn color_csi(private: bool, bytes: &[u8]) -> bool {
-        private && (bytes.starts_with(b"997;") || bytes.starts_with(b"2031;"))
+    fn setting_csi(private: bool, bytes: &[u8]) -> bool {
+        private
+            && (bytes.starts_with(b"997;")
+                || bytes.starts_with(b"2031;")
+                || bytes.starts_with(b"2027;"))
     }
 
     fn finish_osc(
@@ -609,29 +662,18 @@ impl TerminalReplyFilter {
         let Some((&last, body)) = bytes.split_last() else {
             return false;
         };
-        if private && body.starts_with(b"2031;") {
+        if private && (body.starts_with(b"2031;") || body.starts_with(b"2027;")) {
             let mode = (last == b'y')
                 .then(|| body.strip_suffix(b"$"))
                 .flatten()
                 .and_then(|body| std::str::from_utf8(&body[5..]).ok())
                 .and_then(|value| value.parse::<u8>().ok())
                 .filter(|value| *value <= 4);
-            self.mode_capture = match self.mode_capture {
-                ModeCapture::Waiting { .. } => {
-                    self.appearance_mode = mode;
-                    ModeCapture::Settled
-                }
-                ModeCapture::Abandoned { retry: false } if mode.is_some_and(|mode| mode != 0) => {
-                    // This is only a drained old report, never fresh authority.
-                    // Wake the ordinary UI to capture again on its next safe,
-                    // explicit refresh. Unknown/malformed reports do not retry.
-                    ModeCapture::Ready { notify: true }
-                }
-                // Persistently slow terminals cannot finish within the bounded
-                // query. Do not turn each late reply into another probe forever.
-                ModeCapture::Abandoned { .. } => ModeCapture::Settled,
-                state => state,
-            };
+            if body.starts_with(b"2031;") {
+                self.appearance_mode.observe(mode);
+            } else {
+                self.grapheme_mode.observe(mode);
+            }
             return true;
         }
         if private && last == b'n' && body.starts_with(b"997;") {
@@ -690,7 +732,7 @@ mod tests {
         assert!(!replies.colors_need_refresh());
         assert!(!replies.begin_color_probe(true));
         assert_eq!(
-            replies.appearance_mode, None,
+            replies.appearance_mode.value, None,
             "neither late reply is authority to enable"
         );
     }

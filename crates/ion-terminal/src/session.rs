@@ -18,7 +18,7 @@ use crate::{CapabilitySupport, PaintReceipt, ProgramStatus, Screen};
 
 #[path = "modes.rs"]
 mod modes;
-use modes::TerminalState;
+use modes::{PrivateMode, TerminalState};
 
 #[path = "secret.rs"]
 mod secret;
@@ -140,6 +140,7 @@ impl TerminalSession {
         };
         session.lock().activate()?;
         session.negotiate_keyboard().await?;
+        session.negotiate_graphemes().await?;
         session.refresh_colors().await?;
         Ok(session)
     }
@@ -209,6 +210,20 @@ impl TerminalSession {
         self.lock().set_keyboard_support(support)
     }
 
+    async fn negotiate_graphemes(&mut self) -> io::Result<()> {
+        if !self.input.begin_grapheme_probe() {
+            return Ok(());
+        }
+        self.output()?.write_all(b"\x1b[?2027$p")?;
+        self.output()?.flush()?;
+        let mode = self
+            .input
+            .grapheme_observation()
+            .await
+            .inspect_err(|_| self.lock().fail())?;
+        self.lock().set_mode(PrivateMode::Graphemes, mode)
+    }
+
     /// Snapshot of terminal-reported values, with no presentation fallbacks.
     pub fn colors(&self) -> crate::TerminalColors {
         self.input.colors()
@@ -243,7 +258,8 @@ impl TerminalSession {
             .inspect_err(|_| self.lock().fail())?;
         self.check_active()?;
         if query_mode {
-            self.lock().set_appearance_mode(mode)?;
+            self.lock()
+                .set_mode(PrivateMode::AppearanceNotifications, mode)?;
         }
         Ok(())
     }
@@ -418,7 +434,8 @@ impl TerminalSession {
         self.lock().activate()?;
         // The returning ordinary UI owner explicitly refreshes before drawing.
         // Resume can also occur during restricted input/output ownership.
-        self.negotiate_keyboard().await
+        self.negotiate_keyboard().await?;
+        self.negotiate_graphemes().await
     }
 
     pub fn restore(&mut self) -> io::Result<()> {
