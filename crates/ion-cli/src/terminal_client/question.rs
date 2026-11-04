@@ -125,7 +125,7 @@ impl QuestionModal {
 
     pub(super) fn collapsed_hint(keys: &KeyBindings) -> String {
         format!(
-            "Question hidden · {} reopen · {} cancel",
+            "Question hidden · {} reopen · {} twice cancels",
             keys.hint(KeyAction::QuestionCollapse),
             keys.hint(KeyAction::Cancel),
         )

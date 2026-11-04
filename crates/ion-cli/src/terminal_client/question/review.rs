@@ -226,7 +226,7 @@ impl QuestionModal {
         rows[height - 1] = Line::styled(
             fit_line(
                 &format!(
-                    "{} / {} scroll · {} cancel · {} stops Turn",
+                    "{} / {} scroll · {} twice cancels · {} twice stops Turn",
                     keys.hint(KeyAction::PageUp),
                     keys.hint(KeyAction::PageDown),
                     keys.hint(KeyAction::Cancel),

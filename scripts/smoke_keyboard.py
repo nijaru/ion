@@ -251,7 +251,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                         until(lambda: b"Type a custom answer" in output[checkpoint:])
                         until(lambda: all(hint in output[checkpoint:] for hint in (
                             b"Enter answer", b"Shift-Enter newline", b"Ctrl-G editor",
-                            b"Esc cancel", b"Ctrl-] hide", b"Ctrl-C stops Turn",
+                            b"Esc twice cancels", b"Ctrl-] hide", b"Ctrl-C twice stops Turn",
                         )))
                         assert len(requests) == 3, "showing editing hints answered the question"
                         os.write(master, "café 🦀".encode() + b"\x1b[D")
@@ -314,7 +314,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None):
                     until(lambda: not terminal.alternate)
                 # Visible answer text can precede Host settlement. Explicit
                 # quit joins either state; Ctrl-C could only request stop.
-                os.write(master, b"\x04")
+                os.write(master, b"\x04\x04")
                 until(lambda: child.poll() is not None)
                 drain()
                 assert child.wait() == 0, output[-2000:]

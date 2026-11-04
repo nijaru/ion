@@ -58,6 +58,18 @@ pub struct ControlState {
     pub shutdown_complete: bool,
 }
 
+/// Identity of the foreground work and inputs affected by a stop request.
+/// Progress and admission acknowledgement do not change this identity.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StopTarget {
+    pub(super) owner: uuid::Uuid,
+    pub(super) session: uuid::Uuid,
+    pub(super) operation: Option<OperationId>,
+    pub(super) binding: Option<crate::binding::BindingOperationId>,
+    pub(super) reconnect: Option<OperationId>,
+    pub(super) inputs: Vec<InputId>,
+}
+
 /// Prepared messages are literal. Prompt expands only `text`; file snapshots
 /// remain data and never select resources or commands.
 #[derive(Clone, Debug, Serialize)]

@@ -1,6 +1,242 @@
 //! Publication, not layout, makes a retained interaction actionable.
 use super::*;
 
+#[test]
+fn interrupt_requires_confirmation_and_does_not_escalate_after_clear() {
+    let mut ui = Frontend::default();
+    ui.insert("unsent α\n🦀");
+    let interrupt = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
+    assert!(matches!(ui.key(interrupt, None, None), Action::None));
+    assert_eq!(
+        ui.editor.draft, "unsent α\n🦀",
+        "first press only arms clear"
+    );
+    assert!(visible_status(&ui, None).unwrap().contains("Clear draft?"));
+    assert!(matches!(ui.key(interrupt, None, None), Action::None));
+    assert!(ui.editor.draft.is_empty());
+    for _ in 0..3 {
+        assert!(matches!(ui.key(interrupt, None, None), Action::None));
+    }
+    ui.key(
+        KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+        None,
+        None,
+    );
+    assert_eq!(ui.editor.draft, "unsent α\n🦀");
+}
+
+#[test]
+fn clear_restores_rich_draft_cursor_and_survives_an_undo_baseline_change() {
+    let mut ui = Frontend::default();
+    ui.insert("α\n🦀 end");
+    ui.editor.cursor = "α\n".len();
+    ui.attach_image(ImageSource::Path("retained.png".into()));
+    ui.editor.files.push(ion_app::prompt_files::TextFile {
+        name: "context.txt".into(),
+        text: "literal α\r\n".into(),
+    });
+    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    let undo = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL);
+    let redo = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT);
+    ui.key(escape, None, None);
+    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.files.len(), 1);
+    ui.key(escape, None, None);
+    assert!(
+        ui.editor.draft.is_empty() && ui.editor.images.is_empty() && ui.editor.files.is_empty()
+    );
+    ui.key(undo, None, None);
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("α\n🦀 end", "α\n".len())
+    );
+    assert!(
+        matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("retained.png"))
+    );
+    assert_eq!(ui.editor.files[0].text, "literal α\r\n");
+    ui.key(redo, None, None);
+    assert!(ui.editor.images.is_empty() && ui.editor.files.is_empty());
+    // A later attachment ends text undo history, but cannot discard the
+    // cleared draft. It moves into the existing local recovery custody.
+    ui.attach_image(ImageSource::Path("new.png".into()));
+    assert_eq!(ui.editor.recovered.len(), 1);
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("α\n🦀 end", "α\n".len())
+    );
+    assert_eq!(ui.editor.files[0].text, "literal α\r\n");
+    assert!(
+        matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("retained.png"))
+    );
+    assert_eq!(
+        ui.editor.recovered.len(),
+        1,
+        "new attachment remains recoverable too"
+    );
+}
+
+#[test]
+fn stale_clear_and_different_bound_shortcuts_never_confirm_each_other() {
+    let mut ui = Frontend {
+        keys: KeyBindings::parse(br#"{"app.interrupt":["ctrl+q","ctrl+c"]}"#).unwrap(),
+        ..Frontend::default()
+    };
+    ui.insert("old draft");
+    let q = KeyEvent::new(KeyCode::Char('q'), Modifiers::CONTROL);
+    let c = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
+    ui.key(q, None, None);
+    assert_eq!(ui.gestures.prompt(), Some("Clear draft? Ctrl-Q again"));
+    ui.key(c, None, None);
+    assert_eq!(ui.editor.draft, "old draft");
+    assert_eq!(ui.gestures.prompt(), Some("Clear draft? Ctrl-C again"));
+    // History refresh can replace a baseline without a keyboard event or a
+    // Frontend wrapper. The editor's identity must still reject the old arm.
+    ui.editor
+        .restore_editor(EditorDraft::at_end("new draft".into()));
+    ui.key(c, None, None);
+    assert_eq!(ui.editor.draft, "new draft");
+    assert!(ui.gestures.prompt().is_none());
+}
+
+#[tokio::test]
+async fn completion_dismissal_is_separate_from_both_stop_confirmation_presses() {
+    let mut fixture = tests::Fixture::new();
+    fixture
+        .control
+        .compact(None, EditorDraft::at_end(String::new()))
+        .unwrap();
+    let target = fixture.control.stop_target();
+    let mut ui = Frontend::default();
+    ui.insert("/he");
+    ui.refresh_completion(None, None, false);
+    assert!(
+        !ui.editor
+            .completion
+            .painted_rows(80, 6, &ui.keys)
+            .is_empty()
+    );
+    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    assert_eq!(ui.stop_key(escape, target.clone()), None);
+    ui.key(escape, None, None);
+    assert!(!ui.editor.completion.active());
+    assert!(ui.gestures.prompt().is_none());
+    assert_eq!(ui.stop_key(escape, target.clone()), Some(false));
+    assert_eq!(ui.stop_key(escape, target), Some(true));
+    assert_eq!(ui.editor.draft, "/he");
+    fixture.control.shutdown().await;
+}
+
+#[test]
+fn exit_is_guarded_but_forward_delete_and_confirmation_dismissal_are_not() {
+    let exit = KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL);
+    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    let mut ui = Frontend::default();
+    assert!(matches!(ui.key(exit, None, None), Action::None));
+    assert!(
+        visible_status(&ui, None)
+            .unwrap()
+            .contains("Exit Ion? Ctrl-D again")
+    );
+    assert!(matches!(ui.key(escape, None, None), Action::None));
+    assert!(
+        ui.gestures.prompt().is_none(),
+        "Esc dismisses another key's confirmation"
+    );
+    ui.insert("α🦀");
+    ui.editor.cursor = 0;
+    ui.key(exit, None, None);
+    assert_eq!(ui.editor.draft, "🦀");
+    ui.key(exit, None, None);
+    assert!(ui.editor.draft.is_empty());
+    ui.attach_image(ImageSource::Path("image-only.png".into()));
+    assert!(matches!(ui.key(exit, None, None), Action::None));
+    assert!(matches!(ui.key(exit, None, None), Action::None));
+    assert_eq!(ui.editor.images.len(), 1);
+    ui.editor.take_attachments();
+    assert!(matches!(ui.key(exit, None, None), Action::None));
+    assert!(matches!(ui.key(exit, None, None), Action::Quit));
+}
+
+#[tokio::test]
+async fn stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_or_exit() {
+    let mut fixture = tests::Fixture::new();
+    fixture
+        .control
+        .compact(None, EditorDraft::at_end(String::new()))
+        .unwrap();
+    let target = fixture.control.stop_target().unwrap();
+    let interrupt = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
+    let mut ui = Frontend::default();
+    ui.insert("unsent 🦀");
+    assert_eq!(ui.stop_key(interrupt, Some(target.clone())), Some(false));
+    assert!(!fixture.control.state().stop_requested);
+    // An additional queued input changes the cancellation domain even though
+    // the current operation is unchanged.
+    assert!(
+        fixture
+            .control
+            .submit(
+                Delivery::FollowUp,
+                ion_app::UserInput::Prompt {
+                    text: "queued".into(),
+                    images: vec![],
+                    files: vec![]
+                },
+                EditorDraft::at_end("queued".into())
+            )
+            .is_ok()
+    );
+    let changed = fixture.control.stop_target().unwrap();
+    assert_ne!(target, changed);
+    assert_eq!(ui.stop_key(interrupt, Some(changed.clone())), Some(false));
+    assert!(ui.gestures.prompt().is_none());
+    ui.begin_key(KeyEvent::new(KeyCode::Left, Modifiers::NONE));
+    assert_eq!(ui.stop_key(interrupt, Some(changed.clone())), Some(false));
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        ui.mode = mode;
+        let dock = Dock::prepare(&mut ui, None, None, 24, 2);
+        assert!(
+            dock.rows
+                .iter()
+                .any(|row| row.to_string().contains("Stop work? Ctrl-C again"))
+        );
+        assert!(dock.cursor.is_some());
+    }
+    assert_eq!(ui.stop_key(interrupt, Some(changed)), Some(true));
+    fixture.control.request_stop();
+    assert_eq!(ui.stop_key(interrupt, None), None);
+    for _ in 0..3 {
+        assert!(matches!(ui.key(interrupt, None, None), Action::None));
+    }
+    assert_eq!(ui.editor.draft, "unsent 🦀");
+    fixture.control.shutdown().await;
+}
+
+#[test]
+fn question_cancel_and_its_hint_use_the_same_request_and_preserve_the_composer() {
+    let mut ui = Frontend {
+        question: Some(question()),
+        ..Frontend::default()
+    };
+    ui.insert("composer 🦀");
+    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    assert!(matches!(ui.question_key(escape), QuestionAction::None));
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        ui.mode = mode;
+        let dock = Dock::prepare(&mut ui, None, None, 24, 2);
+        assert!(
+            dock.rows
+                .iter()
+                .any(|row| row.to_string().contains("Cancel question? Esc"))
+        );
+        assert!(dock.rows.len() + dock.body_rows < 3);
+    }
+    let request = ui.question.as_ref().unwrap().request();
+    assert!(matches!(ui.question_key(escape), QuestionAction::Cancel(id) if id == request));
+    assert_eq!(ui.editor.draft, "composer 🦀");
+}
+
 #[tokio::test]
 async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
     let mut fixture = tests::Fixture::new();
@@ -39,7 +275,7 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
                     assert!(
                         dock.rows
                             .iter()
-                            .any(|row| row.to_string().contains("Ctrl-C cancels"))
+                            .any(|row| row.to_string().contains("Ctrl-C twice stops"))
                     );
                     assert!(dock.rows.len() + dock.body_rows <= height);
                     assert!(dock.cursor.is_some());
@@ -189,8 +425,9 @@ fn foreground_focus_revokes_question_paint_and_short_questions_retain_conversati
 
     let exact = Dock::prepare(&mut ui, None, None, 80, 20);
     // A short ordinary question leaves conversation space and no composer caret.
-    assert_eq!(exact.rows.len(), 5);
-    assert_eq!(exact.body_rows, 14);
+    // Guarded cancellation controls occupy one additional physical row.
+    assert_eq!(exact.rows.len(), 6);
+    assert_eq!(exact.body_rows, 13);
     assert!(exact.cursor.is_none());
     publish_to(&mut ui, exact, (80, 20), &mut Vec::new()).unwrap();
     assert!(

@@ -237,6 +237,21 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let custody = lock(&self.custody);
         self.state_with(&custody)
     }
+    /// Sample the exact cancellation domain, including work still preparing.
+    pub fn stop_target(&self) -> Option<StopTarget> {
+        self.reconcile_admissions();
+        let custody = lock(&self.custody);
+        let state = self.state_with(&custody);
+        (state.busy || state.binding.is_some()).then(|| StopTarget {
+            owner: self.owner,
+            session: self.session().id(),
+            operation: state.operation.map(|operation| operation.id),
+            binding: state.binding,
+            reconnect: state.mcp_reconnect.map(|reconnect| reconnect.id),
+            inputs: custody.inputs.keys().copied().collect(),
+        })
+    }
+
     fn state_with(&self, custody: &Custody<M>) -> ControlState {
         let active_root = self.active.as_ref().and_then(|active| active.root);
         let mut pending_steering = 0;

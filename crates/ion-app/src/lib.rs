@@ -74,8 +74,8 @@ pub use control::{
     RecoveryAdmission, RecoveryDecision, RecoveryFailure, RejectedBatch, RejectedInput,
     RequestAdmission, RequestDecision, RequestLaunch, RequestPlan, ReturnReason, ReturnSnapshot,
     ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt,
-    SteeringStatus, TurnSteering, UnresolvedInput, UnresolvedRequest, UpdateSnapshot, UserInput,
-    preflight_messages,
+    SteeringStatus, StopTarget, TurnSteering, UnresolvedInput, UnresolvedRequest, UpdateSnapshot,
+    UserInput, preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{

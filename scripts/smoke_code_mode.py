@@ -378,7 +378,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                     # Completion publication can lag its commit. Empty-composer
                     # EOF remains safe if delivery occurs during terminal restore.
                     if finished and time.monotonic() - last_quit > 0.25:
-                        os.write(master, b"\x04")
+                        os.write(master, b"\x04\x04")
                         last_quit = time.monotonic()
                     if child.poll() is not None:
                         break
@@ -429,7 +429,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                         os.write(master, b"\x1b")
                         closed = True
                     if closed and not quit_sent and b"Details closed" in output:
-                        os.write(master, b"\x04")  # Quit, not a racing stop request.
+                        os.write(master, b"\x04\x04")  # Confirm quit, not a racing stop request.
                         quit_sent = True
                     if child.poll() is not None:
                         break

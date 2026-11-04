@@ -1,10 +1,12 @@
 //! Terminal-local recovery for unsent draft text.
 //!
-//! Undo/redo stores owned text deltas with their before/after byte cursors;
-//! the kill ring stores killed text only. Both are presentation state and never
-//! admit, submit or duplicate attached images. Submission handoff discards
-//! undo/redo, while the kill ring deliberately survives draft changes so killed
-//! text can be yanked into another draft.
+//! Undo/redo stores owned text deltas with their before/after byte cursors.
+//! Whole-draft clearing also moves attachment custody into its undo entry;
+//! undo/redo swaps it back without cloning or admitting images. The kill ring
+//! stores killed text only. These are presentation state, never execution.
+//! Submission handoff discards undo/redo but retains applied clears in local
+//! draft recovery. The kill ring survives draft changes so killed text can be
+//! yanked into another draft.
 use std::{collections::VecDeque, ops::Range};
 
 use crate::keybindings::{self, COMPOSER, KeyAction};
@@ -15,7 +17,7 @@ use ion_terminal::{KeyCode, Modifiers};
 use super::{
     MAX_DRAFT,
     editing::Kill,
-    editor::{Editor, Limit},
+    editor::{Editor, EditorDraft, Limit, RecoveredDraft},
 };
 
 const MAX_HISTORY_ENTRIES: usize = 100;
@@ -47,11 +49,28 @@ struct Delta {
     inserted: String,
     cursor_before: usize,
     cursor_after: usize,
+    attachments: Option<Attachments>,
+}
+
+struct Attachments {
+    images: Vec<ion_app::image_input::ImageSource>,
+    files: Vec<ion_app::prompt_files::TextFile>,
 }
 
 impl Delta {
     fn retained(&self) -> usize {
         self.removed.len() + self.inserted.len()
+    }
+
+    fn into_cleared_draft(self) -> Option<RecoveredDraft> {
+        self.attachments.map(|attachments| RecoveredDraft {
+            source: EditorDraft {
+                literal: self.removed,
+                cursor: self.cursor_before,
+            },
+            images: attachments.images,
+            files: attachments.files,
+        })
     }
 }
 
@@ -119,11 +138,17 @@ impl KillRing {
 }
 
 impl EditorRecovery {
-    fn reset(&mut self) {
-        self.undo.clear();
+    fn reset(&mut self) -> Vec<RecoveredDraft> {
+        let cleared = self
+            .undo
+            .drain(..)
+            .filter_map(Delta::into_cleared_draft)
+            .collect();
+        // Redo clear entries are already undone: their draft is live again.
         self.redo.clear();
         self.retained = 0;
         self.interrupt();
+        cleared
     }
 
     fn interrupt(&mut self) {
@@ -139,7 +164,7 @@ impl EditorRecovery {
         self.yank = None;
     }
 
-    fn record(&mut self, delta: Delta, group: Group) {
+    fn record(&mut self, delta: Delta, group: Group) -> Vec<RecoveredDraft> {
         for dropped in self.redo.drain(..) {
             self.retained -= dropped.retained();
         }
@@ -147,6 +172,11 @@ impl EditorRecovery {
         self.undo.push_back(delta);
         self.group = group;
         self.yank = None;
+        self.trim()
+    }
+
+    fn trim(&mut self) -> Vec<RecoveredDraft> {
+        let mut cleared = Vec::new();
         while self.undo.len() + self.redo.len() > MAX_HISTORY_ENTRIES
             || self.retained > MAX_HISTORY_BYTES
         {
@@ -154,10 +184,19 @@ impl EditorRecovery {
                 break;
             };
             self.retained -= dropped.retained();
+            if let Some(draft) = dropped.into_cleared_draft() {
+                cleared.push(draft);
+            }
         }
+        cleared
     }
 
-    fn extend_typed(&mut self, start: usize, text: &str, cursor_after: usize) {
+    fn extend_typed(
+        &mut self,
+        start: usize,
+        text: &str,
+        cursor_after: usize,
+    ) -> Vec<RecoveredDraft> {
         let entry = self
             .undo
             .back_mut()
@@ -176,14 +215,7 @@ impl EditorRecovery {
         self.retained += text.len();
         self.group = Group::TypedWord;
         self.yank = None;
-        while self.undo.len() + self.redo.len() > MAX_HISTORY_ENTRIES
-            || self.retained > MAX_HISTORY_BYTES
-        {
-            let Some(dropped) = self.undo.pop_front() else {
-                break;
-            };
-            self.retained -= dropped.retained();
-        }
+        self.trim()
     }
 }
 
@@ -197,9 +229,13 @@ impl Editor {
 
     /// A different draft or attachment baseline owns the next edits.
     pub(super) fn reset_edit_baseline(&mut self) {
+        self.baseline = self
+            .baseline
+            .checked_add(1)
+            .expect("editor baseline exhausted");
         self.error = None;
         self.preferred_column = None;
-        self.recovery.reset();
+        self.recovered.extend(self.recovery.reset());
     }
 
     /// Consume the key-level grouping rules before a normal composer action.
@@ -281,18 +317,20 @@ impl Editor {
         self.draft.insert_str(start, &clean);
         self.cursor += clean.len();
         if coalesce {
-            self.recovery.extend_typed(start, &clean, self.cursor);
+            self.recovered
+                .extend(self.recovery.extend_typed(start, &clean, self.cursor));
         } else {
-            self.recovery.record(
+            self.recovered.extend(self.recovery.record(
                 Delta {
                     start,
                     removed: String::new(),
                     inserted: clean,
                     cursor_before,
                     cursor_after: self.cursor,
+                    attachments: None,
                 },
                 group,
-            );
+            ));
         }
     }
 
@@ -325,16 +363,17 @@ impl Editor {
         self.completion.clear();
         if changed {
             self.draft.replace_range(range.clone(), text);
-            self.recovery.record(
+            self.recovered.extend(self.recovery.record(
                 Delta {
                     start: range.start,
                     removed,
                     inserted: text.to_owned(),
                     cursor_before,
                     cursor_after: cursor,
+                    attachments: None,
                 },
                 Group::Other,
-            );
+            ));
             self.cursor = cursor;
         } else {
             self.cursor = cursor;
@@ -369,28 +408,42 @@ impl Editor {
         if let Some(direction) = kill {
             self.recovery.kills.push(&removed, direction, was_kill);
         }
-        self.recovery.record(
+        self.recovered.extend(self.recovery.record(
             Delta {
                 start: range.start,
                 removed,
                 inserted: String::new(),
                 cursor_before,
                 cursor_after: self.cursor,
+                attachments: None,
             },
             if kill.is_some() {
                 Group::Kill
             } else {
                 Group::Other
             },
-        );
+        ));
     }
 
-    pub(super) fn clear_draft_text(&mut self) {
-        let end = self.draft.len();
-        self.replace_text(0..end, "", 0);
+    pub(super) fn clear_draft(&mut self) {
+        self.break_edit_focus();
+        self.browsing = None;
+        self.completion.clear();
+        let (images, files) = self.take_attachments();
+        self.recovered.extend(self.recovery.record(
+            Delta {
+                start: 0,
+                removed: std::mem::take(&mut self.draft),
+                inserted: String::new(),
+                cursor_before: std::mem::take(&mut self.cursor),
+                cursor_after: 0,
+                attachments: Some(Attachments { images, files }),
+            },
+            Group::Other,
+        ));
     }
 
-    fn apply_history(&mut self, entry: &Delta, undo: bool) {
+    fn apply_history(&mut self, entry: &mut Delta, undo: bool) {
         self.preferred_column = None;
         let (expected, replacement, cursor_after) = if undo {
             (&entry.inserted, &entry.removed, entry.cursor_before)
@@ -412,22 +465,26 @@ impl Editor {
         self.completion.clear();
         self.draft.replace_range(entry.start..end, replacement);
         self.cursor = cursor_after;
+        if let Some(attachments) = &mut entry.attachments {
+            std::mem::swap(&mut self.images, &mut attachments.images);
+            std::mem::swap(&mut self.files, &mut attachments.files);
+        }
     }
 
     fn undo(&mut self) {
-        let Some(entry) = self.recovery.undo.pop_back() else {
+        let Some(mut entry) = self.recovery.undo.pop_back() else {
             return;
         };
-        self.apply_history(&entry, true);
+        self.apply_history(&mut entry, true);
         self.recovery.redo.push_back(entry);
         self.recovery.interrupt();
     }
 
     fn redo(&mut self) {
-        let Some(entry) = self.recovery.redo.pop_back() else {
+        let Some(mut entry) = self.recovery.redo.pop_back() else {
             return;
         };
-        self.apply_history(&entry, false);
+        self.apply_history(&mut entry, false);
         self.recovery.undo.push_back(entry);
         self.recovery.interrupt();
     }
@@ -449,16 +506,17 @@ impl Editor {
         self.completion.clear();
         self.draft.insert_str(start, &text);
         self.cursor = start + text.len();
-        self.recovery.record(
+        self.recovered.extend(self.recovery.record(
             Delta {
                 start,
                 removed: String::new(),
                 inserted: text,
                 cursor_before,
                 cursor_after: self.cursor,
+                attachments: None,
             },
             Group::Other,
-        );
+        ));
         self.recovery.yank = Some(Yank {
             range: start..self.cursor,
             cursor: self.cursor,
@@ -498,16 +556,17 @@ impl Editor {
         self.draft.replace_range(yank.range.clone(), &next);
         self.cursor = yank.range.start + next.len();
         if current != next {
-            self.recovery.record(
+            self.recovered.extend(self.recovery.record(
                 Delta {
                     start: yank.range.start,
                     removed: current,
                     inserted: next,
                     cursor_before,
                     cursor_after: self.cursor,
+                    attachments: None,
                 },
                 Group::Other,
-            );
+            ));
         } else {
             self.recovery.interrupt();
         }
@@ -1030,13 +1089,15 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_c_clear_is_undoable_and_not_a_kill() {
+    fn confirmed_clear_is_undoable_and_not_a_kill() {
         let mut ui = Frontend::default();
         ui.insert("unsent 🦀");
         assert!(matches!(
             ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None, None),
             super::super::Action::None
         ));
+        assert_eq!(ui.editor.draft, "unsent 🦀");
+        ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None, None);
         assert_eq!(ui.editor.draft, "");
         assert!(ui.editor.recovery.kills.entries.is_empty());
         assert!(composer_key(
@@ -1044,6 +1105,43 @@ mod tests {
             key(KeyCode::Char('_'), Modifiers::CONTROL)
         ));
         assert_eq!(ui.editor.draft, "unsent 🦀");
+    }
+
+    #[test]
+    fn trimming_clear_history_retains_the_original_rich_draft_once() {
+        let mut ui = Frontend::default();
+        ui.insert("cleared α");
+        ui.attach_image(ion_app::image_input::ImageSource::Path(
+            "retained.png".into(),
+        ));
+        ui.editor.clear_draft();
+        for _ in 0..MAX_HISTORY_ENTRIES {
+            ui.editor.insert("x");
+        }
+        assert_eq!(ui.editor.recovered.len(), 1);
+        ui.recover_draft();
+        assert_eq!(ui.editor.draft, "cleared α");
+        assert_eq!(ui.editor.images.len(), 1);
+        assert_eq!(
+            ui.editor.recovered.len(),
+            1,
+            "only the displaced newer draft remains"
+        );
+    }
+
+    #[test]
+    fn undone_clear_is_not_duplicated_when_a_new_baseline_is_taken() {
+        let mut ui = Frontend::default();
+        ui.insert("restored α");
+        ui.attach_image(ion_app::image_input::ImageSource::Path(
+            "retained.png".into(),
+        ));
+        ui.editor.clear_draft();
+        composer_key(&mut ui, key(KeyCode::Char('_'), Modifiers::CONTROL));
+        let source = ui.editor.take_literal();
+        assert_eq!(source.literal, "restored α");
+        assert_eq!(ui.editor.images.len(), 1);
+        assert!(ui.editor.recovered.is_empty());
     }
 
     #[test]

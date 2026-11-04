@@ -31,9 +31,9 @@ macro_rules! actions {
 }
 
 actions! {
-    Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Stop busy work; otherwise clear/exit composer or close picker";
+    Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Press twice to stop work, clear draft or exit; dismiss picker once";
     Suspend, "app.suspend", GLOBAL, ["ctrl+z"], "Suspend the terminal job";
-    Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward; exit an empty composer";
+    Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward; press twice to exit an empty composer";
     Model, "app.model.select", COMPOSER, ["ctrl+l"], "Choose Session model";
     ModelForward, "app.model.cycleForward", COMPOSER, ["ctrl+p"], "Cycle to next locally ready model";
     ModelBackward, "app.model.cycleBackward", COMPOSER, ["ctrl+shift+p"], "Cycle to previous locally ready model";
@@ -49,7 +49,7 @@ actions! {
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";
     Confirm, "tui.select.confirm", COMPLETION | PICKER | CHOICE, ["enter"], "Accept the visible selected item";
-    Cancel, "tui.select.cancel", COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss completion, picker, question or details";
+    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss once; press twice to stop work, clear draft or cancel question";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     Toggle, "tui.select.toggle", PICKER | CHOICE, ["space"], "Toggle a setting or multi-select option";
@@ -273,6 +273,10 @@ impl<'de> Deserialize<'de> for Overrides {
         }
         deserializer.deserialize_map(BindingsVisitor)
     }
+}
+
+pub(crate) fn key_label(key: KeyEvent) -> String {
+    Chord::from_event(key).to_string()
 }
 
 pub(crate) fn printable(key: KeyEvent) -> Option<char> {

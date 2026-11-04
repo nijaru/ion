@@ -213,10 +213,10 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             while draft not in tmux("capture-pane", "-p", "-t", "ion"):
                 assert time.monotonic() < deadline, "Unicode draft did not paint"
                 time.sleep(0.02)
-            def cursor_on_line(column, text):
+            def cursor_on_line(column, text, prefix=False):
                 pane = tmux("capture-pane", "-p", "-t", "ion").splitlines()
                 x, y, visible = tmux("display-message", "-p", "-t", "ion", "#{cursor_x} #{cursor_y} #{cursor_flag}").split()
-                return visible == "1" and int(x) == column and int(y) < len(pane) and pane[int(y)].rstrip() == text
+                return visible == "1" and int(x) == column and int(y) < len(pane) and (pane[int(y)].startswith(text) if prefix else pane[int(y)].rstrip() == text)
 
             for columns, rows in sizes:
                 tmux("resize-window", "-t", "ion", "-x", str(columns), "-y", str(rows))
@@ -224,20 +224,31 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             while not cursor_on_line(4, "  👩‍💻"):
                 assert time.monotonic() < deadline, "narrow composer did not reconcile its cursor"
                 time.sleep(0.02)
+            # Recovery/stop metadata may leave only the caret's source row at
+            # this height. Navigate to the hidden prefix rather than assuming
+            # the entire literal fits; neither viewport may archive a copy.
+            tmux("send-keys", "-t", "ion", "Home")
+            while not cursor_on_line(2, "› UNSENT_RESIZE", prefix=True):
+                assert time.monotonic() < deadline, "narrow composer lost its source-relative start"
+                time.sleep(0.02)
             resized = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
             assert resized.count("UNSENT_RESIZE") == 1, f"resize duplicated or lost unsent input:\n{resized}"
+            tmux("send-keys", "-t", "ion", "End")
+            while not cursor_on_line(4, "  👩‍💻"):
+                assert time.monotonic() < deadline, "narrow composer lost its source-relative end"
+                time.sleep(0.02)
             tmux("resize-window", "-t", "ion", "-x", "100", "-y", "30")
             while not cursor_on_line(26, "› " + draft):
                 assert time.monotonic() < deadline, "restored composer did not reconcile its cursor"
                 time.sleep(0.02)
             restored = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
-            assert restored.count(draft) == 1, f"resize changed or duplicated the literal draft:\n{restored}"
+            assert restored.count(draft) == 1 and restored.count("UNSENT_RESIZE") == 1, f"resize changed or duplicated the literal draft:\n{restored}"
             check_history()
 
         # Idle resize must schedule its own redraw rather than wait for a key.
         command("!exit 7", "Shell finished with an error")
         resize_unsent_draft([(24, 7)])
-        tmux("send-keys", "-t", "ion", "C-c")
+        tmux("send-keys", "-t", "ion", "C-c", "C-c")
 
         # tmux reflows immediately but throttles queued PTY sizes by 250 ms.
         # This must not turn transient geometry into cancellation of native work.
@@ -248,7 +259,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         native_pid = int((workspace / "resize.pid").read_text())
         resize_unsent_draft([(60, 20), (24, 7), (50, 10), (24, 7)])
         os.kill(native_pid, 0)
-        tmux("send-keys", "-t", "ion", "C-c")
+        tmux("send-keys", "-t", "ion", "C-c", "C-c")
         while "Shell finished" not in tmux("capture-pane", "-p", "-t", "ion"):
             assert time.monotonic() < deadline, "native cancellation did not settle"
             time.sleep(0.02)
@@ -260,7 +271,9 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             raise AssertionError("cancelled native root remains alive")
         assert (workspace / "resize-once").read_text() == "once\n"
         native_pid = None
-        tmux("send-keys", "-t", "ion", "C-c")  # Clear the preserved draft.
+        # Stop stays latched after settlement; Home resets it without changing
+        # the preserved literal before a separate guarded clear intent.
+        tmux("send-keys", "-t", "ion", "Home", "C-c", "C-c")
         time.sleep(0.05)
         assert len(requests) == 2, "resize admitted unsent input"
 
@@ -303,7 +316,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.4)
         # Identify both ends of one help publication, not the changing command
         # inventory between them (for example /tree before /fork).
-        head, tail = "CommandsSessions:/new/clone/", "Ctrl-Cstopswork"
+        head, tail = "CommandsSessions:/new/clone/", "Ctrl-Ctwicestopswork"
 
         def help_counts():
             text = "".join(tmux("capture-pane", "-p", "-t", "ion", "-S", "-").split())
@@ -363,15 +376,15 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             tmux("send-keys", "-t", target, "Down", "Down", "Down", "End")
             until_tiny(lambda: cursor_on("FOURTH_LINE"))
             assert len(requests) == 4, "composer navigation submitted a model request"
-            tmux("send-keys", "-t", target, "C-c")
+            tmux("send-keys", "-t", target, "C-c", "C-c")  # Clear, never cascade to quit.
             time.sleep(0.05)
-            tmux("send-keys", "-t", target, "C-c")
+            tmux("send-keys", "-t", target, "C-d", "C-d")
             until_tiny(tiny_exit.exists)
             assert tiny_exit.read_text().strip() == "0", "tiny composer failed on exit"
             tmux("kill-session", "-t", target)
             print(f"Ion {mode} two-row cursor-containing composer: OK")
 
-        tmux("send-keys", "-t", "ion", "C-c")
+        tmux("send-keys", "-t", "ion", "C-d", "C-d")
         while not exit_path.exists():
             assert time.monotonic() < deadline, "inline client did not exit"
             time.sleep(0.02)

@@ -384,7 +384,7 @@ impl QuestionModal {
             )
         };
         let controls = format!(
-            "{controls} · {} cancel · {} hide · {} stops Turn",
+            "{controls} · {} twice cancels · {} hide · {} twice stops Turn",
             keys.hint(KeyAction::Cancel),
             keys.hint(KeyAction::QuestionCollapse),
             keys.hint(KeyAction::Interrupt)

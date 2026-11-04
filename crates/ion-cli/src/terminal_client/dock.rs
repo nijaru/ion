@@ -106,13 +106,16 @@ impl Dock {
         match ui.input_target() {
             InputTarget::Picker => return Self::selector(ui, operation, width, height),
             InputTarget::Question => {
+                let prompt = ui.gestures.prompt().map(str::to_owned);
                 let question = ui.question.as_mut().expect("derived question custody");
                 if question.is_collapsed() {
                     return Self {
                         body_rows: height.saturating_sub(2),
                         rows: vec![Line::styled(
                             crate::display_text::fit_line(
-                                &super::QuestionModal::collapsed_hint(&ui.keys),
+                                prompt
+                                    .as_deref()
+                                    .unwrap_or(&super::QuestionModal::collapsed_hint(&ui.keys)),
                                 width,
                             ),
                             ui.themes.theme().style(Role::Secondary),
@@ -124,8 +127,28 @@ impl Dock {
                 // No caret requires a physical parking row. Layout cannot let
                 // that row clip an otherwise authorized question choice.
                 let budget = height.saturating_sub(1).max(1);
-                let frame =
-                    question.render(width as u16, budget as u16, &ui.keys, ui.themes.theme());
+                let header = usize::from(prompt.is_some() && budget > 1);
+                let mut frame = question.render(
+                    width as u16,
+                    (budget - header) as u16,
+                    &ui.keys,
+                    ui.themes.theme(),
+                );
+                if let Some(prompt) = prompt {
+                    let row = Line::styled(
+                        crate::display_text::fit_line(&prompt, width),
+                        ui.themes.theme().style(Role::Secondary),
+                    );
+                    if header > 0 {
+                        frame.rows.insert(0, row);
+                        frame.cursor = frame.cursor.map(|(row, col)| (row + 1, col));
+                    } else {
+                        frame.rows[0] = row;
+                        frame.cursor = None;
+                        frame.candidate = None;
+                        frame.editor_width = None;
+                    }
+                }
                 return Self {
                     body_rows: height
                         .saturating_sub(frame.rows.len() + usize::from(frame.cursor.is_none())),
@@ -250,15 +273,24 @@ impl Dock {
             width,
             height.saturating_sub(1).clamp(1, 3),
         );
-        let reserve = usize::from(height > query.lines.len());
+        let confirming = ui.gestures.prompt().is_some();
+        let reserve = usize::from(!confirming && height > query.lines.len());
         let controls = ui.pickers.controls(&ui.keys);
         let status = visible_status(ui, operation);
         let metadata_budget = height.saturating_sub(query.lines.len() + reserve);
-        let metadata: Vec<_> = controls
-            .into_iter()
-            .chain(status)
-            .take(metadata_budget)
-            .collect();
+        let metadata: Vec<_> = if confirming {
+            status
+                .into_iter()
+                .chain(controls)
+                .take(metadata_budget)
+                .collect()
+        } else {
+            controls
+                .into_iter()
+                .chain(status)
+                .take(metadata_budget)
+                .collect()
+        };
         let frame = ui.pickers.rows(
             width,
             height.saturating_sub(query.lines.len() + metadata.len()),

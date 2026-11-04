@@ -161,7 +161,7 @@ class Terminal:
             self.pump()
 
     def finish(self):
-        self.send(b"\x03")
+        self.send(b"\x04\x04")
         self.wait_exit()
 
     def wait_exit(self):
@@ -261,7 +261,7 @@ def exercise_launch(work, base_env, endpoint):
             terminal.send(b"\x13")
             terminal.wait(lambda: len(requests) == before + 2 and b"state=done" in terminal.output)
             assert user_text(requests[-1]) == "FOLLOWUP_Ab🦀"
-            terminal.send(b"\x04")
+            terminal.send(b"\x04\x04")
             terminal.wait_exit()
             assert termios.tcgetattr(terminal.master) == terminal.original_modes
         finally:
@@ -285,7 +285,7 @@ def exercise_launch(work, base_env, endpoint):
             content = requests[-1]["messages"][-1]["content"]
             assert content[0] == {"type": "text", "text": "RESTORED_🦀"}, content
             assert len(content) == 2 and content[1]["image_url"]["url"].startswith("data:image/png;base64,"), content
-            terminal.send(b"\x04")
+            terminal.send(b"\x04\x04")
             terminal.wait_exit()
         finally:
             terminal.close()
@@ -301,6 +301,10 @@ def exercise_launch(work, base_env, endpoint):
             terminal.send("UNSENT_Ab🦀\x1b[H")
             terminal.output.clear()
             terminal.send(b"\x03")
+            terminal.wait(lambda: "Stop work? Ctrl-C again" in terminal.text())
+            os.kill(pid, 0)  # First press cannot stop the real effect owner.
+            assert len(requests) == before + 4 and not (cwd / "task.effect").exists()
+            terminal.send(b"\x03")
             terminal.wait_ready(lambda: "Turn stopped" in terminal.text())
             try:
                 os.kill(pid, 0)
@@ -313,7 +317,7 @@ def exercise_launch(work, base_env, endpoint):
             terminal.send("PREFIX_\x13")
             terminal.wait(lambda: len(requests) == before + 5 and b"state=done" in terminal.output)
             assert user_text(requests[-1]) == "PREFIX_UNSENT_Ab🦀", requests[-1]
-            terminal.send(b"\x04")
+            terminal.send(b"\x04\x04")
             terminal.wait_exit()
             assert termios.tcgetattr(terminal.master) == terminal.original_modes
         finally:
@@ -339,7 +343,7 @@ def exercise_launch(work, base_env, endpoint):
         try:
             terminal.wait(lambda: len(requests) == count + 1 and b"state=done" in terminal.output)
             assert json.loads(user_text(requests[-1]).split("\n", 2)[1])["text"] == "FILE_ONLY_🦀"
-            terminal.send(b"\x04")
+            terminal.send(b"\x04\x04")
             terminal.wait_exit()
             assert termios.tcgetattr(terminal.master) == terminal.original_modes
         finally:
@@ -432,7 +436,7 @@ def exercise_keybindings(work, base_env, endpoint):
             terminal.send(b"/reload\x13")
             terminal.wait(lambda: "invalid keybindings.json" in terminal.text())
             assert "private-secret" not in terminal.text()
-            terminal.send(b"\x11")  # Clears the restored /reload; an empty draft would exit.
+            terminal.send(b"\x11\x11")  # Confirm clearing the restored /reload.
             terminal.send(b"\x1bm")
             terminal.wait(lambda: "Choose model" in terminal.text())
             terminal.send(b"\x1bx")
@@ -456,11 +460,11 @@ def exercise_keybindings(work, base_env, endpoint):
             pid = int((cwd / "key.pid").read_text())
             terminal.send(b"\x1bo")
             terminal.wait(lambda: "Conversation ·" in terminal.text())
-            terminal.send(b"\x03")
+            terminal.send(b"\x03\x03")
             terminal.paint()
             os.kill(pid, 0)  # Old global Stop must be inactive, even over a modal.
             terminal.output.clear()
-            terminal.send(b"\x11")
+            terminal.send(b"\x11\x11")
             terminal.wait(lambda: b"state=idle" in terminal.output)
             try:
                 os.kill(pid, 0)
@@ -470,7 +474,7 @@ def exercise_keybindings(work, base_env, endpoint):
             assert (cwd / "key.ready").exists(), "stop was treated as rollback"
             terminal.send(b"\x1bx")
             terminal.paint()
-            terminal.send(b"\x11")
+            terminal.send(b"\x11\x11")
             terminal.wait_exit()
             assert len(requests) == before + 2, "keyboard control admitted unexpected model work"
         finally:
@@ -504,7 +508,7 @@ def exercise_keybindings(work, base_env, endpoint):
             # the fixture's TMPDIR length or terminal width.
             terminal.wait(lambda: session_label in terminal.text() and b"state=idle" in terminal.output)
             terminal.paint()
-            terminal.send(b"\x11")
+            terminal.send(b"\x11\x11")
             terminal.wait_exit()
             assert set((root / "ion").rglob("*.sqlite")) == sessions, "resume allocated another Session"
         finally:
@@ -997,7 +1001,8 @@ def exercise_resume(work, base_env, endpoint):
             terminal.send(b"\t")
             terminal.wait(lambda: selected(terminal))
             assert "named only · 1 match(es)" in terminal.text()
-            terminal.finish()
+            terminal.send(b"\x03")  # Startup chooser dismissal is not guarded.
+            terminal.wait_exit()
             assert {path: path.read_bytes() for path in paths} == snapshots
             assert set(home.rglob("*.sqlite")) == paths
             assert (home / "models.json").read_bytes() == defaults
@@ -1190,7 +1195,8 @@ def exercise_onboarding(work, base_env, endpoint):
             assert not (home / "models.json").exists(), "cancelled choice changed the default"
             assert not (home / "credentials/openai.key").exists()
             assert not marker.exists(), "cancelled setup launched MCP"
-            terminal.finish()
+            terminal.send(b"\x03")  # Startup chooser dismissal is not guarded.
+            terminal.wait_exit()
             assert termios.tcgetattr(terminal.master) == terminal.original_modes
         finally:
             terminal.close()
@@ -1246,7 +1252,8 @@ def exercise_onboarding(work, base_env, endpoint):
             terminal.wait(lambda: "openai API key:" in terminal.text())
             terminal.send(b"\x03")
             terminal.wait(lambda: "choose a model to retry" in terminal.text())
-            terminal.finish()
+            terminal.send(b"\x03")  # Startup chooser dismissal is not guarded.
+            terminal.wait_exit()
             assert sessions[0].read_bytes() == before, "cancelled setup changed the saved Session"
         finally:
             terminal.close()
@@ -1442,7 +1449,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     terminal.wait(lambda: "1 follow-up(s) queued" in terminal.text())
                     terminal.send("unsent")
                     if cancelled:
-                        terminal.send(b"\x03")
+                        terminal.send(b"\x03\x03")
                     else:
                         (cwd / "native.release").touch()
 

@@ -184,8 +184,8 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                         ended = connection.execute("SELECT COUNT(*) FROM entries WHERE json_extract(CAST(body AS TEXT), '$.kind') = 'turn_ended'").fetchone()[0]
                     if ended == 2:
                         # A request reaching the peer is not turn settlement.
-                        # Quit explicitly after both committed image turns.
-                        os.write(master, b"\x04")
+                        # Confirm quit after both committed image turns.
+                        os.write(master, b"\x04\x04")
                         quit_sent = True
                 # Leaving the alternate screen is only one teardown write.
                 # Keep draining the PTY until exit so restoration cannot block
@@ -288,7 +288,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                     output.clear()
                     detail_closed = True
                 if detail_closed and not quit_sent and b"result not shared with model" in output:
-                    os.write(master, b"\x04")  # Quit also joins a settling Turn.
+                    os.write(master, b"\x04\x04")  # Confirm quit; also joins a settling Turn.
                     quit_sent = True
                 if child.poll() is not None:
                     break

@@ -5,6 +5,7 @@ use ion_app::image_input::ImageSource;
 
 impl Frontend {
     pub(super) fn insert(&mut self, text: &str) {
+        self.gestures.invalidate();
         if self.pickers.insert(text) {
             self.editor.completion.clear();
         } else {
@@ -13,11 +14,13 @@ impl Frontend {
     }
 
     pub(super) fn restore_editor(&mut self, source: EditorDraft) {
+        self.gestures.invalidate();
         self.pickers.close();
         self.editor.restore_editor(source);
     }
 
     pub(super) fn replace_draft_atomic(&mut self, text: String) {
+        self.gestures.invalidate();
         self.pickers.close();
         self.editor.replace_draft_atomic(text);
     }
@@ -28,17 +31,20 @@ impl Frontend {
         images: Vec<ImageSource>,
         files: Vec<ion_app::prompt_files::TextFile>,
     ) {
+        self.gestures.invalidate();
         if self.editor.return_draft(source, images, files) {
             self.pickers.close();
         }
     }
 
     pub(super) fn show_draft(&mut self, draft: RecoveredDraft) {
+        self.gestures.invalidate();
         self.pickers.close();
         self.editor.show_draft(draft);
     }
 
     pub(super) fn recover_draft(&mut self) {
+        self.gestures.invalidate();
         self.pickers.close();
         self.editor.recover_draft();
         self.status = format!(
@@ -49,6 +55,7 @@ impl Frontend {
     }
 
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
+        self.gestures.invalidate();
         self.editor.restore_input(input)?;
         self.pickers.close();
         Ok(())

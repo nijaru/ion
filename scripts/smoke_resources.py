@@ -414,14 +414,14 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         # Streamed text does not establish settlement. Observe
                         # this process's committed Turns before requesting quit.
                         if completed_turns(work / "ion", previous_sessions) == 2:
-                            os.write(master, b"\x04")
+                            os.write(master, b"\x04\x04")
                             quit_at = time.monotonic()
                             phase = 6
                     elif phase == 6 and time.monotonic() - quit_at >= 0.1:
-                        # Retry the empty-composer quit while draining. Ctrl-D
-                        # is also harmless EOF after terminal restoration;
-                        # repeated Ctrl-C can instead kill joined cleanup.
-                        os.write(master, b"\x04")
+                        # Retry only the guarded empty-composer quit while
+                        # draining; never rely on a Stop/clear/quit cascade.
+                        # Ctrl-D is harmless EOF after terminal restoration.
+                        os.write(master, b"\x04\x04")
                         quit_at = time.monotonic()
                     if child.poll() is not None:
                         break
@@ -478,7 +478,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             phase = 2
                         elif phase == 2 and (b"Steering queued" if steer else b"follow-up(s) queued") in output:
                             assert len(requests) == before + 1, "queued resource dispatched early"
-                            os.write(master, b"\x03")
+                            os.write(master, b"\x03\x03")
                             output.clear()
                             phase = 3
                         elif phase == 3 and b"Turn stopped" in output and program_ready(output):
@@ -490,11 +490,11 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                             assert len(requests) == before + 2
                             assert requests[-1]["messages"][-1]["content"] == "PREFIX_" + literal, (mode, steer, "resource recovery lost literal arguments/cursor", requests[-1]["messages"][-1]["content"])
                             if completed_turns(work / "ion", previous_sessions) == 1:
-                                os.write(master, b"\x04")
+                                os.write(master, b"\x04\x04")
                                 quit_at = time.monotonic()
                                 phase = 5
                         elif phase == 5 and time.monotonic() - quit_at >= 0.1:
-                            os.write(master, b"\x04")
+                            os.write(master, b"\x04\x04")
                             quit_at = time.monotonic()
                         if child.poll() is not None:
                             break

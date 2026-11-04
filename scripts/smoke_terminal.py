@@ -145,7 +145,7 @@ def exercise_unicode_resume(workspace, env, target, mode, session_id):
         output.clear()
         os.write(master, b"/session\r")
         wait(lambda: str(target).encode() in output)
-        os.write(master, b"\x03")
+        os.write(master, b"\x04\x04")
         end = time.monotonic() + 5
         while child.poll() is None:
             assert time.monotonic() < end, (mode, "exit timed out", output[-2500:])
@@ -250,7 +250,7 @@ def exercise_file_discovery():
                     wait(lambda: b"Read @data.txt selected" in output)
                     if not busy:
                         output.clear()
-                        os.write(master, b"\x03")  # Explicitly clear the draft.
+                        os.write(master, b"\x03\x03")  # Confirm clearing the draft.
                         wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                     else:
                         output.clear()
@@ -264,7 +264,7 @@ def exercise_file_discovery():
                         os.write(master, b"\x1b\x1b[Cdraft")
                         wait(lambda: b"Read @data.txt draft" in output)
                         output.clear()
-                        os.write(master, b"\x03")
+                        os.write(master, b"\x03\x03")
                         # Shell cancellation/settlement cannot await discovery.
                         wait(lambda: b"Shell finished" in output)
                         output.clear()
@@ -275,9 +275,11 @@ def exercise_file_discovery():
                             pump()
                         assert "Files ·".encode() not in output, "retired discovery reopened suggestions"
                         output.clear()
-                        os.write(master, b"\x03")
+                        # Stop stays latched after settlement. A harmless editor
+                        # key resets the guard before a separate clear intent.
+                        os.write(master, b"\x01\x03\x03")
                         wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
-                os.write(master, b"\x03")
+                os.write(master, b"\x04\x04")
                 end = time.monotonic() + 5
                 while child.poll() is None:
                     assert time.monotonic() < end, ("file-discovery terminal did not settle", output[-2500:])
@@ -380,7 +382,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"\x0f")
                     closed_active = True
                 if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
-                    assert "Ctrl-C cancels · Working · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
+                    assert "Ctrl-C twice stops · Working · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
                     os.write(master, b"Also check that the updated file has two lines.\r")
                     sent_steering = True
                 if sent_steering and not sent_second:
@@ -425,7 +427,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if sent_preparation and b"Prompt returned: preparation failed" in output[preparation_start:] and b"\x1b]7501;state=done:app=ion\x1b\\" in output[preparation_start:] and not sent_clone:
                     assert trace.read_bytes() == preparation_requests, "failed preparation reached the model"
                     # Clear the recovered literal; commands remain UI-only.
-                    os.write(master, b"\x03")
+                    os.write(master, b"\x03\x03")
                     snapshot = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True)
                     source_before_clone = json.loads(snapshot.stdout)["entries"]
                     os.write(master, b"/clone\r")
@@ -488,7 +490,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"\x18")
                     sent_copy = True
                 if sent_copy and b"Copied last assistant answer" in output and not sent_quit:
-                    os.write(master, b"\x03")
+                    os.write(master, b"\x04\x04")
                     sent_quit = True
                 if child.poll() is not None:
                     break
@@ -621,7 +623,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                         and b"Fullscreen TUI" in fullscreen_output
                         and not sent_fullscreen_quit
                     ):
-                        os.write(fullscreen_master, b"\x03")
+                        os.write(fullscreen_master, b"\x04\x04")
                         sent_fullscreen_quit = True
                     if fullscreen.poll() is not None:
                         break
@@ -781,13 +783,13 @@ def exercise_active_band():
                     with sqlite3.connect(f"file:{sessions[0]}?mode=ro", uri=True) as db:
                         completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
                     if completed == 1:
-                        os.write(master, b"\x03")
+                        os.write(master, b"\x04\x04")
                         quit_sent = True
                         quit_time = time.monotonic()
                 elif quit_sent and time.monotonic() - quit_time >= 0.1:
-                    # The UI can harvest the joined result after its first key.
-                    # Keep draining and finish the bounded idle-quit request.
-                    os.write(master, b"\x03")
+                    # Repeat only the same guarded exit intent while draining;
+                    # never cascade a stale Stop into clear or quit.
+                    os.write(master, b"\x04\x04")
                     quit_time = time.monotonic()
                 if child.poll() is not None:
                     break
@@ -898,19 +900,27 @@ def exercise_questions():
                             os.write(master, b" ")
                             wait(lambda: b"[x] Alpha" in plain(), "checked before cancel")
                         os.write(master, b"\x1b")
+                        wait(lambda: b"Cancel question? Esc again" in plain(), "question cancel confirmation")
+                        assert len(trace.read_text().splitlines()) == 1, "first Esc answered the question"
+                        assert not (workspace / "question-effect.txt").exists()
+                        os.write(master, b"\x1b")
                         wait(lambda: b"CANCEL_OBSERVED" in plain(), "cancelled batch continuation")
                     else:
                         if mode == "multi-stop":
                             os.write(master, b" ")
                             wait(lambda: b"[x] Alpha" in plain(), "checked before stop")
                         os.write(master, b"\x03")
-                        wait(lambda: b"Question closed" in plain(), "Ctrl-C stopped question Turn")
+                        wait(lambda: b"Stop work? Ctrl-C again" in plain(), "question stop confirmation")
+                        assert len(trace.read_text().splitlines()) == 1, "first Ctrl-C continued the question"
+                        assert not (workspace / "question-effect.txt").exists()
+                        os.write(master, b"\x03")
+                        wait(lambda: b"Question closed" in plain(), "Ctrl-C twice stopped question Turn")
                     if mode not in ("stop", "multi-stop"):
                         wait(lambda: b"state=done:app=ion" in output or b"state=idle:app=ion" in output, "settled program status")
-                        os.write(master, b"\x04")
+                        os.write(master, b"\x04\x04")
                     else:
                         time.sleep(0.3)
-                        os.write(master, b"\x04")
+                        os.write(master, b"\x04\x04")
                     end = time.monotonic() + 6
                     while child.poll() is None:
                         assert time.monotonic() < end, (mode, "terminal did not exit", bytes(output[-2500:]))

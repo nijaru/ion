@@ -250,7 +250,7 @@ for mode in ("inline", "fullscreen"):
                     segment_start = len(output)
                     # Compact successful stdout is intentionally folded. Select
                     # disclosure before asserting visible output, not command echo.
-                    os.write(master, b"\x03/settings expanded\r")
+                    os.write(master, b"\x03\x03/settings expanded\r")
                     step = "expanded"
                 if step == "expanded" and b"Tool output: expanded" in segment:
                     segment_start = len(output)
@@ -275,7 +275,7 @@ for mode in ("inline", "fullscreen"):
                     os.write(master, b"/export session.txt\r")
                     step = 7
                 if step == 7 and b"Transcript saved to" in output:
-                    os.write(master, b"\x03")
+                    os.write(master, b"\x04\x04")
                     step = 8
                 if child.poll() is not None:
                     break

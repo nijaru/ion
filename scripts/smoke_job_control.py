@@ -195,7 +195,7 @@ def exercise(mode):
             terminal.until(lambda: len(requests) == 2 and terminal.output[checkpoint:].count(DONE) == 2)
             assert requests[-1]["messages"][-1]["content"] == "follow X🦀", requests[-1]
             checkpoint = len(terminal.output)
-            terminal.send(b"\x04")
+            terminal.send(b"\x04\x04")
             terminal.until(lambda: PROMPT in terminal.output[checkpoint:])
             assert terminal.stacks == [[4], [8]] and not terminal.alternate
             terminal.send("exit\n")

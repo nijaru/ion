@@ -108,9 +108,9 @@ fn model_cycle_keys_and_rebinding_retain_the_editor_and_attachments() {
 }
 
 #[test]
-fn completion_consumed_keys_interrupt_composer_yank_affinity() {
+fn completion_navigation_interrupts_composer_yank_affinity() {
     let mut ui = Frontend {
-        keys: KeyBindings::parse(br#"{"tui.select.cancel":"alt+y"}"#).unwrap(),
+        keys: KeyBindings::parse(br#"{"tui.select.down":"alt+y"}"#).unwrap(),
         ..Frontend::default()
     };
     for text in ["older", "/he"] {
@@ -138,7 +138,10 @@ fn completion_consumed_keys_interrupt_composer_yank_affinity() {
         None,
         None,
     );
-    assert!(!ui.editor.completion.visible());
+    assert!(ui.editor.completion.active());
+    // Retire discovery without another key: the consumed navigation itself
+    // must have ended yank affinity, not a later dismissal shortcut.
+    ui.editor.completion.dismiss();
     ui.key(
         KeyEvent::new(KeyCode::Char('y'), Modifiers::ALT),
         None,
@@ -146,7 +149,7 @@ fn completion_consumed_keys_interrupt_composer_yank_affinity() {
     );
     assert_eq!(
         ui.editor.draft, "/he",
-        "dismissal is not a directly preceding yank"
+        "completion navigation is not a directly preceding yank"
     );
 }
 

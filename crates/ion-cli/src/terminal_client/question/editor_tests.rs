@@ -124,9 +124,9 @@ fn custom_editor_keeps_multiline_draft_and_editing_hints_visible() {
             (KeyAction::Submit, "answer"),
             (KeyAction::NewLine, "newline"),
             (KeyAction::External, "editor"),
-            (KeyAction::Cancel, "cancel"),
+            (KeyAction::Cancel, "twice cancels"),
             (KeyAction::QuestionCollapse, "hide"),
-            (KeyAction::Interrupt, "stops Turn"),
+            (KeyAction::Interrupt, "twice stops Turn"),
         ] {
             let hint = format!("{} {description}", keys.hint(action));
             assert!(

@@ -177,7 +177,8 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     os.write(master, b"/fork 2\r")
                     sent = True
                 if sent and b"Forked as" in output and program_ready(output) and not quit_sent:
-                    os.write(master, b"\x03\x03")
+                    # Clear the restored draft, then use a distinct quit shortcut.
+                    os.write(master, b"\x03\x03\x04\x04")
                     quit_sent = True
                 if child.poll() is not None:
                     break
@@ -220,7 +221,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     os.write(master, b"\r")
                     selected = True
                 if selected and b"Forked as" in output and program_ready(output) and not quit_sent:
-                    os.write(master, b"\x03")
+                    os.write(master, b"\x04\x04")
                     quit_sent = True
                 if child.poll() is not None:
                     break
@@ -293,7 +294,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                             assert requests[-1]["session_id"] == image_affinity, "context navigation changed logical transport affinity"
                         # Visible answer text can precede Host settlement.
                         # Explicit quit joins either state; Ctrl-C only stops active work.
-                        os.write(master, b"\x04")
+                        os.write(master, b"\x04\x04")
                         quit_sent = True
                     if child.poll() is not None:
                         break

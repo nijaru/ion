@@ -115,7 +115,7 @@ impl Builtin {
             .collect::<Vec<_>>()
             .join("\n");
         format!(
-            "Commands\n\n{groups}\n\nType / to discover commands; {} completes without executing.\n/help COMMAND shows usage; /help keys shows effective bindings and action IDs.\n{} sends · {} adds a line · {} stops work",
+            "Commands\n\n{groups}\n\nType / to discover commands; {} completes without executing.\n/help COMMAND shows usage; /help keys shows effective bindings and action IDs.\n{} sends · {} adds a line · {} twice stops work",
             keys.hint(crate::keybindings::KeyAction::Tab),
             keys.hint(crate::keybindings::KeyAction::Submit),
             keys.hint(crate::keybindings::KeyAction::NewLine),

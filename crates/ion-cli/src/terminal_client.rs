@@ -40,6 +40,7 @@ mod editor;
 mod editor_control;
 mod editor_recovery;
 mod file_discovery;
+mod gestures;
 mod interaction;
 mod mcp;
 mod navigation;
@@ -146,6 +147,7 @@ struct Frontend {
     presenter: block_presenter::BlockPresenter,
     view: block_presenter::ConversationView,
     editor: Editor,
+    gestures: gestures::Gestures,
     // Not editor drafts: no automatic restore or replay before reconciliation.
     unresolved_inputs: Vec<ion_app::UnresolvedInput<EditorDraft>>,
     status: String,
@@ -225,6 +227,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }
             ui.sync_question(questions.as_ref());
+            ui.gestures.reconcile_stop(runtime.stop_target().as_ref());
+            ui.reconcile_local_gestures();
             mcp::refresh(&runtime, &mut ui);
             ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
             program.blocked_refresh = ui.session_io.refresh_error.is_some();
@@ -250,7 +254,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             }
             let retry_paint = !painted;
             let readiness = runtime.completion_changes();
+            let gesture_deadline = ui.gestures.deadline();
             let event = tokio::select! {
+                _ = tokio::time::sleep_until(gesture_deadline.unwrap_or_else(tokio::time::Instant::now)), if gesture_deadline.is_some() => {
+                    ui.gestures.expire(tokio::time::Instant::now());
+                    continue;
+                },
                 _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
                 _ = readiness.changed(completion_revision) => {
                     completion_revision = readiness.revision();
@@ -332,25 +341,21 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             invalidate_resized_input(terminal, screen, &mut ui)?;
             match event? {
                 InputEvent::Key(key) => {
+                    if ui.begin_key(key) { continue; }
                     if ui.keys.matches(KeyAction::Suspend, key) {
                         suspend_terminal(terminal, screen, &mut ui, &mut program).await?;
                         poll_control = true;
                         continue;
                     }
-                    if ui.keys.matches(KeyAction::Interrupt, key)
-                        && (runtime.is_busy() || ActiveOperation::from_state(runtime.state()).is_some())
-                    {
-                        ui.editor.break_edit_focus();
-                        runtime.request_stop();
-                        poll_control = true;
+                    if let Some(confirmed) = ui.stop_key(key, runtime.stop_target()) {
+                        if confirmed {
+                            runtime.request_stop();
+                            poll_control = true;
+                        }
                         continue;
                     }
                     if ui.question_owns_input() {
-                        let action = ui
-                            .question
-                            .as_mut()
-                            .expect("question owns input")
-                            .key(key, &ui.keys);
+                        let action = ui.question_key(key);
                         apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen).await?;
                         poll_control = true;
                         continue;
@@ -412,6 +417,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     poll_control = true;
                 },
                 InputEvent::Paste(text) => {
+                    ui.gestures.reset();
                     if ui.question_owns_input() {
                         let action = ui
                             .question
@@ -425,6 +431,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     }
                 },
                 InputEvent::Rejected(error) => {
+                    ui.gestures.invalidate();
                     ui.editor.break_edit_focus();
                     ui.status = error.to_string();
                 },
@@ -436,7 +443,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     }
                     screen.note_resize();
                 },
-                InputEvent::Mouse(mouse) => ui.mouse(mouse.kind()),
+                InputEvent::Mouse(mouse) => {
+                    ui.gestures.reset();
+                    ui.mouse(mouse.kind());
+                },
                 InputEvent::ColorsChanged => {},
             }
         }
@@ -837,6 +847,7 @@ impl Frontend {
     }
 
     fn attach_image(&mut self, image: ImageSource) {
+        self.gestures.invalidate();
         self.editor.attach_image(image);
         self.status = format!(
             "{} image(s) attached to the next prompt",
@@ -917,6 +928,9 @@ impl Frontend {
         resources: Option<&Resources>,
         commands: Option<&ion_app::CommandCatalog>,
     ) -> Action {
+        if self.begin_key(key) {
+            return Action::None;
+        }
         if self.input_target() == interaction::InputTarget::Details {
             self.invalidate_interaction_paint();
             self.editor.break_edit_focus();
@@ -992,12 +1006,22 @@ impl Frontend {
             self.status = "Wait for clipboard paste, then send the prompt".into();
             return Action::None;
         }
-        if input == Some(KeyAction::Interrupt)
-            && let Some(stop) = self.clipboard_job.as_ref().map(|job| &job.stop)
-            && !stop.is_cancelled()
+        if matches!(input, Some(KeyAction::Interrupt | KeyAction::Cancel))
+            && let Some(job) = &self.clipboard_job
         {
-            stop.cancel();
-            self.status = "Cancelling input preparation…".into();
+            let target = gestures::Target::Clipboard(job.task.id());
+            if !job.stop.is_cancelled()
+                && self
+                    .gestures
+                    .confirm(target, key, tokio::time::Instant::now())
+            {
+                self.clipboard_job
+                    .as_ref()
+                    .expect("retained clipboard")
+                    .stop
+                    .cancel();
+                self.status = "Cancelling input preparation…".into();
+            }
             return Action::None;
         }
         if self.editor.undo_key(key, &self.keys) || self.editor.yank_keys(key, &self.keys) {
@@ -1009,15 +1033,49 @@ impl Frontend {
             return Action::None;
         }
         let action = match input {
-            Some(KeyAction::Interrupt) => {
-                if self.editor.draft.is_empty() {
+            Some(KeyAction::Interrupt | KeyAction::Cancel) => {
+                let empty = self.editor.draft.is_empty()
+                    && self.editor.images.is_empty()
+                    && self.editor.files.is_empty();
+                if empty && input == Some(KeyAction::Cancel) {
+                    return Action::None;
+                }
+                let target = if empty {
+                    gestures::Target::Exit
+                } else {
+                    gestures::Target::Clear(self.editor.baseline)
+                };
+                if !self
+                    .gestures
+                    .confirm(target, key, tokio::time::Instant::now())
+                {
+                    return Action::None;
+                }
+                if empty {
                     Action::Quit
                 } else {
-                    self.editor.clear_draft_text();
+                    self.editor.clear_draft();
+                    self.status = format!(
+                        "Draft cleared · {} restores text and attachments",
+                        self.keys.hint(KeyAction::Undo)
+                    );
                     Action::None
                 }
             }
-            Some(KeyAction::Exit) if self.editor.draft.is_empty() => Action::Quit,
+            Some(KeyAction::Exit)
+                if self.editor.draft.is_empty()
+                    && self.editor.images.is_empty()
+                    && self.editor.files.is_empty() =>
+            {
+                if self
+                    .gestures
+                    .confirm(gestures::Target::Exit, key, tokio::time::Instant::now())
+                {
+                    Action::Quit
+                } else {
+                    Action::None
+                }
+            }
             Some(KeyAction::Tab) => {
                 if !self.editor.completion.wants_files() {
                     self.insert("\t");
@@ -1364,6 +1422,9 @@ fn settlement_program_status(outcome: &ion_app::OperationOutcome) -> ProgramStat
 }
 
 fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {
+    if let Some(prompt) = ui.gestures.prompt() {
+        return Some(prompt.to_owned());
+    }
     let editor_error = (ui.input_target() == interaction::InputTarget::Composer)
         .then(|| ui.editor.error.map(|error| error.to_string()))
         .flatten();
@@ -1446,7 +1507,7 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
             format!("{controls} · {label}")
         } else {
             format!(
-                "{} cancels · {label} · {status}",
+                "{} twice stops · {label} · {status}",
                 ui.keys.hint(KeyAction::Interrupt)
             )
         });
@@ -1603,7 +1664,11 @@ fn modal_rows(
             ui.conversation.revision(),
             width,
         );
-    let controls = ui.details.as_ref().map(|view| view.controls(&ui.keys));
+    let controls = ui
+        .details
+        .as_ref()
+        .filter(|_| ui.gestures.prompt().is_none())
+        .map(|view| view.controls(&ui.keys));
     let status = visible_status(ui, operation);
     let status = if ui.question.is_some() {
         Some(status.map_or_else(

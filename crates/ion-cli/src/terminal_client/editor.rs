@@ -10,6 +10,7 @@ use ion_app::image_input::{ImageSource, LoadedImage};
 #[derive(Default)]
 pub(super) struct Editor {
     pub(super) draft: String,
+    pub(super) baseline: u64,
     pub(super) cursor: usize,
     pub(super) images: Vec<ImageSource>,
     pub(super) files: Vec<ion_app::prompt_files::TextFile>,

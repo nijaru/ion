@@ -98,7 +98,7 @@ class FileTerminal:
         self.wait(settled)
 
     def finish(self):
-        self.send(b"\x03")
+        self.send(b"\x04\x04")
         self.wait(lambda: self.snapshot()[1])
         assert self.snapshot()[2] == "0", self.snapshot()
 
