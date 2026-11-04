@@ -1,4 +1,5 @@
 //! Search captured Session fields, never their painted labels or live files.
+use ion_ai::{Content, Message};
 use ion_app::SessionSummary;
 
 pub(super) struct SessionSearch {
@@ -28,6 +29,39 @@ impl SessionSearch {
 
     pub fn named(&self) -> bool {
         !self.name.trim().is_empty()
+    }
+}
+
+/// A picker-local projection of complete readable message fields. Preparing it
+/// once avoids repeatedly normalizing long prompts during filtering and paint.
+/// Only plain text, tool names and public kind markers are indexed, not
+/// reasoning, image bytes, tool payloads or provider replay.
+pub(super) struct MessageSearch(Vec<String>);
+
+impl MessageSearch {
+    pub fn new(message: &Message, metadata: &str) -> Self {
+        let mut fields = vec![normalize_whitespace(&metadata.to_lowercase())];
+        fields.extend(message.content.iter().filter_map(|part| {
+            let text = match part {
+                Content::Text(text) => text.as_str(),
+                Content::ToolCall(call) => call.name.as_str(),
+                Content::ToolResult(result) => result.name.as_str(),
+                Content::Image(_) => "[image]",
+                Content::Thinking(_) => return None,
+            };
+            (!text.trim().is_empty()).then(|| normalize_whitespace(&text.to_lowercase()))
+        }));
+        if fields.len() == 1 {
+            fields.push("[no text]".into());
+        }
+        Self(fields)
+    }
+
+    pub fn matches(&self, query: &SessionQuery) -> bool {
+        query.0.iter().all(|token| {
+            let (Token::Word(text) | Token::Phrase(text)) = token;
+            self.0.iter().any(|field| field.contains(text))
+        })
     }
 }
 
@@ -121,4 +155,88 @@ fn fuzzy(query: &str, text: &str) -> bool {
         && digits.bytes().all(|ch| ch.is_ascii_digit())
         && letters.bytes().all(|ch| ch.is_ascii_alphabetic())
         && subsequence(letters.chars().chain(digits.chars()), text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ion_ai::{ProviderReplay, Role, ToolCall, ToolResult};
+    use serde_json::json;
+
+    #[test]
+    fn message_queries_match_complete_text_parts_and_metadata_without_name_fuzziness() {
+        let message = Message {
+            role: Role::User,
+            content: vec![
+                Content::Text(format!("{}\nRésumé TARGET_α", "heading ".repeat(40))),
+                Content::Text("across\r\n  lines and a literal \"quote".into()),
+                Content::Image(serde_json::from_value(json!({
+                    "mime_type": "image/png",
+                    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+                })).unwrap()),
+            ],
+            provider_replay: None,
+        };
+        let search = MessageSearch::new(&message, "Turn 17 ended completed");
+        for query in [
+            "résumé target_Α",
+            "target_α turn 17",
+            "image",
+            "\"across lines\" résumé",
+            "\"quote",
+            "",
+        ] {
+            assert!(search.matches(&SessionQuery::new(query)), "{query}");
+        }
+        for query in [
+            "absent",
+            "résumé absent",
+            "rsmtrgt",
+            "\"target_α across\"",
+            "ivborw0kggo",
+        ] {
+            assert!(!search.matches(&SessionQuery::new(query)), "{query}");
+        }
+    }
+
+    #[test]
+    fn message_search_does_not_index_reasoning_replay_or_tool_payloads() {
+        let message = Message {
+            role: Role::Assistant,
+            content: vec![
+                Content::Thinking("hidden_reasoning".into()),
+                Content::Text("Visible answer".into()),
+                Content::ToolCall(ToolCall {
+                    id: "call".into(),
+                    name: "visible_tool".into(),
+                    arguments: json!({"value": "hidden_argument"}),
+                    raw_arguments: None,
+                }),
+            ],
+            provider_replay: Some(ProviderReplay::new(
+                "fixture",
+                "thinking",
+                json!("opaque_replay"),
+            )),
+        };
+        let search = MessageSearch::new(&message, "entry 4 continue after");
+        assert!(search.matches(&SessionQuery::new("visible_tool answer entry 4")));
+        for query in ["hidden_reasoning", "hidden_argument", "opaque_replay"] {
+            assert!(!search.matches(&SessionQuery::new(query)), "{query}");
+        }
+        let result = Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ToolResult {
+                call_id: "call".into(),
+                name: "visible_tool".into(),
+                result: json!({"value": "hidden_result"}),
+                images: Vec::new(),
+                is_error: false,
+            })],
+            provider_replay: None,
+        };
+        let search = MessageSearch::new(&result, "entry 5 after tool group");
+        assert!(search.matches(&SessionQuery::new("visible_tool")));
+        assert!(!search.matches(&SessionQuery::new("hidden_result")));
+    }
 }

@@ -6,6 +6,7 @@ use ion_ai::Message;
 use ion_app::{SessionControl, SessionSummary};
 use ion_core::{ForkPoint, TurnEndReason, TurnSummary};
 
+use super::session_search::MessageSearch;
 use super::{
     EditorDraft, Frontend, picker::Picker, picker::PickerItem, picker::PickerValue,
     short_session_id,
@@ -75,9 +76,9 @@ fn prepare_tree(
     let items = points
         .into_iter()
         .rev()
-        .map(|point| PickerItem {
-            label: format!(
-                "{} entry {} · {} · {}",
+        .map(|point| {
+            let metadata = format!(
+                "{} entry {} · {}",
                 if point.selected_path {
                     "[path]"
                 } else {
@@ -91,10 +92,18 @@ fn prepare_tree(
                 } else {
                     "continue after"
                 },
-                plain(&crate::preview_input(&point.message))
-            ),
-            detail: Some("Changes model context only; workspace files remain current".into()),
-            value: PickerValue::Context(ContextPickerValue { expected, point }),
+            );
+            PickerItem {
+                label: format!(
+                    "{metadata} · {}",
+                    plain(&crate::preview_input(&point.message))
+                ),
+                detail: Some("Changes model context only; workspace files remain current".into()),
+                value: PickerValue::Context {
+                    search: MessageSearch::new(&point.message, &metadata),
+                    target: ContextPickerValue { expected, point },
+                },
+            }
         })
         .collect::<Vec<_>>();
     anyhow::ensure!(!items.is_empty(), "no messages to explore");
@@ -234,17 +243,19 @@ fn prepare_fork(
 fn fork_before_items(turns: Vec<TurnSummary>) -> Vec<PickerItem> {
     turns
         .into_iter()
-        .map(|item| PickerItem {
-            label: format!(
-                "Turn {}  {}",
-                item.turn,
-                plain(&crate::preview_input(&item.input))
-            ),
-            detail: None,
-            value: PickerValue::Fork(ForkPickerValue {
-                point: ForkPoint::BeforeTurn(item.turn),
-                restore: Some(item.input),
-            }),
+        .map(|item| {
+            let metadata = format!("Turn {}", item.turn);
+            PickerItem {
+                label: format!("{metadata}  {}", plain(&crate::preview_input(&item.input))),
+                detail: None,
+                value: PickerValue::Fork {
+                    search: MessageSearch::new(&item.input, &metadata),
+                    target: ForkPickerValue {
+                        point: ForkPoint::BeforeTurn(item.turn),
+                        restore: Some(item.input),
+                    },
+                },
+            }
         })
         .collect()
 }
@@ -254,18 +265,17 @@ fn fork_after_items(turns: Vec<TurnSummary>) -> Vec<PickerItem> {
         .into_iter()
         .filter_map(|item| {
             let end = item.end.as_ref()?;
+            let metadata = format!("Turn {}  ended {}", item.turn, turn_end_label(end));
             Some(PickerItem {
-                label: format!(
-                    "Turn {}  ended {}  {}",
-                    item.turn,
-                    turn_end_label(end),
-                    plain(&crate::preview_input(&item.input))
-                ),
+                label: format!("{metadata}  {}", plain(&crate::preview_input(&item.input))),
                 detail: None,
-                value: PickerValue::Fork(ForkPickerValue {
-                    point: ForkPoint::AfterTurn(item.turn),
-                    restore: None,
-                }),
+                value: PickerValue::Fork {
+                    search: MessageSearch::new(&item.input, &metadata),
+                    target: ForkPickerValue {
+                        point: ForkPoint::AfterTurn(item.turn),
+                        restore: None,
+                    },
+                },
             })
         })
         .collect()
@@ -450,6 +460,44 @@ mod tests {
             model,
             turns: 3,
             updated,
+        }
+    }
+
+    #[test]
+    fn fork_search_finds_full_multiline_inputs_instead_of_only_preview_labels() {
+        let mut source = turn(1, Some(TurnEndReason::Completed));
+        source.input = input(&format!(
+            "{}\nRésumé TARGET_α\nlast line",
+            "common heading ".repeat(16)
+        ));
+        let original = source.input.clone();
+        for items in [
+            fork_before_items(vec![source.clone()]),
+            fork_after_items(vec![source]),
+        ] {
+            let picker = super::super::picker::Picker {
+                title: "Fork fixture",
+                query: "résumé target_α".into(),
+                selected: 0,
+                items,
+            };
+            assert_eq!(
+                picker.matches(false, None),
+                vec![0],
+                "search must not stop at the first preview line"
+            );
+            assert!(
+                !picker.items[0].label.contains("TARGET_α"),
+                "compact preview remains bounded"
+            );
+            let PickerValue::Fork { target, .. } = &picker.items[0].value else {
+                panic!("expected a fork target");
+            };
+            match target.point {
+                ForkPoint::BeforeTurn(1) => assert_eq!(target.restore.as_ref(), Some(&original)),
+                ForkPoint::AfterTurn(1) => assert!(target.restore.is_none()),
+                _ => panic!("search changed the captured fork boundary"),
+            }
         }
     }
 

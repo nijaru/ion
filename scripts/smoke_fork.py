@@ -17,7 +17,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from terminal_style import program_ready
+from terminal_style import painted_text, program_ready
 
 
 root = Path(__file__).resolve().parent.parent
@@ -250,20 +250,21 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         picture = workspace / "wide.png"
         picture.write_bytes(b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 2001, 1, 8, 6, 0, 0, 0)) + png_chunk(b"IDAT", zlib.compress(b"\x00" + b"\xff\x00\x00\xff" * 2001)) + png_chunk(b"IEND", b""))
         subprocess.run([binary, "use", "smoke", "fork-model", "--endpoint", endpoint, "--wire", "openrouter-chat", "--images"], env=env, check=True, capture_output=True)
-        image_turn = ion("--image", "wide.png", "run", "Preserve image coordinates.")
+        image_prompt = "common heading " * 16 + "\nPreserve image coordinates."
+        image_turn = ion("--image", "wide.png", "run", image_prompt)
         image_session = image_turn.stderr.split("[session: ")[1].split("]")[0]
         original = requests[-1]["messages"][-1]["content"]
         assert [part["type"] for part in original] == ["text", "text", "image_url"]
         image_view = json.loads(ion("--session", image_session, "inspect").stdout)
         image_entry = next(index + 1 for index, entry in enumerate(image_view["entries"]) if entry["kind"] == "turn_started")
         image_affinity = requests[-1]["session_id"]
-        for command, notice, mode in ((command, notice, mode) for command, notice in ((b"/fork 1\r", b"Forked as"), (f"/tree {image_entry}\r".encode(), b"Context selected")) for mode in ("inline", "fullscreen")):
+        for command, notice, mode in ((command, notice, mode) for command, notice in ((b"/fork 1\r", b"Forked as"), (b"/tree\r", b"Context selected")) for mode in ("inline", "fullscreen")):
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
             child = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
             os.close(slave)
             output = bytearray()
-            fork_sent = submit_sent = quit_sent = False
+            fork_sent = search_sent = selected = submit_sent = quit_sent = False
             before = len(requests)
             deadline = time.monotonic() + 12
             try:
@@ -282,6 +283,20 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     if b"\xe2\x80\xba" in output and program_ready(output) and not fork_sent:
                         os.write(master, command)
                         fork_sent = True
+                    if command == b"/tree\r" and fork_sent and b"Explore context" in output and not search_sent:
+                        assert len(requests) == before, "opening context search dispatched model work"
+                        # Search metadata and text beyond both the first line and
+                        # the 120-character preview. Quotes identify the exact
+                        # source entry even after another branch restores it.
+                        query = f'"entry {image_entry} · edit before" preserve coordinates'
+                        os.write(master, query.encode())
+                        search_sent = True
+                    filtered = painted_text(output) if search_sent and not selected else ""
+                    if search_sent and query in filtered and "1 match(es)" in filtered and program_ready(output) and not selected:
+                        assert len(requests) == before, "filtering context search dispatched model work"
+                        os.write(master, b"\r")
+                        output.clear()
+                        selected = True
                     if fork_sent and notice in output and program_ready(output) and not submit_sent:
                         assert len(requests) == before, "fork dispatched restored input"
                         os.write(master, b"\r")
@@ -308,7 +323,9 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                 os.close(master)
         tree_view = json.loads(ion("--session", image_session, "inspect").stdout)
         assert tree_view["entries"][:len(image_view["entries"])] == image_view["entries"], "tree rewrote original facts"
-        assert len([entry for entry in tree_view["entries"] if entry["kind"] == "context_selected"]) == 2
+        selections = [entry["data"]["head_entry"] for entry in tree_view["entries"] if entry["kind"] == "context_selected"]
+        original_parent = max((entry for entry in image_view["context_path"] if entry < image_entry), default=0)
+        assert selections == [original_parent, original_parent], "search selected a different source boundary"
         # Export through the passive CLI after a real same-Session branch change.
         # A hidden branch must not survive inside HTML's source or media payload.
         selected = max(index + 1 for index, entry in enumerate(tree_view["entries"])

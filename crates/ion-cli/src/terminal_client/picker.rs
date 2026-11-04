@@ -21,7 +21,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use super::navigation::{ForkPickerValue, session_items};
-use super::session_search::{SessionQuery, SessionSearch};
+use super::session_search::{MessageSearch, SessionQuery, SessionSearch};
 
 pub(super) enum PickerValue {
     Session {
@@ -38,8 +38,14 @@ pub(super) enum PickerValue {
     CompletionDelivery(ion_core::CompletionDelivery),
     Task(super::tasks::TaskChoice),
     Mcp(super::mcp::McpChoice),
-    Fork(ForkPickerValue),
-    Context(super::navigation::ContextPickerValue),
+    Fork {
+        target: ForkPickerValue,
+        search: MessageSearch,
+    },
+    Context {
+        target: super::navigation::ContextPickerValue,
+        search: MessageSearch,
+    },
 }
 
 pub(super) struct PickerItem {
@@ -66,19 +72,26 @@ impl Picker {
 
     pub fn matches(&self, named_only: bool, models: Option<&[ModelRef]>) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
-        let mut sessions = None;
+        let mut terms = None;
         let matching: Vec<_> = self
             .items
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
-                let matching = if let PickerValue::Session { search, .. } = &item.value {
-                    (!named_only || search.named())
-                        && sessions
-                            .get_or_insert_with(|| SessionQuery::new(&self.query))
-                            .matches(search)
-                } else {
-                    !named_only && item.label.to_ascii_lowercase().contains(&query)
+                let matching = match &item.value {
+                    PickerValue::Session { search, .. } => {
+                        (!named_only || search.named())
+                            && terms
+                                .get_or_insert_with(|| SessionQuery::new(&self.query))
+                                .matches(search)
+                    }
+                    PickerValue::Fork { search, .. } | PickerValue::Context { search, .. } => {
+                        !named_only
+                            && search.matches(
+                                terms.get_or_insert_with(|| SessionQuery::new(&self.query)),
+                            )
+                    }
+                    _ => !named_only && item.label.to_ascii_lowercase().contains(&query),
                 };
                 matching.then_some(index)
             })

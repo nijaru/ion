@@ -241,14 +241,14 @@ pub(super) async fn apply_picker(
         return Ok(());
     }
     let result = match value {
-        PickerValue::Context(value) => {
-            if let Err(error) = super::navigation::apply_context(runtime, ui, value) {
+        PickerValue::Context { target, .. } => {
+            if let Err(error) = super::navigation::apply_context(runtime, ui, target) {
                 ui.status = format!("{error:#}");
             }
             return Ok(());
         }
-        PickerValue::Fork(value) => {
-            return match apply_fork(runtime, ui, value) {
+        PickerValue::Fork { target, .. } => {
+            return match apply_fork(runtime, ui, target) {
                 Ok(()) => Ok(()),
                 Err(error) => {
                     ui.status = format!("{error:#}");
