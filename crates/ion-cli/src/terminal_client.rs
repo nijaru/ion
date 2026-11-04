@@ -1007,13 +1007,12 @@ impl Frontend {
             return Action::None;
         }
         if matches!(input, Some(KeyAction::Interrupt | KeyAction::Cancel))
-            && let Some(job) = &self.clipboard_job
+            && let Some(task) = self.clipboard_cancel_target()
         {
-            let target = gestures::Target::Clipboard(job.task.id());
-            if !job.stop.is_cancelled()
-                && self
-                    .gestures
-                    .confirm(target, key, tokio::time::Instant::now())
+            let target = gestures::Target::Clipboard(task);
+            if self
+                .gestures
+                .activate(target, key, tokio::time::Instant::now())
             {
                 self.clipboard_job
                     .as_ref()
@@ -1494,6 +1493,21 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
             status.push_str(&hint);
         }
     }
+    if ui.clipboard_cancel_target().is_some() {
+        let controls = format!("{} cancels paste", ui.keys.hint(KeyAction::Interrupt));
+        if let Some(operation) = operation {
+            status = if status.is_empty() {
+                operation.label().into()
+            } else {
+                format!("{} · {status}", operation.label())
+            };
+        }
+        return Some(if status.is_empty() {
+            controls
+        } else {
+            format!("{controls} · {status}")
+        });
+    }
     if let Some(operation) = operation {
         let label = operation.label();
         return Some(if operation.is_cancelled() {
@@ -1507,7 +1521,7 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
             format!("{controls} · {label}")
         } else {
             format!(
-                "{} twice stops · {label} · {status}",
+                "{} stops · {label} · {status}",
                 ui.keys.hint(KeyAction::Interrupt)
             )
         });

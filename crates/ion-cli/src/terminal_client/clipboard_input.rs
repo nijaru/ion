@@ -17,7 +17,16 @@ pub(super) enum PreparedPaste {
 
 pub(super) struct ClipboardJob {
     pub(super) stop: CancellationToken,
-    pub(super) task: tokio::task::JoinHandle<Result<PreparedPaste>>,
+    pub(super) task: tokio::task::JoinHandle<Result<Option<PreparedPaste>>>,
+}
+
+impl Frontend {
+    pub(super) fn clipboard_cancel_target(&self) -> Option<tokio::task::Id> {
+        self.clipboard_job
+            .as_ref()
+            .filter(|_| self.input_target() == super::interaction::InputTarget::Composer)
+            .map(|job| job.task.id())
+    }
 }
 
 pub(super) fn start_clipboard_paste(ui: &mut Frontend, agent: &Arc<Agent>) {
@@ -32,7 +41,11 @@ pub(super) fn start_clipboard_paste(ui: &mut Frontend, agent: &Arc<Agent>) {
         stop,
         task: tokio::spawn(async move {
             let content = crate::clipboard_reader::read(&reader_stop).await?;
-            prepare_clipboard(agent.model(), agent.limits().image_input, content)
+            content
+                .map(|content| {
+                    prepare_clipboard(agent.model(), agent.limits().image_input, content)
+                })
+                .transpose()
         }),
     });
     ui.status = "Reading clipboard…".into();
@@ -51,14 +64,17 @@ pub(super) async fn finish_clipboard_paste(ui: &mut Frontend) -> Result<()> {
 
 pub(super) fn finish_joined_clipboard_paste(
     ui: &mut Frontend,
-    joined: std::result::Result<Result<PreparedPaste>, tokio::task::JoinError>,
+    joined: std::result::Result<Result<Option<PreparedPaste>>, tokio::task::JoinError>,
 ) -> Result<()> {
     let job = ui
         .clipboard_job
         .take()
         .context("no clipboard paste is pending")?;
     let content = joined.context("clipboard reader stopped")??;
-    anyhow::ensure!(!job.stop.is_cancelled(), "clipboard paste cancelled");
+    let Some(content) = content.filter(|_| !job.stop.is_cancelled()) else {
+        ui.status = "Paste cancelled".into();
+        return Ok(());
+    };
     if matches!(
         ui.status.as_str(),
         "Reading clipboard…" | "Wait for clipboard paste, then send the prompt"

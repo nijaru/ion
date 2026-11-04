@@ -382,7 +382,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"\x0f")
                     closed_active = True
                 if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
-                    assert "Ctrl-C twice stops · Working · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
+                    assert "Ctrl-C stops · Working · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
                     os.write(master, b"Also check that the updated file has two lines.\r")
                     sent_steering = True
                 if sent_steering and not sent_second:
@@ -910,11 +910,9 @@ def exercise_questions():
                             os.write(master, b" ")
                             wait(lambda: b"[x] Alpha" in plain(), "checked before stop")
                         os.write(master, b"\x03")
-                        wait(lambda: b"Stop work? Ctrl-C again" in plain(), "question stop confirmation")
-                        assert len(trace.read_text().splitlines()) == 1, "first Ctrl-C continued the question"
+                        wait(lambda: b"Question closed" in plain(), "one Ctrl-C stopped the whole question Turn")
+                        assert len(trace.read_text().splitlines()) == 1, "stopping continued the question"
                         assert not (workspace / "question-effect.txt").exists()
-                        os.write(master, b"\x03")
-                        wait(lambda: b"Question closed" in plain(), "Ctrl-C twice stopped question Turn")
                     if mode not in ("stop", "multi-stop"):
                         wait(lambda: b"state=done:app=ion" in output or b"state=idle:app=ion" in output, "settled program status")
                         os.write(master, b"\x04\x04")

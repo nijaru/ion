@@ -273,7 +273,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                         until(lambda: b"Type a custom answer" in output[checkpoint:])
                         until(lambda: all(hint in output[checkpoint:] for hint in (
                             b"Enter answer", b"Shift-Enter newline", b"Ctrl-G editor",
-                            b"Esc twice cancels", b"Ctrl-] hide", b"Ctrl-C twice stops Turn",
+                            b"Esc twice cancels", b"Ctrl-] hide", b"Ctrl-C stops Turn",
                         )))
                         assert len(requests) == 3, "showing editing hints answered the question"
                         os.write(master, "café 🦀".encode() + b"\x1b[D")

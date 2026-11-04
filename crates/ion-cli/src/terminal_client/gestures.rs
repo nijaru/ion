@@ -1,4 +1,4 @@
-//! Confirmation belongs to one action and target, never to a press-count ladder.
+//! A gesture belongs to one action and target, never to a press-count ladder.
 use ion_app::{QuestionRequestId, StopTarget};
 use ion_terminal::KeyEvent;
 use tokio::time::{Duration, Instant};
@@ -113,6 +113,28 @@ impl Gestures {
             .map(|pending| pending.prompt.as_str())
     }
 
+    pub(super) fn activate(&mut self, target: Target, key: KeyEvent, now: Instant) -> bool {
+        self.key(key, now);
+        if key.repeat
+            || self
+                .pending
+                .as_ref()
+                .is_some_and(|pending| pending.consumed)
+        {
+            return false;
+        }
+        // Consume before the caller starts the effect. Settlement must not
+        // turn further taps into permission to clear a draft or leave Ion.
+        self.pending = Some(Pending {
+            target,
+            key: crate::keybindings::key_label(key),
+            deadline: now + WINDOW,
+            consumed: true,
+            prompt: String::new(),
+        });
+        true
+    }
+
     pub(super) fn confirm(&mut self, target: Target, key: KeyEvent, now: Instant) -> bool {
         self.key(key, now);
         if key.repeat {
@@ -174,18 +196,20 @@ impl super::Frontend {
             && self.input_target() == super::interaction::InputTarget::Composer
             && !self.editor.completion.active()
             && !self.editor.completion.wants_files();
-        if !self
+        let interrupt = self
             .keys
-            .matches(crate::keybindings::KeyAction::Interrupt, key)
-            && !cancel_composer
-        {
+            .matches(crate::keybindings::KeyAction::Interrupt, key);
+        if (!interrupt && !cancel_composer) || self.clipboard_cancel_target().is_some() {
             return None;
         }
         self.editor.break_edit_focus();
-        Some(
+        Some(if interrupt {
             self.gestures
-                .confirm(Target::Stop(target), key, Instant::now()),
-        )
+                .activate(Target::Stop(target), key, Instant::now())
+        } else {
+            self.gestures
+                .confirm(Target::Stop(target), key, Instant::now())
+        })
     }
 
     pub(super) fn question_key(&mut self, key: KeyEvent) -> super::QuestionAction {

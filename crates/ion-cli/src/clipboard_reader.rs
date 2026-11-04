@@ -59,7 +59,11 @@ pub fn write_native() -> Result<()> {
     serde_json::to_writer(std::io::stdout().lock(), &result).context("write clipboard transfer")
 }
 
-pub async fn read(stop: &CancellationToken) -> Result<PasteContent> {
+/// `None` is cancellation; any started helper has been joined before return.
+pub async fn read(stop: &CancellationToken) -> Result<Option<PasteContent>> {
+    if stop.is_cancelled() {
+        return Ok(None);
+    }
     let mut command = Command::new(std::env::current_exe().context("locate clipboard helper")?);
     command.arg("__clipboard-read").env_clear();
     // The helper needs desktop connection/locale state, not model credentials
@@ -81,7 +85,9 @@ pub async fn read(stop: &CancellationToken) -> Result<PasteContent> {
             command.env(name, value);
         }
     }
-    ensure!(!stop.is_cancelled(), "clipboard read cancelled");
+    if stop.is_cancelled() {
+        return Ok(None);
+    }
     let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -96,7 +102,7 @@ async fn read_child(
     mut child: Child,
     stop: &CancellationToken,
     deadline: Duration,
-) -> Result<PasteContent> {
+) -> Result<Option<PasteContent>> {
     let result = {
         let transfer = async {
             let stdout = child
@@ -119,24 +125,27 @@ async fn read_child(
         };
         tokio::select! {
             biased;
-            _ = stop.cancelled() => Err(anyhow::anyhow!("clipboard read cancelled")),
+            _ = stop.cancelled() => Ok(None),
             result = timeout(deadline, transfer) => {
                 match result {
-                    Ok(result) => result,
+                    Ok(result) => result.map(Some),
                     Err(error) => Err(anyhow::Error::new(error).context("clipboard read timed out")),
                 }
             }
         }
     };
-    // Do not return a timeout/error while the native call is still alive.
+    // Cancellation, timeout and failure all join the owned helper. A failed
+    // kill/join remains an error even when the user requested cancellation.
     // kill_on_drop is only a panic/abort backstop, not normal settlement.
-    if result.is_err() {
+    if !matches!(&result, Ok(Some(_))) {
         let killed = child.start_kill();
         let joined = child.wait().await;
         killed.context("stop clipboard reader")?;
         joined.context("join stopped clipboard reader")?;
     }
-    let bytes = result?;
+    let Some(bytes) = result? else {
+        return Ok(None);
+    };
     // Image validation is bounded CPU work, not an uninterruptible native API.
     // Join it even when input cancellation arrives during decoding.
     tokio::task::spawn_blocking(move || {
@@ -146,6 +155,7 @@ async fn read_child(
     })
     .await
     .context("clipboard transfer decoder stopped")?
+    .map(Some)
 }
 
 #[cfg(all(test, unix))]
@@ -186,7 +196,7 @@ mod tests {
             .await;
             match result {
                 Ok(expected) => assert_eq!(
-                    serde_json::to_value(actual.unwrap()).unwrap(),
+                    serde_json::to_value(actual.unwrap().unwrap()).unwrap(),
                     serde_json::to_value(expected).unwrap()
                 ),
                 Err(error) => assert!(actual.unwrap_err().to_string().contains(&error)),
@@ -223,6 +233,9 @@ mod tests {
 
     #[tokio::test]
     async fn timeout_and_cancellation_reap_the_owned_helper() {
+        let stopped = CancellationToken::new();
+        stopped.cancel();
+        assert!(read(&stopped).await.unwrap().is_none());
         for cancelled in [false, true] {
             let child = shell("exec sleep 30");
             let pid = i32::try_from(child.id().unwrap()).unwrap();
@@ -235,15 +248,14 @@ mod tests {
             } else {
                 Duration::ZERO
             };
-            let error = timeout(Duration::from_secs(5), read_child(child, &stop, deadline))
+            let result = timeout(Duration::from_secs(5), read_child(child, &stop, deadline))
                 .await
-                .unwrap()
-                .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains(if cancelled { "cancelled" } else { "timed out" })
-            );
+                .unwrap();
+            if cancelled {
+                assert!(result.unwrap().is_none());
+            } else {
+                assert!(result.unwrap_err().to_string().contains("timed out"));
+            }
             // This is the directly owned helper (exec replaces sh), not a
             // claim that an arbitrary process tree is quiescent.
             assert!(

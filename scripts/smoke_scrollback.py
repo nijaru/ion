@@ -316,7 +316,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.4)
         # Identify both ends of one help publication, not the changing command
         # inventory between them (for example /tree before /fork).
-        head, tail = "CommandsSessions:/new/clone/", "Ctrl-Ctwicestopswork"
+        head, tail = "CommandsSessions:/new/clone/", "Ctrl-Cstopswork"
 
         def help_counts():
             text = "".join(tmux("capture-pane", "-p", "-t", "ion", "-S", "-").split())

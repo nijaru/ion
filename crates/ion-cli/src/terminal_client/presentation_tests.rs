@@ -606,7 +606,7 @@ async fn clipboard_exit_joins_cancelled_work_without_applying_input() {
             task: tokio::spawn(async move {
                 reader_stop.cancelled().await;
                 settled.send(()).unwrap();
-                Ok(PreparedPaste::Text("unadmitted paste".into()))
+                Ok(Some(PreparedPaste::Text("unadmitted paste".into())))
             }),
         }),
         ..Frontend::default()
@@ -618,15 +618,108 @@ async fn clipboard_exit_joins_cancelled_work_without_applying_input() {
 }
 
 #[tokio::test]
+async fn clipboard_cancel_is_immediate_without_applying_input_or_clearing_the_draft() {
+    for key in [
+        KeyEvent::new(KeyCode::Esc, Modifiers::NONE),
+        KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL),
+    ] {
+        let mut fixture = tests::Fixture::new();
+        fixture
+            .control
+            .compact(None, EditorDraft::at_end(String::new()))
+            .unwrap();
+        let target = fixture.control.stop_target().unwrap();
+        let stop = CancellationToken::new();
+        let reader_stop = stop.clone();
+        let mut ui = Frontend {
+            clipboard_job: Some(ClipboardJob {
+                stop: stop.clone(),
+                task: tokio::spawn(async move {
+                    reader_stop.cancelled().await;
+                    Ok(Some(PreparedPaste::Text("unadmitted paste".into())))
+                }),
+            }),
+            ..Frontend::default()
+        };
+        ui.insert("keep 🦀");
+        ui.editor.cursor = "keep ".len();
+        ui.attach_image(ImageSource::Path("retained.png".into()));
+        let repeat = KeyEvent {
+            repeat: true,
+            ..key
+        };
+        assert!(matches!(ui.key(repeat, None, None), Action::None));
+        assert!(!stop.is_cancelled());
+        // Mirror the real pump: foreground clipboard cancellation wins over
+        // stopping admitted work, even while a Turn is running.
+        assert_eq!(ui.stop_key(key, Some(target.clone())), None);
+        assert!(
+            visible_status(&ui, None)
+                .unwrap()
+                .starts_with("Ctrl-C cancels paste")
+        );
+        assert!(matches!(ui.key(key, None, None), Action::None));
+        assert!(
+            stop.is_cancelled(),
+            "one fresh press must cancel unadmitted clipboard acquisition"
+        );
+        assert!(ui.gestures.prompt().is_none());
+        finish_clipboard_paste(&mut ui).await.unwrap();
+        assert_eq!(ui.status, "Paste cancelled");
+        assert!(!fixture.control.state().stop_requested);
+        for extra in [key, repeat, key] {
+            assert_eq!(ui.stop_key(extra, Some(target.clone())), Some(false));
+            assert!(matches!(ui.key(extra, None, None), Action::None));
+        }
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("keep 🦀", "keep ".len())
+        );
+        assert_eq!(ui.editor.images.len(), 1);
+        fixture.control.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn clipboard_cancellation_keeps_worker_failures_observable() {
+    for panic in [false, true] {
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let mut ui = Frontend {
+            clipboard_job: Some(ClipboardJob {
+                stop,
+                task: tokio::spawn(async move {
+                    assert!(!panic, "clipboard worker panicked");
+                    Err(anyhow::anyhow!("clipboard helper join failed"))
+                }),
+            }),
+            ..Frontend::default()
+        };
+        ui.insert("retained 🦀");
+        let error = finish_clipboard_paste(&mut ui).await.unwrap_err();
+        assert!(
+            error.to_string().contains(if panic {
+                "clipboard reader stopped"
+            } else {
+                "clipboard helper join failed"
+            }),
+            "{error:#}"
+        );
+        assert_eq!(ui.editor.draft, "retained 🦀");
+        assert_ne!(ui.status, "Paste cancelled");
+    }
+}
+
+#[tokio::test]
 async fn completed_file_paste_clears_reader_status() {
     let mut ui = Frontend {
         status: "Reading clipboard…".into(),
         clipboard_job: Some(ClipboardJob {
             stop: CancellationToken::new(),
             task: tokio::spawn(async {
-                Ok(PreparedPaste::Files(vec![PathBuf::from(
+                Ok(Some(PreparedPaste::Files(vec![PathBuf::from(
                     "/tmp/path with spaces.txt",
-                )]))
+                )])))
             }),
         }),
         ..Frontend::default()

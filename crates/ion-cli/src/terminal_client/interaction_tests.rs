@@ -159,14 +159,61 @@ fn exit_is_guarded_but_forward_delete_and_confirmation_dismissal_are_not() {
 }
 
 #[tokio::test]
-async fn stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_or_exit() {
+async fn fresh_interrupt_stops_once_without_a_confirmation_or_clear_exit_cascade() {
+    for (keys, character) in [
+        (KeyBindings::default(), 'c'),
+        (
+            KeyBindings::parse(br#"{"app.interrupt":"ctrl+q"}"#).unwrap(),
+            'q',
+        ),
+    ] {
+        for (literal, cursor) in [("unsent 🦀", "unsent ".len()), ("", 0)] {
+            let mut fixture = tests::Fixture::new();
+            fixture
+                .control
+                .compact(None, EditorDraft::at_end(String::new()))
+                .unwrap();
+            let target = fixture.control.stop_target().unwrap();
+            let interrupt = KeyEvent::new(KeyCode::Char(character), Modifiers::CONTROL);
+            let repeat = KeyEvent {
+                repeat: true,
+                ..interrupt
+            };
+            let mut ui = Frontend {
+                keys: keys.clone(),
+                ..Frontend::default()
+            };
+            ui.insert(literal);
+            ui.editor.cursor = cursor;
+            assert_eq!(ui.stop_key(repeat, Some(target.clone())), Some(false));
+            assert!(ui.gestures.prompt().is_none());
+            assert_eq!(ui.stop_key(interrupt, Some(target.clone())), Some(true));
+            assert!(ui.gestures.prompt().is_none());
+            assert_eq!(ui.stop_key(interrupt, Some(target)), Some(false));
+            fixture.control.request_stop();
+            assert_eq!(ui.stop_key(interrupt, None), None);
+            for key in [interrupt, repeat, interrupt] {
+                assert!(matches!(ui.key(key, None, None), Action::None));
+            }
+            assert_eq!(
+                (ui.editor.draft.as_str(), ui.editor.cursor),
+                (literal, cursor)
+            );
+            assert!(ui.gestures.prompt().is_none());
+            fixture.control.shutdown().await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn escape_stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_or_exit() {
     let mut fixture = tests::Fixture::new();
     fixture
         .control
         .compact(None, EditorDraft::at_end(String::new()))
         .unwrap();
     let target = fixture.control.stop_target().unwrap();
-    let interrupt = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
+    let interrupt = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
     let mut ui = Frontend::default();
     ui.insert("unsent 🦀");
     assert_eq!(ui.stop_key(interrupt, Some(target.clone())), Some(false));
@@ -199,7 +246,7 @@ async fn stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_or_exit
         assert!(
             dock.rows
                 .iter()
-                .any(|row| row.to_string().contains("Stop work? Ctrl-C again"))
+                .any(|row| row.to_string().contains("Stop work? Esc again"))
         );
         assert!(dock.cursor.is_some());
     }
@@ -275,7 +322,7 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
                     assert!(
                         dock.rows
                             .iter()
-                            .any(|row| row.to_string().contains("Ctrl-C twice stops"))
+                            .any(|row| row.to_string().contains("Ctrl-C stops"))
                     );
                     assert!(dock.rows.len() + dock.body_rows <= height);
                     assert!(dock.cursor.is_some());

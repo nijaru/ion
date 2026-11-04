@@ -300,9 +300,7 @@ def exercise_launch(work, base_env, endpoint):
             pid = int((cwd / "task.pid").read_text())
             terminal.send("UNSENT_Ab🦀\x1b[H")
             terminal.output.clear()
-            terminal.send(b"\x03")
-            terminal.wait(lambda: "Stop work? Ctrl-C again" in terminal.text())
-            os.kill(pid, 0)  # First press cannot stop the real effect owner.
+            os.kill(pid, 0)
             assert len(requests) == before + 4 and not (cwd / "task.effect").exists()
             terminal.send(b"\x03")
             terminal.wait_ready(lambda: "Turn stopped" in terminal.text())

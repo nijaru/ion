@@ -31,7 +31,7 @@ macro_rules! actions {
 }
 
 actions! {
-    Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Press twice to stop work, clear draft or exit; dismiss picker once";
+    Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Stop work once; cancel foreground clipboard read; confirm draft clear or exit";
     Suspend, "app.suspend", GLOBAL, ["ctrl+z"], "Suspend the terminal job";
     Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward; press twice to exit an empty composer";
     Model, "app.model.select", COMPOSER, ["ctrl+l"], "Choose Session model";

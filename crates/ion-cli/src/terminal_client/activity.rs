@@ -61,14 +61,14 @@ impl ActiveOperation {
         let cancel = keys.hint(KeyAction::Interrupt);
         match self.kind {
             OperationKind::Coding => {
-                format!("{cancel} twice stops · {submit} steers · {follow_up} queues")
+                format!("{cancel} stops · {submit} steers · {follow_up} queues")
             }
             OperationKind::Shell | OperationKind::Compaction | OperationKind::McpReconnect => {
-                format!("{cancel} twice stops · {submit} queues")
+                format!("{cancel} stops · {submit} queues")
             }
-            OperationKind::Preparation => format!("{cancel} twice stops · {follow_up} queues"),
+            OperationKind::Preparation => format!("{cancel} stops · {follow_up} queues"),
             OperationKind::Binding => {
-                format!("{cancel} twice stops · input waits for Session refresh")
+                format!("{cancel} stops · input waits for Session refresh")
             }
         }
     }
