@@ -52,6 +52,8 @@ actions! {
     Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss once; press twice to stop work, clear draft or cancel question";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
+    SelectPageUp, "tui.select.pageUp", PICKER, ["pageup"], "Move up one visible picker page";
+    SelectPageDown, "tui.select.pageDown", PICKER, ["pagedown"], "Move down one visible picker page";
     Toggle, "tui.select.toggle", PICKER | CHOICE, ["space"], "Toggle a setting or multi-select option";
     QuestionCollapse, "tui.question.toggleCollapsed", CHOICE | TEXT, ["ctrl+]"], "Hide/reopen the pending question without releasing input";
     QuestionNext, "tui.question.next", CHOICE, ["tab", "right"], "Next question or batch review";
@@ -64,7 +66,7 @@ actions! {
     WordRight, "tui.editor.cursorWordRight", EDIT, ["ctrl+right", "alt+right", "alt+f"], "Move right by word";
     LineStart, "tui.editor.cursorLineStart", EDIT, ["home", "ctrl+a"], "Move to line start";
     LineEnd, "tui.editor.cursorLineEnd", EDIT, ["end", "ctrl+e"], "Move to line end";
-    Backspace, "tui.editor.deleteCharBackward", EDIT | PICKER, ["backspace"], "Delete previous grapheme (or picker query character)";
+    Backspace, "tui.editor.deleteCharBackward", EDIT | PICKER, ["backspace"], "Delete previous grapheme";
     Delete, "tui.editor.deleteCharForward", EDIT, ["delete"], "Delete next grapheme";
     KillWordBackward, "tui.editor.deleteWordBackward", EDIT, ["ctrl+w", "alt+backspace"], "Kill previous word";
     KillWordForward, "tui.editor.deleteWordForward", EDIT, ["alt+d", "alt+delete"], "Kill next word";

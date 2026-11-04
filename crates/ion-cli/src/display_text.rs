@@ -35,6 +35,25 @@ pub(super) fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
     push_prefixed(rows, "", "", text, width);
 }
 
+/// Keep each shortcut with its description when it fits. Only an oversized
+/// group wraps internally, so ordinary widths never split a key name.
+pub(super) fn pack_controls(controls: &str, width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    let mut line = String::new();
+    for hint in controls.split(" · ") {
+        if !line.is_empty() && line.width() + 3 + hint.width() > width {
+            push_wrapped(&mut rows, &line, width);
+            line.clear();
+        }
+        if !line.is_empty() {
+            line.push_str(" · ");
+        }
+        line.push_str(hint);
+    }
+    push_wrapped(&mut rows, &line, width);
+    rows
+}
+
 pub(super) fn push_styled(
     rows: &mut Vec<Line<'static>>,
     prefix: &str,

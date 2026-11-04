@@ -1213,7 +1213,7 @@ impl Frontend {
                     .expect("derived inspector focus")
                     .scroll_by(if down { 3 } else { -3 });
             }
-            interaction::InputTarget::Picker => self.pickers.move_selection(down),
+            interaction::InputTarget::Picker => self.pickers.move_selection(down, 1),
             interaction::InputTarget::Question => self.view.scroll(if down { 3 } else { -3 }),
             interaction::InputTarget::Composer => {
                 self.editor.break_edit_focus();

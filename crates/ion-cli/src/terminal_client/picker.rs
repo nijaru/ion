@@ -160,6 +160,8 @@ pub(super) struct Pickers {
     active: Option<Picker>,
     notice: Option<String>,
     visibility: Visibility<PickerCandidate>,
+    // Page extent survives selection-only movement, not edits or geometry changes.
+    viewport: Visibility<usize>,
     // A dismissed worker still owns its handle. New requests replace this single
     // waiting slot, never spawn another scan before the old one is joined.
     waiting: Option<PickerRequest>,
@@ -202,13 +204,17 @@ impl Pickers {
         Some(&picker.items[index].value)
     }
 
-    pub fn controls(&self, keys: &crate::keybindings::KeyBindings) -> Option<String> {
+    pub fn controls(&self, keys: &crate::keybindings::KeyBindings, width: usize) -> Vec<String> {
         use crate::keybindings::KeyAction;
-        let picker = self.active.as_ref()?;
+        let Some(picker) = self.active.as_ref() else {
+            return Vec::new();
+        };
         let mut controls = format!(
-            "{} select · {} closes",
+            "{} select · {} closes · {}/{} page",
             keys.hint(KeyAction::Confirm),
-            keys.hint(KeyAction::Cancel)
+            keys.hint(KeyAction::Cancel),
+            keys.hint(KeyAction::SelectPageUp),
+            keys.hint(KeyAction::SelectPageDown)
         );
         if picker
             .items
@@ -255,16 +261,19 @@ impl Pickers {
                 }
             ));
         }
-        Some(controls)
+        crate::display_text::pack_controls(&controls, width)
     }
 
     /// Render against the final budget, after composer and status allocation.
     pub fn rows(&mut self, width: usize, height: usize, theme: &Theme) -> PickerFrame {
-        self.visibility.invalidate();
+        self.invalidate_visibility();
         let Some(picker) = &self.active else {
             return PickerFrame {
                 rows: Vec::new(),
-                candidate: None,
+                paint: PickerPaint {
+                    candidate: None,
+                    viewport: self.viewport.prepare(0),
+                },
             };
         };
         let matching = self.matching();
@@ -356,6 +365,7 @@ impl Pickers {
         let visible = height.saturating_sub(rows.len());
         let start = picker.selected.saturating_sub(visible.saturating_sub(1));
         let mut selected_visible = false;
+        let list_top = rows.len();
         for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
             let selected = index == picker.selected;
             let marker = if selected { '›' } else { ' ' };
@@ -379,7 +389,11 @@ impl Pickers {
                 &picker.items[matching[picker.selected]],
             ))
         });
-        PickerFrame { rows, candidate }
+        let paint = PickerPaint {
+            candidate,
+            viewport: self.viewport.prepare(rows.len() - list_top),
+        };
+        PickerFrame { rows, paint }
     }
 
     fn loading_label(&self) -> &'static str {
@@ -409,7 +423,7 @@ impl Pickers {
     pub fn close(&mut self) {
         self.active = None;
         self.notice = None;
-        self.visibility.invalidate();
+        self.invalidate_visibility();
         self.waiting = None;
         self.files = None;
         self.sessions = None;
@@ -492,10 +506,12 @@ impl Pickers {
 
     pub fn invalidate_visibility(&mut self) {
         self.visibility.invalidate();
+        self.viewport.invalidate();
     }
 
-    pub fn observe_paint(&mut self, candidate: Option<Prepared<PickerCandidate>>) {
-        if let Some(candidate) = candidate {
+    pub fn observe_paint(&mut self, paint: PickerPaint) {
+        self.viewport.observe(paint.viewport);
+        if let Some(candidate) = paint.candidate {
             self.visibility.observe(candidate);
         } else {
             self.visibility.invalidate();
@@ -596,7 +612,7 @@ impl Pickers {
                             .saturating_sub(1),
                     );
                 }
-                self.visibility.invalidate();
+                self.invalidate_visibility();
                 if empty && matches!(request.browser, SessionBrowser::Active(_)) {
                     self.close();
                     Some("No saved Sessions for this working directory".into())
@@ -640,17 +656,20 @@ impl Pickers {
             .query
             .extend(text.chars().filter(|ch| !ch.is_control()));
         picker.selected = 0;
-        self.visibility.invalidate();
+        self.invalidate_visibility();
         true
     }
 
-    pub fn move_selection(&mut self, down: bool) {
+    pub fn move_selection(&mut self, down: bool, steps: usize) {
         let matching = self.matching();
         if let Some(picker) = &mut self.active {
             picker.selected = if down {
-                (picker.selected + 1).min(matching.len().saturating_sub(1))
+                picker
+                    .selected
+                    .saturating_add(steps)
+                    .min(matching.len().saturating_sub(1))
             } else {
-                picker.selected.saturating_sub(1)
+                picker.selected.saturating_sub(steps)
             };
         }
         self.visibility.invalidate();
@@ -679,7 +698,7 @@ impl Pickers {
                         PickerValue::Model(model) if Some(model) == selected.as_ref())
                     })
                     .unwrap_or(0);
-                self.visibility.invalidate();
+                self.invalidate_visibility();
                 return None;
             }
         }
@@ -710,7 +729,7 @@ impl Pickers {
             picker.selected = selected
                 .and_then(|selected| matching.iter().position(|index| *index == selected))
                 .unwrap_or(0);
-            self.visibility.invalidate();
+            self.invalidate_visibility();
             return None;
         }
         let loading = self.loading();
@@ -719,14 +738,21 @@ impl Pickers {
         match action {
             Some(KeyAction::Cancel | KeyAction::Interrupt) => self.close(),
             Some(KeyAction::SelectUp | KeyAction::SelectDown) => {
-                self.move_selection(action == Some(KeyAction::SelectDown));
+                self.move_selection(action == Some(KeyAction::SelectDown), 1);
+            }
+            Some(KeyAction::SelectPageUp | KeyAction::SelectPageDown) => {
+                if let Some(&steps) = self.viewport.painted()
+                    && steps > 0
+                {
+                    self.move_selection(action == Some(KeyAction::SelectPageDown), steps);
+                }
             }
             Some(KeyAction::Backspace) => {
                 picker
                     .query
                     .truncate(previous_grapheme(&picker.query, picker.query.len()));
                 picker.selected = 0;
-                self.visibility.invalidate();
+                self.invalidate_visibility();
             }
             Some(KeyAction::Confirm | KeyAction::Toggle)
                 if !loading
@@ -753,7 +779,7 @@ impl Pickers {
                         _ => None,
                     };
                     if setting.is_some() {
-                        self.visibility.invalidate();
+                        self.invalidate_visibility();
                         return setting;
                     }
                 }
@@ -767,7 +793,7 @@ impl Pickers {
                 if let Some(ch) = keybindings::printable(key) {
                     picker.query.push(ch);
                     picker.selected = 0;
-                    self.visibility.invalidate();
+                    self.invalidate_visibility();
                 }
             }
             _ => {}
@@ -778,7 +804,12 @@ impl Pickers {
 
 pub(super) struct PickerFrame {
     pub rows: Vec<Line<'static>>,
-    pub candidate: Option<Prepared<PickerCandidate>>,
+    pub paint: PickerPaint,
+}
+
+pub(super) struct PickerPaint {
+    candidate: Option<Prepared<PickerCandidate>>,
+    viewport: Prepared<usize>,
 }
 
 /// The exact retained typed choice, not a filtered display ordinal or provider
@@ -802,7 +833,7 @@ impl Pickers {
         theme: &Theme,
     ) -> Vec<Line<'static>> {
         let frame = self.rows(width, height, theme);
-        self.observe_paint(frame.candidate);
+        self.observe_paint(frame.paint);
         frame.rows
     }
 }
@@ -953,6 +984,88 @@ mod tests {
             pickers
                 .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn pages_use_painted_list_rows_without_reusing_confirmation_authority() {
+        let labels = (0..16)
+            .map(|index| format!("choice {index}"))
+            .collect::<Vec<_>>();
+        let labels = labels.iter().map(String::as_str).collect::<Vec<_>>();
+        let mut pickers = open_labels(&labels);
+        let keys = KeyBindings::default();
+        let page_down = KeyEvent::new(KeyCode::PageDown, Modifiers::NONE);
+        let page_up = KeyEvent::new(KeyCode::PageUp, Modifiers::NONE);
+        let confirm = KeyEvent::new(KeyCode::Enter, Modifiers::NONE);
+        pickers.painted_rows(80, 5, &Theme::default()); // Title plus four choices.
+        pickers.key(page_down, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 4);
+        pickers.key(page_down, &keys); // Repeat before repaint uses the same page size.
+        assert_eq!(pickers.active().unwrap().selected, 8);
+        assert!(pickers.key(confirm, &keys).is_none());
+        pickers.key(page_up, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 4);
+        pickers.key(page_up, &keys);
+        pickers.key(page_up, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 0);
+        for _ in 0..10 {
+            pickers.key(page_down, &keys);
+        }
+        assert_eq!(pickers.active().unwrap().selected, 15);
+        pickers.key(page_up, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 11);
+        assert!(pickers.key(confirm, &keys).is_none());
+        pickers.painted_rows(80, 3, &Theme::default()); // Resize: only two choices fit.
+        pickers.key(page_up, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 9);
+        assert!(pickers.key(confirm, &keys).is_none());
+        pickers.painted_rows(80, 3, &Theme::default());
+        assert!(pickers.key(confirm, &keys).is_some());
+    }
+
+    #[test]
+    fn pages_respect_filtered_metadata_and_only_published_geometry() {
+        let mut pickers =
+            open_labels(&["kept one", "other", "kept two", "kept three", "kept four"]);
+        let keys =
+            KeyBindings::parse(br#"{"tui.select.pageUp":"ctrl+b","tui.select.pageDown":"ctrl+f"}"#)
+                .unwrap();
+        let down = KeyEvent::new(KeyCode::Char('f'), Modifiers::CONTROL);
+        let up = KeyEvent::new(KeyCode::Char('b'), Modifiers::CONTROL);
+        pickers.insert("kept");
+        pickers.active.as_mut().unwrap().items[0].detail = Some("detail one\ndetail two".into());
+        pickers.painted_rows(80, 5, &Theme::default()); // Title, two detail rows, two choices.
+        pickers.key(down, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 2); // Filtered ordinal, not item index.
+        assert!(
+            matches!(pickers.selected_value(), Some(PickerValue::Login(value)) if value == "kept three")
+        );
+        pickers.key(up, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 0);
+
+        let stale = pickers.rows(80, 5, &Theme::default()).paint;
+        pickers.key(down, &keys); // Preparation alone grants no page extent.
+        assert_eq!(pickers.active().unwrap().selected, 0);
+        let current = pickers.rows(80, 4, &Theme::default()).paint; // One choice.
+        pickers.observe_paint(current);
+        pickers.key(down, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 1);
+        pickers.observe_paint(stale); // An older frame physically overwrote the new one.
+        pickers.key(down, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 1);
+
+        pickers.insert("no matches");
+        pickers.painted_rows(80, 5, &Theme::default());
+        pickers.key(down, &keys);
+        assert_eq!(pickers.active().unwrap().selected, 0);
+        assert!(pickers.selected_value().is_none());
+
+        let rows = pickers.controls(&keys, 40);
+        assert!(rows.join(" ").contains("Ctrl-B/Ctrl-F page"));
+        assert!(
+            rows.iter()
+                .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 40)
         );
     }
 

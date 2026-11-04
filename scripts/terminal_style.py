@@ -12,12 +12,13 @@ def program_ready(output):
     ) is not None
 
 
-def painted_text(output):
+def painted_text(output, height=None):
     """Observe Ion's completed full-row paints, not a general VT screen.
 
     Row painting uses column-one CUP/EL; a nonzero-column caret placement
     finishes the paint. Keep earlier rows until that boundary so a partial
-    clear cannot masquerade as completed Session recovery.
+    clear cannot masquerade as completed Session recovery. An optional height
+    excludes recorded rows outside the current viewport after a resize.
     """
     caret = re.compile(rb"\x1b\[[0-9]+;([0-9]+)H")
     end = max((match.end() for match in caret.finditer(output)
@@ -30,7 +31,7 @@ def painted_text(output):
         text = output[update.end():stop]
         text = re.sub(rb"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", b"", text)
         rows[int(update[1])] = CSI.sub(b"", text).decode("utf-8", errors="replace")
-    return "\n".join(rows[row] for row in sorted(rows))
+    return "\n".join(rows[row] for row in sorted(rows) if height is None or row <= height)
 
 
 def foreground_after(parameters, foreground):

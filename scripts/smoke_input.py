@@ -397,6 +397,8 @@ def exercise_keybindings(work, base_env, endpoint):
             "tui.select.toggleScope": "ctrl+f",
             "app.session.toggleNamedFilter": "alt+n",
         }
+        if mode == "fullscreen":
+            keys.update({"tui.select.pageUp": "ctrl+b", "tui.select.pageDown": "ctrl+g"})
         config.write_text(json.dumps(keys))
         (cwd / "named-file.txt").touch()
         pid = None
@@ -404,20 +406,58 @@ def exercise_keybindings(work, base_env, endpoint):
         try:
             terminal.wait_ready(lambda: "›" in terminal.text())
             terminal.output.clear()
-            terminal.send(b"DRAFT_Ab\x0c")  # Old Ctrl-L no longer opens a picker.
+            terminal.send(b"DRAFT_Ab\x0c\x1b[D")  # Old Ctrl-L no longer opens a picker; retain a mid-line caret.
             terminal.paint()
             assert "Choose model" not in terminal.text()
             terminal.send(b"\x1bm")
             terminal.wait(lambda: "Choose model" in terminal.text())
             terminal.paint()
+
+            picker_height = 30
+
+            def model_choices():
+                text = painted_text(terminal.lifecycle_output, height=picker_height)
+                if "Choose model" not in text:
+                    return []
+                return re.findall(r"^(› |  )(\S+/\S+)", text.rsplit("Choose model", 1)[1], re.MULTILINE)
+
+            catalog = [identity for _, identity in model_choices()]
+            assert len(catalog) > 1, catalog
+            primary = "Alt-Enter select · Alt-X closes"
+            hint = "Ctrl-B/Ctrl-G page" if mode == "fullscreen" else "PageUp/PageDown page"
+            if mode == "fullscreen":
+                # This fixture answers CPR from a fixed primary-screen origin;
+                # real inline reflow needs native terminal qualification.
+                terminal.output.clear()
+                picker_height = 12
+                terminal.resize(12, 40)
+                terminal.wait(lambda: primary in painted_text(terminal.output).splitlines()
+                              and hint in painted_text(terminal.output) and model_choices())
+                assert len(model_choices()) < len(catalog), "fixture must exercise a scrolling list"
+            else:
+                assert hint in painted_text(terminal.output)
+            for upward in (True, False):
+                visible = model_choices()
+                selected = next(identity for marker, identity in visible if marker == "› ")
+                start = catalog.index(selected)
+                expected = max(0, start - len(visible)) if upward else min(len(catalog) - 1, start + len(visible))
+                assert expected != start, "fixture must exercise page movement rather than a bound"
+                terminal.output.clear()
+                chord = (b"\x02" if upward else b"\x07") if mode == "fullscreen" else (b"\x1b[5~" if upward else b"\x1b[6~")
+                terminal.send(chord)
+                terminal.wait(lambda: any(marker == "› " and identity == catalog[expected]
+                                         for marker, identity in model_choices()))
+                assert len(requests) == before, "paging a picker admitted model work"
             terminal.send(b"\r\x1b")  # Old confirm/cancel are disabled in this context.
             terminal.paint()
             terminal.send("smoke")  # If either old shortcut closed the picker this corrupts the independently observed prompt.
             terminal.send(b"\x1bx")
             terminal.paint()
-            terminal.send(b"\x13")
+            if mode == "fullscreen":
+                terminal.resize(30, 100)
+            terminal.send(b"MID_\x13")
             terminal.wait(lambda: len(requests) == before + 1 and b"state=done" in terminal.output)
-            assert user_text(requests[-1]) == "DRAFT_Ab", requests[-1]
+            assert user_text(requests[-1]) == "DRAFT_AMID_b", requests[-1]
             terminal.output.clear()
             terminal.send(b"named-\x14")
             terminal.wait(lambda: "Files ·" in terminal.text() and "named-file.txt" in terminal.text())

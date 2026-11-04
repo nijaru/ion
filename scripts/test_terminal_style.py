@@ -44,6 +44,8 @@ class PaintedRowsTest(unittest.TestCase):
         update = (b"\x1b[2;1H\x1b[2K\x1b[2;1H\x1b[38;5;4m" + "draft 🦀".encode()
                   + b"\x1b[0m\x1b[20;7H\x1b]7501;state=error:app=ion\x1b\\")
         self.assertEqual(painted_text(first + update), "draft 🦀\nkeep")
+        self.assertEqual(painted_text(first + update, height=2), "draft 🦀")
+        self.assertEqual(painted_text(first + update, height=1), "")
 
 
 class LifecycleTest(unittest.TestCase):

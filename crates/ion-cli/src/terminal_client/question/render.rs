@@ -389,22 +389,7 @@ impl QuestionModal {
             keys.hint(KeyAction::QuestionCollapse),
             keys.hint(KeyAction::Interrupt)
         );
-        let mut rows = Vec::new();
-        let mut line = String::new();
-        // Keep each shortcut with its description when it fits, rather than
-        // clipping the controls or splitting a key name across ordinary widths.
-        for hint in controls.split(" · ") {
-            if !line.is_empty() && line.width() + 3 + hint.width() > width {
-                push_wrapped(&mut rows, &line, width);
-                line.clear();
-            }
-            if !line.is_empty() {
-                line.push_str(" · ");
-            }
-            line.push_str(hint);
-        }
-        push_wrapped(&mut rows, &line, width);
-        rows
+        crate::display_text::pack_controls(&controls, width)
     }
 }
 

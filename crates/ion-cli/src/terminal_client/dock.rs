@@ -4,7 +4,7 @@ use ratatui::text::Line;
 
 use super::interaction::InputTarget;
 use super::paint::Prepared;
-use super::picker::PickerCandidate;
+use super::picker::PickerPaint;
 use super::question::QuestionTarget;
 use super::{ActiveOperation, Frontend, orientation, visible_status};
 use crate::presentation_style::Role;
@@ -22,7 +22,7 @@ enum DockCandidate {
         completion: CompletionFrame,
         width: usize,
     },
-    Picker(Option<Prepared<PickerCandidate>>),
+    Picker(PickerPaint),
     Question {
         candidate: Option<Prepared<QuestionTarget>>,
         editor_width: Option<usize>,
@@ -275,7 +275,7 @@ impl Dock {
         );
         let confirming = ui.gestures.prompt().is_some();
         let reserve = usize::from(!confirming && height > query.lines.len());
-        let controls = ui.pickers.controls(&ui.keys);
+        let controls = ui.pickers.controls(&ui.keys, width);
         let status = visible_status(ui, operation);
         let metadata_budget = height.saturating_sub(query.lines.len() + reserve);
         let metadata: Vec<_> = if confirming {
@@ -318,7 +318,7 @@ impl Dock {
             body_rows: height.saturating_sub(rows.len()),
             rows,
             cursor,
-            paint: DockPaint::new(ui, width, height, DockCandidate::Picker(frame.candidate)),
+            paint: DockPaint::new(ui, width, height, DockCandidate::Picker(frame.paint)),
         }
     }
 }
