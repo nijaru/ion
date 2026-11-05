@@ -128,6 +128,85 @@ fn unseen_or_clipped_choices_do_not_answer() {
 }
 
 #[test]
+fn held_confirmation_cannot_choose_or_submit_a_repainted_question_batch() {
+    for (keys, confirm) in [
+        (KeyBindings::default(), enter()),
+        (
+            KeyBindings::parse(br#"{"tui.select.confirm":"ctrl+q"}"#).unwrap(),
+            KeyEvent::new(KeyCode::Char('q'), Modifiers::CONTROL),
+        ),
+    ] {
+        let mut modal = modal();
+        let repeat = KeyEvent {
+            repeat: true,
+            ..confirm
+        };
+        assert!(matches!(
+            press(&mut modal, repeat, &keys),
+            QuestionAction::None
+        ));
+        assert!(answered(&modal).is_empty(), "a held key chose an answer");
+        assert!(matches!(
+            press(&mut modal, confirm, &keys),
+            QuestionAction::None
+        ));
+        for _ in 0..3 {
+            assert!(matches!(
+                press(&mut modal, repeat, &keys),
+                QuestionAction::None
+            ));
+        }
+        assert_eq!(answered(&modal), vec![QuestionAnswer::Option { index: 0 }]);
+        assert_eq!(modal.index, 1);
+        assert!(matches!(
+            press(&mut modal, confirm, &keys),
+            QuestionAction::None
+        ));
+        assert!(matches!(modal.page, Page::Review));
+        for _ in 0..3 {
+            assert!(matches!(
+                press(&mut modal, repeat, &keys),
+                QuestionAction::None
+            ));
+        }
+        assert!(
+            matches!(press(&mut modal, confirm, &keys), QuestionAction::Answer(_, answers)
+            if answers == vec![QuestionAnswer::Option { index: 0 }; 2])
+        );
+    }
+}
+
+#[test]
+fn held_question_toggles_do_not_flip_checkboxes_or_reopen_hidden_input() {
+    let keys = KeyBindings::default();
+    let mut modal = modal();
+    modal.questions[0].multi_select = true;
+    for key in [
+        KeyEvent::new(KeyCode::Char(' '), Modifiers::NONE),
+        KeyEvent::new(KeyCode::Char(']'), Modifiers::CONTROL),
+    ] {
+        let repeat = KeyEvent {
+            repeat: true,
+            ..key
+        };
+        press(&mut modal, repeat, &keys);
+        assert!(modal.draft().checked.is_empty());
+        assert!(!modal.collapsed);
+        press(&mut modal, key, &keys);
+        let checked = modal.draft().checked.clone();
+        let collapsed = modal.collapsed;
+        for _ in 0..3 {
+            press(&mut modal, repeat, &keys);
+            assert_eq!(modal.draft().checked, checked);
+            assert_eq!(modal.collapsed, collapsed);
+        }
+        press(&mut modal, key, &keys);
+        assert!(modal.draft().checked.is_empty());
+        assert!(!modal.collapsed);
+    }
+}
+
+#[test]
 fn a_batch_can_revise_an_earlier_answer_before_one_final_submission() {
     let keys = KeyBindings::default();
     let mut modal = modal();

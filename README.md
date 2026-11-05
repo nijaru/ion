@@ -40,7 +40,7 @@ Run `ion --help` and `ion COMMAND --help` for complete supported options. The cu
 
 Terminal chat temporarily enables grapheme clustering (mode 2027) when the terminal reports it as supported and currently off, and restores the prior setting when yielding the terminal. Without reported support, rendering stays best-effort; complex emoji alignment depends on the terminal and its Unicode width tables.
 
-Ctrl-C stops running work immediately, including unanswered questions. A pending clipboard read in the composer is cancelled first. Esc dismisses local UI; stopping via Esc, clearing a draft, cancelling a question with Esc, and quitting with a shortcut ask for confirmation. Reported key repeats cannot confirm or start another cancellation, while ordinary held-key editing still repeats. Legacy terminals cannot distinguish auto-repeat from another press.
+Ctrl-C stops running work immediately, including unanswered questions. A pending clipboard read in the composer is cancelled first. Esc dismisses local UI; stopping via Esc, clearing a draft, cancelling a question with Esc, and quitting with a shortcut ask for confirmation. Reported key repeats cannot confirm, choose answers, toggle question controls, open a question editor, or start another cancellation; ordinary held-key editing and navigation still repeat. Legacy terminals cannot distinguish auto-repeat from another press.
 
 The coding recipe runs native commands **with your host permissions**. Tool selection/read-only flags are model loadout controls, not a sandbox. Cancellation does not undo filesystem effects; interrupted effects may have unknown outcomes and are not blindly replayed.
 

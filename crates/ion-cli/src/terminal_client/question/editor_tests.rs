@@ -23,6 +23,60 @@ fn custom(source: &str, cursor: usize) -> QuestionModal {
 }
 
 #[test]
+fn custom_answer_activation_requires_a_press_but_text_editing_still_repeats() {
+    let keys = KeyBindings::default();
+    let mut modal = custom("α🦀", "α".len());
+    for key in [
+        enter(),
+        KeyEvent::new(KeyCode::Char('g'), Modifiers::CONTROL),
+    ] {
+        assert!(matches!(
+            press(
+                &mut modal,
+                KeyEvent {
+                    repeat: true,
+                    ..key
+                },
+                &keys
+            ),
+            QuestionAction::None
+        ));
+        assert_eq!(
+            (modal.draft().text.text.as_str(), modal.draft().text.cursor),
+            ("α🦀", "α".len())
+        );
+    }
+    for key in [
+        KeyEvent::new(KeyCode::Char('x'), Modifiers::NONE),
+        KeyEvent::new(KeyCode::Backspace, Modifiers::NONE),
+        KeyEvent::new(KeyCode::Right, Modifiers::NONE),
+        KeyEvent::new(KeyCode::Left, Modifiers::NONE),
+        KeyEvent::new(KeyCode::Enter, Modifiers::SHIFT),
+        KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+    ] {
+        assert!(matches!(
+            press(
+                &mut modal,
+                KeyEvent {
+                    repeat: true,
+                    ..key
+                },
+                &keys
+            ),
+            QuestionAction::None
+        ));
+    }
+    assert_eq!(
+        (modal.draft().text.text.as_str(), modal.draft().text.cursor),
+        ("α\n\t🦀", "α\n\t".len())
+    );
+    assert!(
+        matches!(press(&mut modal, enter(), &keys), QuestionAction::Answer(_, answers)
+        if answers == vec![QuestionAnswer::Text { text: "α\n\t🦀".into() }])
+    );
+}
+
+#[test]
 fn mixed_line_endings_custom_paste_retains_breaks() {
     let mut modal = custom("", 0);
     modal.paste("first α\rsecond 👩‍💻\r\n\tthird e\u{301}\nlast 終\r\0\u{7}");

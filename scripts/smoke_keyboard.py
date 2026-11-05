@@ -266,6 +266,12 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                         drain()
                         release_question.set()
                         until(lambda: b"Which features?" in output and terminal.alternate == (mode == "fullscreen"))
+                        checkpoint = len(output)
+                        os.write(master, b"\x1b[93;5:2u")  # A held hide shortcut is not a new toggle.
+                        drain(0.25)
+                        assert b"Question hidden" not in output[checkpoint:], "a key repeat hid the question"
+                        os.write(master, b"\x1b[13;1:2u")  # Nor may it check the selected option.
+                        drain(0.15)
                         os.write(master, b"\x1b[B\x1b[B\x1b[B\r")  # Next confirms none.
                         until(lambda: b"Custom answer?" in output)
                         checkpoint = len(output)
@@ -277,6 +283,13 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                         )))
                         assert len(requests) == 3, "showing editing hints answered the question"
                         os.write(master, "café 🦀".encode() + b"\x1b[D")
+                        os.write(master, b"\x1b[103;5:2u")
+                        drain(0.25)
+                        assert not question_edits.exists(), "a repeated editor shortcut launched an editor"
+                        for _ in range(3):
+                            os.write(master, b"\x1b[13;1:2u")
+                            drain(0.1)
+                        assert len(requests) == 3, "a held Enter submitted custom answers"
                         checkpoint = len(output)
                         os.write(master, b"\x07")
                         until(lambda: b"original draft retained" in output[checkpoint:] and terminal.alternate == (mode == "fullscreen"))
@@ -307,6 +320,10 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                         checkpoint = len(output)
                         os.write(master, b"x\r")
                         until(lambda: b"Review" in output[checkpoint:])
+                        for _ in range(3):
+                            os.write(master, b"\x1b[13;1:2u")
+                            drain(0.1)
+                        assert len(requests) == 3, "a held Enter submitted the painted review"
                         os.write(master, b"\x1d")
                         checkpoint = len(output)
                         until(lambda: b"Question hidden" in output[checkpoint:])

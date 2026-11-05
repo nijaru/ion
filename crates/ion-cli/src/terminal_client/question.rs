@@ -138,6 +138,22 @@ impl QuestionModal {
             CHOICE
         };
         let action = keys.action(context, key);
+        // A new paint authorizes the visible choice, not another activation
+        // from a held key. Editing and navigation may still repeat.
+        if key.repeat
+            && matches!(
+                action,
+                Some(
+                    KeyAction::Confirm
+                        | KeyAction::Submit
+                        | KeyAction::Toggle
+                        | KeyAction::QuestionCollapse
+                        | KeyAction::External
+                )
+            )
+        {
+            return QuestionAction::None;
+        }
         if action == Some(KeyAction::QuestionCollapse) {
             self.collapsed = !self.collapsed;
             self.draft_mut().text.preferred_column = None;
