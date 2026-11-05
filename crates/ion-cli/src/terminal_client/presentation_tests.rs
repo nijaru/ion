@@ -788,6 +788,86 @@ fn fork_restore_refuses_lossy_shapes_without_discarding_editor() {
 }
 
 #[test]
+fn completion_acceptance_requires_a_press_but_literal_tabs_still_repeat() {
+    for (keys, accept) in [
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Tab, Modifiers::NONE),
+        ),
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+        ),
+        (
+            KeyBindings::parse(br#"{"tui.select.confirm":"z"}"#).unwrap(),
+            KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE),
+        ),
+    ] {
+        let mut ui = Frontend {
+            keys,
+            ..Frontend::default()
+        };
+        for ch in "/hel".chars() {
+            ui.key(
+                KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE),
+                None,
+                None,
+            );
+        }
+        for _ in 0..3 {
+            ui.editor.completion.painted_rows(80, 5, &ui.keys);
+            assert!(matches!(
+                ui.key(
+                    KeyEvent {
+                        repeat: true,
+                        ..accept
+                    },
+                    None,
+                    None
+                ),
+                Action::None
+            ));
+            assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("/hel", 4));
+            assert!(ui.editor.completion.active());
+        }
+        assert!(matches!(ui.key(accept, None, None), Action::None));
+        assert_eq!(ui.editor.draft, "/help ");
+        assert!(matches!(
+            ui.key(
+                KeyEvent {
+                    repeat: true,
+                    ..KeyEvent::new(KeyCode::Enter, Modifiers::NONE)
+                },
+                None,
+                None
+            ),
+            Action::None
+        ));
+        assert_eq!(ui.editor.draft, "/help ");
+        assert!(
+            matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Command(CommandInput::Editor(source)) if source.literal == "/help ")
+        );
+    }
+    let mut ui = Frontend::default();
+    // Builtin arguments retain literal Tab rather than requesting file discovery.
+    ui.insert("/help ");
+    for _ in 0..2 {
+        assert!(matches!(
+            ui.key(
+                KeyEvent {
+                    repeat: true,
+                    ..KeyEvent::new(KeyCode::Tab, Modifiers::NONE)
+                },
+                None,
+                None
+            ),
+            Action::None
+        ));
+    }
+    assert_eq!(ui.editor.draft, "/help \t\t");
+}
+
+#[test]
 fn command_completion_edits_without_dispatch_or_argument_loss() {
     let mut ui = published_ui();
     for ch in "/hel".chars() {

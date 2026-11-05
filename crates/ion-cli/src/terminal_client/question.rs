@@ -141,16 +141,8 @@ impl QuestionModal {
         // A new paint authorizes the visible choice, not another activation
         // from a held key. Editing and navigation may still repeat.
         if key.repeat
-            && matches!(
-                action,
-                Some(
-                    KeyAction::Confirm
-                        | KeyAction::Submit
-                        | KeyAction::Toggle
-                        | KeyAction::QuestionCollapse
-                        | KeyAction::External
-                )
-            )
+            && action
+                .is_some_and(|action| action.requires_fresh_press() || action == KeyAction::Toggle)
         {
             return QuestionAction::None;
         }

@@ -44,6 +44,72 @@ fn wrapped_editor_navigation_keeps_history_and_sticky_column_at_visual_boundarie
 }
 
 #[test]
+fn composer_activations_ignore_repeats_without_typing_a_remapped_shortcut() {
+    for (keys, key, activation) in [
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            KeyAction::Submit,
+        ),
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Enter, Modifiers::ALT),
+            KeyAction::FollowUp,
+        ),
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Char('g'), Modifiers::CONTROL),
+            KeyAction::External,
+        ),
+        (
+            KeyBindings::parse(br#"{"tui.input.submit":"z"}"#).unwrap(),
+            KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE),
+            KeyAction::Submit,
+        ),
+    ] {
+        let literal = "kept α\ncaret 🦀";
+        let cursor = literal.find('🦀').unwrap();
+        let mut ui = Frontend {
+            keys,
+            ..Frontend::default()
+        };
+        ui.insert(literal);
+        ui.editor.cursor = cursor;
+        ui.attach_image(ImageSource::Path("retained.png".into()));
+        for _ in 0..3 {
+            assert!(matches!(
+                ui.key(
+                    KeyEvent {
+                        repeat: true,
+                        ..key
+                    },
+                    None,
+                    None
+                ),
+                Action::None
+            ));
+            assert_eq!(
+                (ui.editor.draft.as_str(), ui.editor.cursor),
+                (literal, cursor)
+            );
+            assert_eq!(ui.editor.images.len(), 1);
+        }
+        let action = ui.key(key, None, None);
+        assert!(match activation {
+            KeyAction::Submit =>
+                matches!(action, Action::Submit(source) if source.literal == literal && source.cursor == cursor),
+            KeyAction::FollowUp =>
+                matches!(action, Action::Queue(source) if source.literal == literal && source.cursor == cursor),
+            KeyAction::External => matches!(
+                action,
+                Action::Command(CommandInput::Shortcut(Builtin::Editor))
+            ),
+            _ => unreachable!(),
+        });
+    }
+}
+
+#[test]
 fn model_cycle_keys_and_rebinding_retain_the_editor_and_attachments() {
     use ion_app::ModelCycleDirection::{Backward, Forward};
 
@@ -105,6 +171,51 @@ fn model_cycle_keys_and_rebinding_retain_the_editor_and_attachments() {
             );
         }
     }
+}
+
+#[test]
+fn completion_navigation_precedes_a_repeated_composer_activation() {
+    let mut ui = Frontend {
+        keys: KeyBindings::parse(br#"{"tui.select.down":"alt+enter"}"#).unwrap(),
+        ..Frontend::default()
+    };
+    for ch in "/f".chars() {
+        ui.key(
+            KeyEvent::new(KeyCode::Char(ch), Modifiers::NONE),
+            None,
+            None,
+        );
+    }
+    ui.editor.completion.painted_rows(80, 6, &ui.keys);
+    let before = ui
+        .editor
+        .completion
+        .replacement(&ui.editor.draft)
+        .unwrap()
+        .1;
+    assert!(matches!(
+        ui.key(
+            KeyEvent {
+                repeat: true,
+                ..KeyEvent::new(KeyCode::Enter, Modifiers::ALT)
+            },
+            None,
+            None
+        ),
+        Action::None
+    ));
+    ui.editor.completion.painted_rows(80, 6, &ui.keys);
+    let after = ui
+        .editor
+        .completion
+        .replacement(&ui.editor.draft)
+        .unwrap()
+        .1;
+    assert_ne!(
+        before, after,
+        "the completion, not follow-up submission, owns held navigation"
+    );
+    assert_eq!(ui.editor.draft, "/f");
 }
 
 #[test]

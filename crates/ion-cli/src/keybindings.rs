@@ -84,6 +84,22 @@ actions! {
     Later, "app.details.nextPage", DETAILS, ["right"], "Show later detail page";
 }
 
+impl KeyAction {
+    /// Unconditional activations; widgets own conditional Tab, Toggle and Exit behavior.
+    pub(crate) fn requires_fresh_press(self) -> bool {
+        matches!(
+            self,
+            Self::Confirm
+                | Self::Submit
+                | Self::FollowUp
+                | Self::External
+                | Self::QuestionCollapse
+                | Self::Scope
+                | Self::NamedSessions
+        )
+    }
+}
+
 struct Definition {
     action: KeyAction,
     id: &'static str,

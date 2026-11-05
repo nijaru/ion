@@ -407,6 +407,86 @@ impl Write for BrokenOutput {
 }
 
 #[test]
+fn held_confirmation_cannot_accept_a_painted_picker() {
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        let mut ui = selector();
+        ui.mode = mode;
+        let dock = Dock::prepare(&mut ui, None, None, 80, 20);
+        publish_to(&mut ui, dock, (80, 20), &mut Vec::new()).unwrap();
+        assert!(matches!(
+            ui.key(
+                KeyEvent {
+                    repeat: true,
+                    ..enter()
+                },
+                None,
+                None
+            ),
+            Action::None
+        ));
+        assert_eq!(ui.pickers.active().unwrap().selected, 0);
+        assert!(
+            matches!(ui.key(enter(), None, None), Action::Pick(PickerValue::Login(name)) if name == "alpha")
+        );
+    }
+}
+
+#[test]
+fn held_picker_key_cannot_submit_the_underlying_draft_after_a_new_paint() {
+    for (keys, confirm) in [
+        (KeyBindings::default(), enter()),
+        (
+            KeyBindings::parse(br#"{"tui.select.confirm":"z","tui.input.submit":"z"}"#).unwrap(),
+            KeyEvent::new(KeyCode::Char('z'), Modifiers::NONE),
+        ),
+    ] {
+        for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+            for literal in ["kept α\ncaret 🦀", "!touch REPEAT_MUST_NOT_RUN"] {
+                let mut ui = selector();
+                ui.keys = keys.clone();
+                ui.mode = mode;
+                // This draft was authored before the picker took focus.
+                ui.editor.insert(literal);
+                ui.editor.cursor = literal.find('🦀').unwrap_or(0);
+                let cursor = ui.editor.cursor;
+                ui.attach_image(ImageSource::Path("retained.png".into()));
+                let picker = Dock::prepare(&mut ui, None, None, 80, 20);
+                publish_to(&mut ui, picker, (80, 20), &mut Vec::new()).unwrap();
+                assert!(matches!(ui.key(confirm, None, None), Action::Pick(_)));
+                let composer = Dock::prepare(&mut ui, None, None, 80, 20);
+                publish_to(&mut ui, composer, (80, 20), &mut Vec::new()).unwrap();
+                for _ in 0..3 {
+                    assert!(matches!(
+                        ui.key(
+                            KeyEvent {
+                                repeat: true,
+                                ..confirm
+                            },
+                            None,
+                            None
+                        ),
+                        Action::None
+                    ));
+                    assert_eq!(
+                        (ui.editor.draft.as_str(), ui.editor.cursor),
+                        (literal, cursor)
+                    );
+                    assert_eq!(ui.editor.images.len(), 1);
+                }
+                let action = ui.key(confirm, None, None);
+                assert!(if let Some(command) = literal.strip_prefix('!') {
+                    matches!(action, Action::Shell { command: actual, exclude_from_context: false, source }
+                        if actual == command && source.literal == literal && source.cursor == cursor)
+                } else {
+                    matches!(action, Action::Submit(source)
+                        if source.literal == literal && source.cursor == cursor)
+                });
+            }
+        }
+    }
+}
+
+#[test]
 fn selector_layout_rejected_geometry_failed_write_and_stale_choice_are_inert() {
     let mut ui = selector();
     let layout_only = Dock::prepare(&mut ui, None, None, 80, 20);

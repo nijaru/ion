@@ -682,6 +682,9 @@ impl Pickers {
     ) -> Option<PickerValue> {
         use crate::keybindings::{self, KeyAction, PICKER};
         let action = keys.action(PICKER, key);
+        if key.repeat && action.is_some_and(KeyAction::requires_fresh_press) {
+            return None;
+        }
         if action == Some(KeyAction::Scope) {
             let selected = self.selected_value().and_then(|value| match value {
                 PickerValue::Model(model) => Some(model.clone()),
@@ -763,6 +766,9 @@ impl Pickers {
                                 .iter()
                                 .any(|item| matches!(item.value, PickerValue::Setting(_))))) =>
             {
+                if key.repeat {
+                    return None;
+                }
                 let index = matching.get(picker.selected).copied();
                 let index = index.filter(|index| {
                     self.visibility.painted().is_some_and(|painted| {
@@ -936,6 +942,39 @@ mod tests {
                 .collect(),
         });
         pickers
+    }
+
+    #[test]
+    fn settings_space_requires_a_press_but_query_spaces_still_repeat() {
+        let keys = KeyBindings::default();
+        let space = KeyEvent::new(KeyCode::Char(' '), Modifiers::NONE);
+        let held = KeyEvent {
+            repeat: true,
+            ..space
+        };
+        let mut settings = open_labels(&["Output detail"]);
+        settings.active.as_mut().unwrap().items[0].value =
+            PickerValue::Setting(super::super::configuration::Setting::Output(
+                crate::tool_output::OutputDetail::Expanded,
+            ));
+        settings.painted_rows(80, 8, &Theme::default());
+        assert!(settings.key(held, &keys).is_none());
+        assert_eq!(settings.active().unwrap().query, "");
+        assert!(matches!(
+            settings.key(space, &keys),
+            Some(PickerValue::Setting(_))
+        ));
+        settings.painted_rows(80, 8, &Theme::default());
+        assert!(settings.key(held, &keys).is_none());
+        assert_eq!(settings.active().unwrap().query, "");
+
+        let mut query = open_labels(&["Login provider"]);
+        for picker in [&mut query, &mut settings] {
+            picker.insert("query");
+            picker.key(held, &keys);
+            picker.key(held, &keys);
+            assert_eq!(picker.active().unwrap().query, "query  ");
+        }
     }
 
     #[test]
@@ -1428,7 +1467,23 @@ mod tests {
         let toggle = KeyEvent::new(KeyCode::Char('n'), Modifiers::CONTROL);
         let enter = KeyEvent::new(KeyCode::Enter, Modifiers::NONE);
         let worker = pickers.job.as_ref().unwrap().task.id();
+        pickers.key(
+            KeyEvent {
+                repeat: true,
+                ..toggle
+            },
+            &keys,
+        );
+        assert!(!pickers.named_only);
         pickers.key(toggle, &keys);
+        pickers.key(
+            KeyEvent {
+                repeat: true,
+                ..toggle
+            },
+            &keys,
+        );
+        assert!(pickers.named_only);
         assert_eq!(pickers.job.as_ref().unwrap().task.id(), worker);
         release.send(()).unwrap();
         assert!(pickers.complete().await.is_none());
@@ -1474,6 +1529,15 @@ mod tests {
         let mut request = request.clone();
         request.browser = SessionBrowser::Launch;
         pickers.sessions = Some(request);
+        let scope = KeyEvent::new(KeyCode::Tab, Modifiers::NONE);
+        let held = KeyEvent {
+            repeat: true,
+            ..scope
+        };
+        pickers.key(held, &KeyBindings::default());
+        assert!(!pickers.sessions.as_ref().unwrap().all_workspaces);
+        assert!(!pickers.job.as_ref().unwrap().stop.is_cancelled());
+        assert!(pickers.waiting.is_none());
         pickers.key(
             KeyEvent::new(KeyCode::Char('n'), Modifiers::CONTROL),
             &KeyBindings::default(),
@@ -1483,6 +1547,8 @@ mod tests {
             &KeyBindings::default(),
         );
         assert_eq!(pickers.active().unwrap().query, "draft query");
+        assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
+        pickers.key(held, &KeyBindings::default());
         assert!(pickers.sessions.as_ref().unwrap().all_workspaces);
         assert!(
             pickers.painted_rows(100, 10, &Theme::default())[0]

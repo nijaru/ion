@@ -899,8 +899,16 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.wait(lambda: "Choose model" in terminal.text())
             terminal.send("smoke/smoke-model")
             terminal.paint()
+            terminal.send(b"\x1b[13;1:2u")
+            terminal.paint()
+            assert len(requests) == before
+            # A fresh press must still choose, not submit the buried draft.
+            terminal.output.clear()
             terminal.send("\r")
             terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.send(b"\x1b[13;1:2u\x1b[13;3:2u\x1b[13;1:2u")
+            terminal.paint()
+            assert len(requests) == before, "held picker key admitted the retained draft"
             terminal.output.clear()
             terminal.send("PREFIX_\r")
             terminal.wait(lambda: len(requests) == before + 1)

@@ -982,6 +982,9 @@ impl Frontend {
                     return Action::None;
                 }
                 Some(KeyAction::Tab | KeyAction::Confirm) => {
+                    if key.repeat {
+                        return Action::None;
+                    }
                     self.editor.break_edit_focus();
                     if !self.editor.completion.visible() {
                         return Action::None;
@@ -996,6 +999,10 @@ impl Frontend {
                 }
                 _ => {}
             }
+        }
+        // Completion owns navigation aliases before composer activation policy.
+        if key.repeat && input.is_some_and(KeyAction::requires_fresh_press) {
+            return Action::None;
         }
         self.editor.prepare_edit_key(key, &self.keys);
         // Preparing clipboard attachments never acknowledges a future prompt.
