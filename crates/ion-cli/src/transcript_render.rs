@@ -431,12 +431,8 @@ pub(super) fn attention(
             .rev()
             .find_map(|(index, parent)| {
                 let activity = nested_exception(parent)?;
-                let subject = activity
-                    .activity
-                    .subject
-                    .as_deref()
-                    .map(clean_inline)
-                    .unwrap_or_else(|| activity.name.clone());
+                let subject =
+                    activity_subject(activity, detail.cwd).unwrap_or_else(|| activity.name.clone());
                 let text = model_result_notice(activity).map_or_else(
                     || format!("! {} · {subject}", action_label(activity)),
                     |notice| format!("! {notice} · {subject}"),
@@ -776,7 +772,7 @@ fn render_group(
         return;
     }
     let theme = detail.theme;
-    let display = display_activities(&group.activities, detail.detail);
+    let display = display_activities(&group.activities, detail);
 
     if group.activities.len() == 1 {
         let item = &display[0];
@@ -885,7 +881,7 @@ fn render_children(
     detail: &RenderOptions<'_>,
 ) {
     let theme = detail.theme;
-    let display = display_activities(children, detail.detail);
+    let display = display_activities(children, detail);
     for (index, item) in display.iter().enumerate() {
         let mut rows = Vec::new();
         let last = index + 1 == display.len();
@@ -1005,13 +1001,13 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
 
 fn display_activities(
     activities: &[TranscriptActivity],
-    detail: OutputDetail,
+    detail: &RenderOptions<'_>,
 ) -> Vec<DisplayActivity> {
-    if detail == OutputDetail::Expanded {
+    if detail.detail == OutputDetail::Expanded {
         return activities
             .iter()
             .enumerate()
-            .map(|(index, activity)| display_activity(activity, index))
+            .map(|(index, activity)| display_activity(activity, index, detail.cwd))
             .collect();
     }
     let mut display = Vec::new();
@@ -1032,12 +1028,16 @@ fn display_activities(
                 end += 1;
             }
             if end - index > 1 {
-                display.push(coalesced_observation(&activities[index..end], index..end));
+                display.push(coalesced_observation(
+                    &activities[index..end],
+                    index..end,
+                    detail.cwd,
+                ));
                 index = end;
                 continue;
             }
         }
-        display.push(display_activity(current, index));
+        display.push(display_activity(current, index, detail.cwd));
         index += 1;
     }
     display
@@ -1046,13 +1046,13 @@ fn display_activities(
 fn coalesced_observation(
     activities: &[TranscriptActivity],
     source: std::ops::Range<usize>,
+    cwd: &std::path::Path,
 ) -> DisplayActivity {
     let kind = activities[0].activity.kind;
     let subjects = activities
         .iter()
-        .filter_map(|activity| activity.activity.subject.as_deref())
+        .filter_map(|activity| activity_subject(activity, cwd))
         .take(MAX_COALESCED_SUBJECTS)
-        .map(clean_inline)
         .collect::<Vec<_>>();
     let mut summary = completed_verb(kind).to_owned();
     if !subjects.is_empty() {
@@ -1104,7 +1104,36 @@ fn nested_exception(activity: &TranscriptActivity) -> Option<&TranscriptActivity
         .or_else(|| exceptional(activity).then_some(activity))
 }
 
-fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActivity {
+fn activity_subject(activity: &TranscriptActivity, cwd: &std::path::Path) -> Option<String> {
+    let subject = activity.activity.subject.as_deref()?;
+    // Shorten only file labels, lexically: command/query text and recorded evidence
+    // stay literal, and no filesystem lookup changes the meaning of a symlink.
+    let subject = if matches!(
+        activity.activity.kind,
+        ToolActivityKind::Read
+            | ToolActivityKind::List
+            | ToolActivityKind::Edit
+            | ToolActivityKind::Write
+    ) && let Ok(relative) = std::path::Path::new(subject).strip_prefix(cwd)
+    {
+        if relative.as_os_str().is_empty() {
+            "."
+        } else {
+            relative
+                .to_str()
+                .expect("a component suffix of a UTF-8 subject remains UTF-8")
+        }
+    } else {
+        subject
+    };
+    Some(clean_inline(subject))
+}
+
+fn display_activity(
+    activity: &TranscriptActivity,
+    index: usize,
+    cwd: &std::path::Path,
+) -> DisplayActivity {
     let kind = activity.activity.kind;
     let mut summary = action_label(activity);
     if !activity.children.is_empty() {
@@ -1132,12 +1161,11 @@ fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActiv
     if model_notice.is_some() {
         summary.push_str(" · result not shared with model");
     }
-    if let Some(subject) = activity.activity.subject.as_deref() {
-        let subject = clean_inline(subject);
-        if !subject.is_empty() {
-            summary.push(' ');
-            summary.push_str(&subject);
-        }
+    if let Some(subject) = activity_subject(activity, cwd)
+        && !subject.is_empty()
+    {
+        summary.push(' ');
+        summary.push_str(&subject);
     }
     if activity.state == ActivityState::Queued {
         summary.push_str(&format!(" · {}", kind_label(kind)));
@@ -1162,7 +1190,9 @@ fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActiv
             format!(
                 "{} {}",
                 action_label(child),
-                child.activity.subject.as_deref().unwrap_or(&child.name)
+                activity_subject(child, cwd)
+                    .as_deref()
+                    .unwrap_or(&child.name)
             )
         });
     let observation = is_observation(kind) && activity.children.is_empty();

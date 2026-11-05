@@ -72,6 +72,75 @@ fn published_ui() -> Frontend {
 }
 
 #[test]
+fn workspace_file_labels_keep_targets_visible_without_rewriting_evidence() {
+    let cwd = PathBuf::from("/private/long-parent/another-long-parent/qualification/workspace");
+    let path = cwd.join("src/café.rs").to_string_lossy().into_owned();
+    let mut failed = tool(
+        "failed-edit",
+        Some(ActivityResult {
+            projection: Some(ToolResultProjection::Observed),
+            value: serde_json::json!({"error": "guard rejected", "path": path}),
+            image_mime_types: Vec::new(),
+            artifacts: Vec::new(),
+            is_error: true,
+        }),
+    );
+    failed.state = ActivityState::Failed;
+    failed.activity.subject = Some(path.clone());
+    failed.arguments = serde_json::json!({"path": path});
+    let mut read = tool(
+        "read",
+        Some(ActivityResult {
+            projection: Some(ToolResultProjection::Observed),
+            value: serde_json::json!({"content": "SOURCE"}),
+            image_mime_types: Vec::new(),
+            artifacts: Vec::new(),
+            is_error: false,
+        }),
+    );
+    read.activity.kind = ToolActivityKind::Read;
+    read.activity.subject = Some(cwd.join("tests/check.rs").to_string_lossy().into_owned());
+    let mut history = history_with_tools(vec![failed, read]);
+    history.items.remove(0);
+    let mut ui = Frontend {
+        cwd,
+        conversation: conversation::fixtures::document(history),
+        ..Frontend::default()
+    };
+    let rendered = ui
+        .pending_history_rows(80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rendered.contains("Edit failed src/café.rs"), "{rendered}");
+    assert!(rendered.contains("Read tests/check.rs"), "{rendered}");
+    // Directory is a layout input even when the document and width do not change.
+    ui.cwd.pop();
+    let relocated = ui
+        .pending_history_rows(80)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        relocated.contains("Edit failed workspace/src/café.rs"),
+        "{relocated}"
+    );
+    ui.open_details(Some(1));
+    let (details, _) = modal_rows(&mut ui, None, 160, 80);
+    let exact = details
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        exact.contains(&path),
+        "Details must retain the absolute recorded path: {exact}"
+    );
+}
+
+#[test]
 fn transcript_details_cannot_scroll_past_either_end() {
     let mut ui = Frontend {
         conversation: conversation::fixtures::document(TranscriptProjection {
@@ -356,6 +425,7 @@ fn local_output_keeps_history_order_across_publication_and_reflow() {
                 &ui.keys,
                 ui.themes.theme(),
                 ui.thinking_visibility,
+                &ui.cwd,
             ),
         );
         assert!(rows.iter().all(|row| row.width() <= width));

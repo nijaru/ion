@@ -1178,6 +1178,7 @@ async fn committed_roots_publish_during_work_but_unobserved_shells_remain_mutabl
                 &ui.keys,
                 ui.themes.theme(),
                 ui.thinking_visibility,
+                &ui.cwd,
             ),
         );
         assert!(

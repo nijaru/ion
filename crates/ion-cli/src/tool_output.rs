@@ -25,6 +25,7 @@ impl OutputDetail {
 }
 
 pub(crate) struct RenderOptions<'a> {
+    pub cwd: &'a std::path::Path,
     pub theme: &'a Theme,
     pub detail: OutputDetail,
     pub thinking: ThinkingVisibility,
@@ -37,8 +38,10 @@ impl<'a> RenderOptions<'a> {
         keys: &crate::keybindings::KeyBindings,
         theme: &'a Theme,
         thinking: ThinkingVisibility,
+        cwd: &'a std::path::Path,
     ) -> Self {
         Self {
+            cwd,
             theme,
             detail,
             thinking,
@@ -449,6 +452,7 @@ pub(crate) mod tests {
                     &crate::keybindings::KeyBindings::default(),
                     &Theme::default(),
                     ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
                 ),
                 3,
                 true,
@@ -463,6 +467,7 @@ pub(crate) mod tests {
                     &crate::keybindings::KeyBindings::default(),
                     &Theme::default(),
                     ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
                 ),
             );
             let text = rows
@@ -505,6 +510,7 @@ pub(crate) mod tests {
                     &crate::keybindings::KeyBindings::default(),
                     &Theme::default(),
                     ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
                 ),
                 3,
                 true,
@@ -549,7 +555,13 @@ pub(crate) mod tests {
                 children: vec![],
             };
             for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
-                let detail = RenderOptions::new(mode, &keys, &theme, ThinkingVisibility::Hidden);
+                let detail = RenderOptions::new(
+                    mode,
+                    &keys,
+                    &theme,
+                    ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
+                );
                 let mut rows = vec![];
                 render_activity(&mut rows, &activity, "", 200, &detail);
                 assert!(
@@ -618,7 +630,13 @@ pub(crate) mod tests {
                 &activity,
                 "",
                 100,
-                &RenderOptions::new(mode, &keys, &theme, ThinkingVisibility::Hidden),
+                &RenderOptions::new(
+                    mode,
+                    &keys,
+                    &theme,
+                    ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
+                ),
             );
             let text = rows
                 .iter()
@@ -666,7 +684,13 @@ pub(crate) mod tests {
                     &activity,
                     "",
                     100,
-                    &RenderOptions::new(mode, &keys, &theme, ThinkingVisibility::Hidden),
+                    &RenderOptions::new(
+                        mode,
+                        &keys,
+                        &theme,
+                        ThinkingVisibility::Hidden,
+                        std::path::Path::new("/workspace"),
+                    ),
                 );
                 let rendered = rows
                     .iter()

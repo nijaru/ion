@@ -151,6 +151,7 @@ mod tests {
                 &crate::keybindings::KeyBindings::default(),
                 &crate::presentation_style::Theme::default(),
                 crate::transcript_render::ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
             ),
         );
         assert!(rows.iter().any(|row| row.line.to_string().contains("+new")));
@@ -198,6 +199,7 @@ mod tests {
                     &crate::keybindings::KeyBindings::default(),
                     &crate::presentation_style::Theme::default(),
                     crate::transcript_render::ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
                 ),
             );
             assert!(rows.len() <= 9, "width {width}: {} rows", rows.len());
@@ -234,6 +236,7 @@ mod tests {
                 &crate::keybindings::KeyBindings::default(),
                 &crate::presentation_style::Theme::default(),
                 crate::transcript_render::ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
             ),
         );
         let expanded = expanded

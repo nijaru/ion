@@ -29,6 +29,7 @@ fn reading_anchor_survives_stream_growth_and_reflow_then_returns_to_follow_end()
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     presenter.window(&document, &mut view, (20, 3), false, false, &options);
     view.scroll(-2);
@@ -64,6 +65,7 @@ fn resizing_a_hundred_line_message_keeps_line_ninety_in_view() {
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut presenter = BlockPresenter::default();
     let mut view = ConversationView::default();
@@ -171,6 +173,7 @@ fn long_source_reading_survives_bidirectional_reflow_without_text_identity_or_dr
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     for source_text in [prose, continuous, markdown, code, table] {
         let source = TranscriptSource { entry: 11, part: 0 };
@@ -274,6 +277,7 @@ fn disclosure_and_theme_changes_reuse_the_reading_parts_original_bytes() {
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let text = (0..100)
         .map(|line| format!("MARK{line:03} alpha beta gamma delta\n\n"))
@@ -315,6 +319,7 @@ fn disclosure_and_theme_changes_reuse_the_reading_parts_original_bytes() {
         &keys,
         &changed,
         ThinkingVisibility::Visible,
+        std::path::Path::new("/workspace"),
     );
     let after = presenter.window(&document, &mut view, (25, 8), false, false, &expanded);
     assert!(after[0].to_string().contains("MARK090"));
@@ -406,12 +411,14 @@ fn activity_reading_uses_occurrences_and_children_through_fold_and_reflow() {
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let compact = RenderOptions::new(
         OutputDetail::Compact,
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut presenter = BlockPresenter::default();
     let mut view = ConversationView::default();
@@ -483,6 +490,7 @@ async fn growing_uncommitted_text_keeps_its_original_byte_location() {
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut presenter = BlockPresenter::default();
     let mut view = ConversationView::default();
@@ -583,12 +591,14 @@ fn normalized_html_code_and_link_destinations_reflow_within_the_parser_component
             &keys,
             &theme,
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         );
         let themed = RenderOptions::new(
             OutputDetail::Expanded,
             &keys,
             &changed,
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         );
         let mut presenter = BlockPresenter::default();
         let mut view = ConversationView::default();
@@ -792,12 +802,14 @@ fn deep_tool_child_shell_and_diff_fields_survive_remeasurement_and_hidden_disclo
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let compact = RenderOptions::new(
         OutputDetail::Compact,
         &keys,
         &changed,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut presenter = BlockPresenter::default();
     let mut view = ConversationView::default();
@@ -898,6 +910,7 @@ fn idle_fullscreen_keeps_the_continuous_tail_and_repeated_notice_reading_points(
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut presenter = BlockPresenter::default();
     let mut view = ConversationView::default();
@@ -982,12 +995,14 @@ fn readiness_retains_offsets_in_its_semantic_message_after_remeasurement() {
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let themed = RenderOptions::new(
         OutputDetail::Compact,
         &keys,
         &changed,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut presenter = BlockPresenter::default();
     let mut view = ConversationView::default();

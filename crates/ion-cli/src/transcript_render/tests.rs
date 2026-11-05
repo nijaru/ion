@@ -39,6 +39,7 @@ fn custom_theme_reaches_nested_markdown_without_theming_source_inspection() {
         &keys,
         &theme,
         ThinkingVisibility::Visible,
+        std::path::Path::new("/workspace"),
     );
     let message = TranscriptMessage {
         source: Some(ion_core::TranscriptSource { entry: 1, part: 0 }),
@@ -145,7 +146,13 @@ fn custom_theme_styles_activity_and_diff_semantics_but_not_observations() {
         ],
     })];
     for detail in [OutputDetail::Compact, OutputDetail::Expanded] {
-        let options = RenderOptions::new(detail, &keys, &theme, ThinkingVisibility::Hidden);
+        let options = RenderOptions::new(
+            detail,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        );
         let rendered = rows(&items, 160, &options);
         for (text, color) in [
             ("• 4 actions", Color::Rgb(1, 2, 3)),
@@ -258,6 +265,7 @@ fn disclosure_hints_follow_configured_or_disabled_detail_action() {
             &keys,
             &theme,
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         );
         let published = rows(&items, 160, &options);
         for label in [
@@ -312,6 +320,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
                 &crate::keybindings::KeyBindings::default(),
                 &Theme::default(),
                 ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
             ),
         );
         assert!(
@@ -329,6 +338,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
                     &crate::keybindings::KeyBindings::default(),
                     &Theme::default(),
                     ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace")
                 )
             ),
             window_rows(
@@ -340,6 +350,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
                     &crate::keybindings::KeyBindings::default(),
                     &Theme::default(),
                     ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace")
                 )
             )
         );
@@ -351,6 +362,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
                 &crate::keybindings::KeyBindings::default(),
                 &Theme::default(),
                 ThinkingVisibility::Visible,
+                std::path::Path::new("/workspace"),
             ),
         );
         assert!(
@@ -367,6 +379,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Visible,
+            std::path::Path::new("/workspace"),
         ),
     );
     assert!(shown.iter().any(|line| {
@@ -399,6 +412,7 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Visible,
+            std::path::Path::new("/workspace"),
         ),
     );
     assert_eq!(preview.len(), 3);
@@ -427,6 +441,7 @@ fn plain_rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     )
     .iter()
@@ -447,6 +462,7 @@ fn plain_window_rows(
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     )
     .iter()
@@ -506,6 +522,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     );
     // Ranges, omission notices and retained metadata are essential evidence,
@@ -576,6 +593,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
                 &crate::keybindings::KeyBindings::default(),
                 &Theme::default(),
                 ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
             ),
         );
         assert!(expanded.iter().all(|row| row.width() <= width));
@@ -593,6 +611,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     )
     .iter()
@@ -647,6 +666,7 @@ fn activity_styles_follow_typed_state_and_wrapping_keeps_the_tree() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     );
     let read = rows
@@ -686,6 +706,7 @@ fn activity_styles_follow_typed_state_and_wrapping_keeps_the_tree() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     );
     assert!(
@@ -723,6 +744,7 @@ fn clipped_markdown_retains_inline_style_and_code_indentation() {
                         &crate::keybindings::KeyBindings::default(),
                         &Theme::default(),
                         ThinkingVisibility::Hidden,
+                        std::path::Path::new("/workspace")
                     )
                 )
                 .iter()
@@ -738,6 +760,7 @@ fn clipped_markdown_retains_inline_style_and_code_indentation() {
                 &crate::keybindings::KeyBindings::default(),
                 &Theme::default(),
                 ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
             ),
         );
         let first = &rows[1];
@@ -782,6 +805,7 @@ fn markdown_is_assistant_presentation_not_user_or_inspection_source() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     );
     let formatted = formatted
@@ -812,6 +836,7 @@ fn markdown_is_assistant_presentation_not_user_or_inspection_source() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     );
     let user = user
@@ -1021,6 +1046,7 @@ fn grouped_tools_are_hierarchical_and_mutations_are_visually_distinct() {
             &crate::keybindings::KeyBindings::default(),
             &Theme::default(),
             ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
         ),
     );
     assert!(
@@ -1096,6 +1122,7 @@ fn submitted_prompts_keep_literal_text_and_connected_rails_without_padding() {
         &keys,
         &theme,
         ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
     );
     let mut message = TranscriptMessage {
         source: Some(ion_core::TranscriptSource { entry: 7, part: 0 }),
@@ -1280,6 +1307,75 @@ fn live_budget_keeps_earlier_exception_and_mutations_across_narrative() {
 }
 
 #[test]
+fn file_labels_are_relative_but_external_paths_and_nonfile_subjects_stay_literal() {
+    let activities = [
+        (ToolActivityKind::Read, "/workspace/src/café.rs"),
+        (ToolActivityKind::Read, "/workspace/tests/check.rs"),
+        (ToolActivityKind::Read, "/workspace-sibling/other.rs"),
+        (ToolActivityKind::List, "/workspace"),
+        (ToolActivityKind::Write, "/elsewhere/report.txt"),
+        (ToolActivityKind::Command, "/workspace/run --arg"),
+        (ToolActivityKind::Search, "/workspace/query*"),
+        (ToolActivityKind::External, "/workspace/remote"),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (kind, subject))| {
+        activity(
+            &index.to_string(),
+            kind,
+            subject,
+            ActivityState::Completed,
+            Some(serde_json::json!({})),
+        )
+    })
+    .collect();
+    let projection = TranscriptProjection {
+        items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            source: ion_core::TranscriptSource { entry: 24, part: 0 },
+            turn: 1,
+            open: false,
+            activities,
+        })],
+    };
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    for detail in [OutputDetail::Compact, OutputDetail::Expanded] {
+        let options = RenderOptions::new(
+            detail,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        );
+        let text = rows(&projection.items, 160, &options)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        for expected in [
+            "src/café.rs",
+            "tests/check.rs",
+            "/workspace-sibling/other.rs",
+            "Listed .",
+            "/elsewhere/report.txt",
+            "Ran /workspace/run --arg",
+            "Searched /workspace/query*",
+            "Called /workspace/remote",
+        ] {
+            assert!(text.contains(expected), "missing {expected}: {text}");
+        }
+        assert!(!text.contains("/workspace/src/"), "{text}");
+        if detail == OutputDetail::Compact {
+            assert!(
+                text.contains("Read src/café.rs, tests/check.rs, /workspace-sibling/other.rs"),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn nested_failure_remains_visible_under_a_running_parent() {
     let mut parent = activity(
         "code",
@@ -1291,7 +1387,7 @@ fn nested_failure_remains_visible_under_a_running_parent() {
     parent.children = vec![activity(
         "read",
         ToolActivityKind::Read,
-        "CHILD_FAILURE_LONG_PATH",
+        "/workspace/CHILD_FAILURE_LONG_PATH",
         ActivityState::Failed,
         Some(serde_json::json!({"error":"missing"})),
     )];

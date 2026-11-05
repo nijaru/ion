@@ -870,6 +870,7 @@ impl Frontend {
                 &self.keys,
                 self.themes.theme(),
                 self.thinking_visibility,
+                &self.cwd,
             ),
         );
         rows.extend(content);
@@ -1377,6 +1378,7 @@ fn draw_prepared(
             &ui.keys,
             ui.themes.theme(),
             ui.thinking_visibility,
+            &ui.cwd,
         ),
     );
     let body_height = live_rows.len();
@@ -1558,6 +1560,7 @@ fn draw_chat_fullscreen(
             &ui.keys,
             ui.themes.theme(),
             ui.thinking_visibility,
+            &ui.cwd,
         ),
     );
     let mut rows = vec![Line::default(); height];

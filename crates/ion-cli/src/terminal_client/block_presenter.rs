@@ -114,6 +114,7 @@ impl ConversationView {
 
 #[derive(PartialEq, Eq)]
 struct Format {
+    cwd: std::path::PathBuf,
     theme: Theme,
     detail: OutputDetail,
     thinking: ThinkingVisibility,
@@ -153,6 +154,7 @@ impl BlockPresenter {
     ) {
         let selection_changed = self.scope.as_ref() != conversation.scope();
         let format = Format {
+            cwd: options.cwd.to_owned(),
             theme: options.theme.clone(),
             detail: options.detail,
             thinking: options.thinking,
