@@ -372,7 +372,7 @@ pub(super) fn apply(
             let interrupted = history.unfinished && !runtime.is_busy();
             ui.apply_history(&read.path, *history);
             if interrupted {
-                ui.status = "Previous operation interrupted; effects may be unknown".into();
+                ui.status = "Interrupted; effects unknown. Send a message to continue.".into();
             }
             ui.cwd = read
                 .cwd
