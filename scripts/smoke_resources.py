@@ -390,6 +390,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         phase = 2
                     elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current and program_ready(output):
                         (live_prompts / "late.md").write_text("A later prompt.\n")
+                        (live_prompts / "broken.md").write_text("---\ndescription: [unclosed\n---\n")
                         global_rule.write_text(new_rule + "\n")
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
@@ -398,6 +399,13 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     # refresh. Require published readiness before the next action;
                     # prompt/rule/policy effects are checked independently below.
                     elif phase == 3 and b"Reloaded keybindings" in current and program_ready(output):
+                        assert b"broken.md" in current and b"invalid YAML frontmatter" in current, (
+                            mode, "reload hid the resource file/reason", current[-4000:]
+                        )
+                        checkpoint = len(output)
+                        os.write(master, b"/prompts\r")
+                        phase = 30
+                    elif phase == 30 and b"broken.md" in current and b"invalid YAML frontmatter" in current:
                         checkpoint = len(output)
                         os.write(master, b"/reasoning high\r")
                         phase = 31
@@ -437,6 +445,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 reloaded = requests[before + 1]["messages"][0]["content"]
                 assert old_rule in original and new_rule not in original, original
                 assert new_rule in reloaded and old_rule not in reloaded, reloaded
+                (live_prompts / "broken.md").unlink()
             finally:
                 if child.poll() is None:
                     child.send_signal(signal.SIGKILL)

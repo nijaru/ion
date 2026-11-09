@@ -58,6 +58,8 @@ During early unstable development, incompatible Session databases are rejected r
 
 Configuration, saved credentials, resources and sessions use `~/.ion` by default, or `ION_HOME` when set; workspace-specific `.ion` is separate. No automatic migration from old XDG storage is performed.
 
+See [Skills, prompts and commands](docs/customization.md) to add project skills, reusable `/name` prompts and explicit `/command:name` executables. `/skills`, `/prompts` and `/commands` show loaded resources; `/reload` refreshes them and reports source warnings.
+
 ## Develop and embed
 
 This workspace contains `ion-ai` (model-facing types), `ion-core` (Turn and Session runtime), `ion-app` (the shared application, SDK and effects), and `ion-terminal` (physical terminal). The `ion` executable and its CLI, TUI and RPC clients live in `crates/ion-cli`. These are current code owners, not promised permanent API boundaries.

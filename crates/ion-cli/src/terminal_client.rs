@@ -48,6 +48,7 @@ mod orientation;
 pub(crate) mod paint;
 mod picker;
 mod question;
+mod resource_commands;
 mod session_io;
 mod session_search;
 mod setup;

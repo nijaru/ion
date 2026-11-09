@@ -307,10 +307,10 @@ pub(super) fn binding_finished(
                     ui.editor.break_edit_focus();
                     ui.keys = keys;
                     ui.install_reloaded_theme(themes);
-                    ui.print(format!(
-                        "Reloaded keybindings, theme, resources and commands ({} diagnostic(s))",
-                        control.resources().diagnostics().len()
-                            + control.commands().diagnostics().len()
+                    ui.print(super::resource_commands::reloaded(
+                        control.resources(),
+                        control.commands(),
+                        &ui.cwd,
                     ));
                 }
             }

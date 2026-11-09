@@ -409,22 +409,14 @@ pub(super) fn handle_builtin(
             )?;
             ui.attach_image(ImageSource::Path(PathBuf::from(args)));
         }
-        Builtin::Skills => ui.print(
-            runtime
-                .resources()
-                .skills()
-                .map(|skill| format!("{} — {}", skill.name, skill.description))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
-        Builtin::Prompts => ui.print(
-            runtime
-                .resources()
-                .templates()
-                .map(|template| format!("/{} — {}", template.name, template.description))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        ),
+        Builtin::Skills => ui.print(super::resource_commands::skills(
+            runtime.resources(),
+            &ui.cwd,
+        )),
+        Builtin::Prompts => ui.print(super::resource_commands::prompts(
+            runtime.resources(),
+            &ui.cwd,
+        )),
         Builtin::Reload => {
             anyhow::ensure!(
                 !ui.theme_io.has_action(),
