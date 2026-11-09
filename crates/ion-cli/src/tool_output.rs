@@ -68,6 +68,7 @@ pub(crate) fn render_activity(
             | ActivityState::Failed
             | ActivityState::Cancelled
             | ActivityState::TimedOut
+            | ActivityState::Rejected
     ) {
         return;
     }
@@ -701,6 +702,79 @@ pub(crate) mod tests {
                 assert!(
                     rendered.contains("caused by: permission denied (os error 13)"),
                     "{kind:?}: {rendered}"
+                );
+                assert!(rows.iter().flat_map(|row| &row.map).any(|mapping| matches!(
+                    mapping.origin,
+                    crate::display_text::Origin::Component {
+                        component: Component::Field(Field::Error),
+                        ..
+                    }
+                )));
+            }
+        }
+    }
+
+    #[test]
+    fn rejected_calls_disclose_the_durable_reason_in_both_output_modes() {
+        let outcome = ion_core::ToolOutcome::NotDispatched {
+            reason: "Operator refused this call — café 🦀".into(),
+        };
+        let output = outcome.inspection_output();
+        let keys = crate::keybindings::KeyBindings::default();
+        let theme = Theme::default();
+        for kind in [
+            ToolActivityKind::Read,
+            ToolActivityKind::Write,
+            ToolActivityKind::Command,
+            ToolActivityKind::External,
+        ] {
+            let activity = TranscriptActivity {
+                identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+                    assistant_entry: 1,
+                    ordinal: 0,
+                }),
+                call_id: "refused".into(),
+                name: "refused".into(),
+                activity: ion_core::ToolActivity {
+                    kind,
+                    subject: None,
+                },
+                arguments: json!({}),
+                state: ActivityState::Rejected,
+                result: Some(ion_core::ActivityResult {
+                    artifacts: Vec::new(),
+                    projection: outcome.projection(),
+                    value: output.value.clone(),
+                    image_mime_types: Vec::new(),
+                    is_error: output.is_error,
+                }),
+                children: Vec::new(),
+            };
+            for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+                let mut rows = Vec::new();
+                render_activity(
+                    &mut rows,
+                    &activity,
+                    "",
+                    120,
+                    &RenderOptions::new(
+                        mode,
+                        &keys,
+                        &theme,
+                        ThinkingVisibility::Hidden,
+                        std::path::Path::new("/workspace"),
+                    ),
+                );
+                let text = rows
+                    .iter()
+                    .map(|row| row.line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(
+                    text.contains(
+                        "Tool call was not dispatched: Operator refused this call — café 🦀"
+                    ),
+                    "{kind:?}: {text}"
                 );
                 assert!(rows.iter().flat_map(|row| &row.map).any(|mapping| matches!(
                     mapping.origin,

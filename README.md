@@ -60,7 +60,7 @@ Configuration, saved credentials, resources and sessions use `~/.ion` by default
 
 See [Skills, prompts and commands](docs/customization.md) to add project skills, reusable `/name` prompts and explicit `/command:name` executables. `/skills`, `/prompts` and `/commands` show loaded resources; `/reload` refreshes them and reports source warnings.
 
-See [Long-running programs](docs/processes.md) for starting supervised programs, `/attach`, Ctrl-] detachment, inspection and stop/join controls.
+See [Long-running programs](docs/processes.md) for starting supervised programs, `/attach`, Ctrl-] detachment, inspection and stop/join controls. [Tool selection and operator vetoes](docs/tool-control.md) explains model loadouts, optional pre-dispatch refusal programs and their limits.
 
 ## Develop and embed
 
