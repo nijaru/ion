@@ -1741,7 +1741,7 @@ async fn attachment_view_ends_when_the_program_exits() {
         model(turn(
             vec![call(
                 "start",
-                json!({"action":"start","backend":"pty","command":"printf done; exec sleep 0.2"}),
+                json!({"action":"start","backend":"pty","command":"printf done; IFS= read -r finish; test \"$finish\" = exit"}),
             )],
             "started",
         )),
@@ -1753,6 +1753,10 @@ async fn attachment_view_ends_when_the_program_exits() {
         .attach_terminal(session.id(), &root, id)
         .await
         .expect("attach live PTY");
+    // Keep the program alive until attachment, independently of runner load.
+    let exit = lease.write(b"exit\r".to_vec()).await;
+    assert!(exit.error.is_none(), "{exit:?}");
+    assert_eq!(exit.bytes_written, 5, "{exit:?}");
     let deadline = Instant::now() + Duration::from_secs(5);
     while lease.is_live() {
         assert!(Instant::now() < deadline, "program did not exit");
