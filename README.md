@@ -40,7 +40,7 @@ Run `ion --help` and `ion COMMAND --help` for complete supported options. The cu
 
 Terminal chat temporarily enables grapheme clustering (mode 2027) when the terminal reports it as supported and currently off, and restores the prior setting when yielding the terminal. Without reported support, rendering stays best-effort; complex emoji alignment depends on the terminal and its Unicode width tables.
 
-Ctrl-C stops running work immediately, including unanswered questions. A pending clipboard read in the composer is cancelled first. Esc dismisses local UI; stopping via Esc, clearing a draft, cancelling a question with Esc, and quitting with a shortcut ask for confirmation. Reported key repeats cannot submit input, accept completions or choices, toggle question/picker controls, open an external editor, or start another cancellation; ordinary held-key editing and navigation still repeat. Legacy terminals cannot distinguish auto-repeat from another press.
+Ctrl-C stops running work immediately, including unanswered questions, except while attached to a program, where it is forwarded to that program. A pending clipboard read in the composer is cancelled first. Esc dismisses local UI; stopping via Esc, clearing a draft, cancelling a question with Esc, and quitting with a shortcut ask for confirmation. Reported key repeats cannot submit input, accept completions or choices, toggle question/picker controls, open an external editor, or start another cancellation; ordinary held-key editing and navigation still repeat. Legacy terminals cannot distinguish auto-repeat from another press.
 
 The coding recipe runs native commands **with your host permissions**. Tool selection/read-only flags are model loadout controls, not a sandbox. Cancellation does not undo filesystem effects; interrupted effects may have unknown outcomes and are not blindly replayed.
 
@@ -59,6 +59,8 @@ During early unstable development, incompatible Session databases are rejected r
 Configuration, saved credentials, resources and sessions use `~/.ion` by default, or `ION_HOME` when set; workspace-specific `.ion` is separate. No automatic migration from old XDG storage is performed.
 
 See [Skills, prompts and commands](docs/customization.md) to add project skills, reusable `/name` prompts and explicit `/command:name` executables. `/skills`, `/prompts` and `/commands` show loaded resources; `/reload` refreshes them and reports source warnings.
+
+See [Long-running programs](docs/processes.md) for starting supervised programs, `/attach`, Ctrl-] detachment, inspection and stop/join controls.
 
 ## Develop and embed
 

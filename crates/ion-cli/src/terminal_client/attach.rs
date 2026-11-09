@@ -21,8 +21,13 @@ const MAX_REMOTE_ROWS: u16 = 200;
 const MAX_REMOTE_COLUMNS: u16 = 400;
 const MAX_REMOTE_CELLS: u32 = 20_000;
 const PAGE_ROWS: u16 = 64;
-const HINT: &str = "Attached · Ctrl-] detach · the program keeps running";
+const HINT: &str = "Attached · Ctrl-] detach without stopping · Ctrl-C send interrupt";
 const MAX_PASTE_CHUNK: usize = 16 * 1024;
+
+enum ViewExit {
+    Detached,
+    ProgramEnded,
+}
 
 /// Run `/attach [ID]`, returning a status line when the composer is restored.
 pub(super) async fn run(
@@ -69,8 +74,14 @@ pub(super) async fn run(
         .attach_terminal(session, &cwd, id)
         .await
         .map_err(anyhow::Error::msg)?;
-    view(terminal, screen, attachment).await?;
-    Ok(Some("Detached; the program keeps running".into()))
+    let reason = view(terminal, screen, attachment).await?;
+    Ok(Some(
+        match reason {
+            ViewExit::Detached => "Detached; the program was not stopped",
+            ViewExit::ProgramEnded => "Program ended; attachment closed",
+        }
+        .into(),
+    ))
 }
 
 /// Draw and drive the program until detach, exit or a terminal-level failure.
@@ -78,39 +89,44 @@ async fn view(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     attachment: TerminalAttachment,
-) -> Result<()> {
-    let already_fullscreen = terminal.is_alt_screen()?;
-    if !already_fullscreen {
-        terminal
-            .enter_alt_screen(screen)
-            .await
-            .context("enter the attachment surface")?;
-    }
-    let outcome = drive(terminal, screen, &attachment).await;
-    // Detach does not stop the program; a failed restore still releases the
-    // lease through the guard below so the model regains input custody.
-    let restore = async {
-        if !already_fullscreen && terminal.is_alt_screen()? {
-            terminal.leave_alt_screen()?;
+) -> Result<ViewExit> {
+    let initial_mode = terminal.is_alt_screen();
+    let restore_inline = matches!(&initial_mode, Ok(false));
+    let outcome = async {
+        if !initial_mode? {
+            terminal
+                .enter_alt_screen(screen)
+                .await
+                .context("enter the attachment surface")?;
         }
-        screen.invalidate();
-        Ok::<(), anyhow::Error>(())
+        drive(terminal, screen, &attachment).await
     }
     .await;
+    // Detach does not stop the program; a failed restore still releases the
+    // lease through the awaited release below so the model regains input custody.
+    let restore = (|| {
+        if restore_inline && terminal.is_alt_screen()? {
+            terminal.leave_alt_screen()?;
+        }
+        Ok::<(), anyhow::Error>(())
+    })();
+    screen.invalidate();
     attachment.release().await;
-    outcome.and(restore)
+    let reason = outcome?;
+    restore?;
+    Ok(reason)
 }
 
 async fn drive(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     attachment: &TerminalAttachment,
-) -> Result<()> {
+) -> Result<ViewExit> {
     let mut notice: Option<String> = None;
     let mut remote = (0u16, 0u16);
     loop {
         if !attachment.is_live() {
-            return Ok(());
+            return Ok(ViewExit::ProgramEnded);
         }
         let (width, height) = terminal.size()?;
         let width = width.max(1);
@@ -170,10 +186,8 @@ async fn drive(
         };
         let event = event.context("terminal input ended unexpectedly")??;
         match event {
-            InputEvent::Key(key)
-                if key.code == KeyCode::Char(DETACH_CHAR) && key.modifiers == DETACH_MODIFIER =>
-            {
-                return Ok(());
+            InputEvent::Key(key) if is_detach_key(key) => {
+                return Ok(ViewExit::Detached);
             }
             InputEvent::Key(key) => {
                 let application_cursor = attachment
@@ -201,22 +215,32 @@ async fn drive(
                     .page(0, 1)
                     .map(|page| page.screen.bracketed_paste)
                     .unwrap_or(false);
+                // One local paste is one remote region. Bounded writes may
+                // split UTF-8 bytes, but must not insert framing between them.
+                let parts: [&[u8]; 3] = if meta {
+                    [b"\x1b[200~", text.as_bytes(), b"\x1b[201~"]
+                } else {
+                    [b"", text.as_bytes(), b""]
+                };
+                let mut written = 0;
                 let mut failure = None;
-                for chunk in text.as_bytes().chunks(MAX_PASTE_CHUNK) {
-                    let mut bytes = Vec::with_capacity(chunk.len() + 12);
-                    if meta {
-                        bytes.extend_from_slice(b"\x1b[200~");
-                    }
-                    bytes.extend_from_slice(chunk);
-                    if meta {
-                        bytes.extend_from_slice(b"\x1b[201~");
-                    }
-                    let write = attachment.write(bytes).await;
-                    if write.error.is_some() || write.cancelled {
+                for chunk in parts
+                    .into_iter()
+                    .flat_map(|part| part.chunks(MAX_PASTE_CHUNK))
+                {
+                    let write = attachment.write(chunk.to_vec()).await;
+                    written += write.bytes_written;
+                    if write.error.is_some()
+                        || write.cancelled
+                        || write.bytes_written != chunk.len()
+                    {
                         failure = Some(format!(
-                            "Paste incomplete after {} bytes: {}",
-                            write.bytes_written,
-                            write.error.as_deref().unwrap_or("cancelled")
+                            "Paste incomplete after {written} terminal bytes: {}",
+                            write.error.as_deref().unwrap_or(if write.cancelled {
+                                "cancelled"
+                            } else {
+                                "short write"
+                            })
                         ));
                         break;
                     }
@@ -228,6 +252,12 @@ async fn drive(
             InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
         }
     }
+}
+
+fn is_detach_key(key: KeyEvent) -> bool {
+    (key.code == KeyCode::Char(DETACH_CHAR) && key.modifiers == DETACH_MODIFIER)
+        // Legacy terminals report this C0 byte without a Control modifier.
+        || (key.code == KeyCode::Char('\x1d') && key.modifiers == Modifiers::NONE)
 }
 
 /// Fit the remote grid into the host viewport and the driver's cell budget.
@@ -376,6 +406,15 @@ mod tests {
             encode(KeyCode::Char('é'), Modifiers::NONE, false),
             "é".as_bytes()
         );
+    }
+
+    #[test]
+    fn detach_accepts_legacy_and_disambiguated_control_bracket_only() {
+        assert!(is_detach_key(key(KeyCode::Char('\x1d'), Modifiers::NONE)));
+        assert!(is_detach_key(key(KeyCode::Char(']'), Modifiers::CONTROL)));
+        assert!(!is_detach_key(key(KeyCode::Char(']'), Modifiers::NONE)));
+        assert!(!is_detach_key(key(KeyCode::Char(']'), Modifiers::ALT)));
+        assert!(!is_detach_key(key(KeyCode::Char('\x1d'), Modifiers::ALT)));
     }
 
     #[test]

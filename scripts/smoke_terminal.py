@@ -19,6 +19,7 @@ from pathlib import Path
 
 from terminal_style import has_foreground, program_ready
 from smoke_terminal_recovery import qualify as exercise_interrupted_session
+from smoke_process_terminal import qualify as exercise_process_terminal
 
 
 class CursorReplies:
@@ -975,3 +976,4 @@ def exercise_questions():
 exercise_questions()
 for mode in ("inline", "fullscreen"):
     exercise_interrupted_session(mode)
+    exercise_process_terminal(mode)
