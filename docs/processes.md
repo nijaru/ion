@@ -45,7 +45,7 @@ For example: “Stop that server with `process.close`, inspect its result, then 
 
 ## Limits and lifetime
 
-Programs belong to the live application owner, invoking Session and captured working directory. Handles are opaque UUIDs, not PIDs. Switching away from a context or shutting down requests stop and join for its programs; delegated coding jobs close their own programs before settling. Reopening a saved conversation does **not** resurrect programs or make old handles controllable by a new owner.
+Programs belong to the live application owner, invoking Session and captured working directory. Handles are opaque UUIDs, not PIDs, and do not transfer to another Session. The owner outlives Turns and Session binding changes; application shutdown requests stop and join, and delegated coding jobs close their own programs before settling. Reopening a saved conversation does **not** resurrect programs or make old handles controllable by a new owner.
 
 Commands run with your host permissions, not in a sandbox. Stopping a process group is not containment of daemonized descendants and does not undo effects. Input writes report acknowledged bytes and may be partial or cancelled; an incomplete paste cannot be rolled back or safely replayed automatically.
 
