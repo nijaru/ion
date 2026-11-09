@@ -73,7 +73,7 @@ fn prepare_tree(
             point,
         }));
     }
-    let items = points
+    let mut items = points
         .into_iter()
         .rev()
         .map(|point| {
@@ -107,6 +107,19 @@ fn prepare_tree(
         })
         .collect::<Vec<_>>();
     anyhow::ensure!(!items.is_empty(), "no messages to explore");
+    // A message boundary can precede the selected head's metadata. Keeping the
+    // current context must not navigate to that boundary or rebind the runtime.
+    items.insert(
+        0,
+        PickerItem {
+            label: "Current context · keep selection".into(),
+            detail: Some(format!(
+                "Opened at head entry {}; accepting leaves context and workspace files unchanged",
+                expected.head_entry,
+            )),
+            value: PickerValue::KeepContext,
+        },
+    );
     Ok(super::session_io::ReadOutput::Picker(Box::new(Picker {
         title: "Explore context (files unchanged)",
         query: String::new(),
@@ -234,7 +247,7 @@ fn prepare_fork(
                 "Fork before Turn"
             },
             query: String::new(),
-            selected: 0,
+            selected: items.len() - 1,
             items,
         })))
     }
@@ -460,6 +473,33 @@ mod tests {
             model,
             turns: 3,
             updated,
+        }
+    }
+
+    #[test]
+    fn fork_pickers_open_on_the_newest_eligible_turn() {
+        for (after, expected) in [(false, 3), (true, 2)] {
+            let turns = vec![
+                turn(1, Some(TurnEndReason::Completed)),
+                turn(2, Some(TurnEndReason::Cancelled)),
+                turn(3, None),
+            ];
+            let super::super::session_io::ReadOutput::Picker(picker) =
+                prepare_fork(turns, None, after).unwrap()
+            else {
+                panic!("expected a fork picker");
+            };
+            assert!(picker.items[0].label.starts_with("Turn 1 "));
+            let PickerValue::Fork { target, .. } = &picker.items[picker.selected].value else {
+                panic!("expected a fork target");
+            };
+            if after {
+                assert!(matches!(target.point, ForkPoint::AfterTurn(turn) if turn == expected));
+                assert!(target.restore.is_none());
+            } else {
+                assert!(matches!(target.point, ForkPoint::BeforeTurn(turn) if turn == expected));
+                assert_eq!(target.restore.as_ref(), Some(&input("request 3")));
+            }
         }
     }
 

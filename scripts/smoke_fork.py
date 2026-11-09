@@ -49,7 +49,16 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
     work = Path(temporary)
     workspace = work / "workspace"
     workspace.mkdir()
-    env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    (workspace / ".git").mkdir()
+    home = work / "home"
+    home.mkdir()
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(home), "SHELL": "/bin/sh", "LANG": "en_US.UTF-8",
+        "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"),
+        "XDG_STATE_HOME": str(work / "state"), "XDG_CACHE_HOME": str(work / "cache"),
+        "TMPDIR": str(work), "TERM": "xterm-256color",
+    }
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -236,8 +245,8 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         children = set((work / "ion/sessions").rglob("*.sqlite")) - before_paths
         assert len(children) == 1, "picked /fork-after did not save exactly one copy"
         picked = json.loads(ion("--session", children.pop(), "inspect").stdout)
-        assert [entry["data"]["turn"] for entry in picked["entries"] if entry["kind"] == "turn_started"] == [1]
-        assert picked["messages"] == source_before["messages"][:2]
+        assert [entry["data"]["turn"] for entry in picked["entries"] if entry["kind"] == "turn_started"] == [1, 2]
+        assert picked["messages"] == source_before["messages"]
         assert picked["unfinished_turn"] is None
         assert picked["last_model"] == source_before["last_model"]
         assert json.loads(ion("--session", source_id, "inspect").stdout) == source_before, "picked /fork-after changed source facts"
@@ -328,8 +337,8 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         assert selections == [original_parent, original_parent], "search selected a different source boundary"
         # Export through the passive CLI after a real same-Session branch change.
         # A hidden branch must not survive inside HTML's source or media payload.
-        selected = max(index + 1 for index, entry in enumerate(tree_view["entries"])
-                       if entry["kind"] == "assistant" and index + 1 in tree_view["context_path"])
+        selected = tree_view["context_path"][-1]
+        assert tree_view["entries"][selected - 1]["kind"] == "turn_ended"
         ion("--session", image_session, "run", "HIDDEN_ALTERNATIVE_EXPORT")
         rpc = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session, "rpc"], env=env,
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
@@ -368,7 +377,81 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         assert "HIDDEN_ALTERNATIVE_EXPORT" not in text and "data:image" not in text
         assert json.loads(ion("--session", image_session, "inspect").stdout) == before, "export changed Session facts"
         assert len(requests) == before_requests, "export dispatched model work"
-        print("Ion fork/clone, durable context navigation, selected HTML/text export, provider affinity, terminal control and image-note restoration: OK")
+        # An older selected branch must be safe to browse and accept unchanged.
+        # Fork candidates retain all recorded Turns, but default to the newest.
+        sentinel = workspace / "current-files.txt"
+        sentinel.write_text("Current workspace — not a historical snapshot. 🦀\n")
+        latest_turn = next(entry["data"]["turn"] for entry in reversed(before["entries"])
+                           if entry["kind"] == "turn_started")
+        for mode in ("inline", "fullscreen"):
+            before_paths = set((work / "ion/sessions").rglob("*.sqlite"))
+            before_requests = len(requests)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+            child = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session,
+                                      "--tui-mode", mode, "chat"], env=env, stdin=slave,
+                                     stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+            os.close(slave)
+            output = bytearray()
+            stage = "startup"
+            deadline = time.monotonic() + 15
+            try:
+                while time.monotonic() < deadline:
+                    readable, _, _ = select.select([master], [], [], 0.05)
+                    if readable:
+                        try:
+                            data = os.read(master, 65536)
+                        except OSError as error:
+                            if error.errno != errno.EIO:
+                                raise
+                            data = b""
+                        output.extend(data)
+                        if b"\x1b[6n" in data:
+                            os.write(master, b"\x1b[2;1R")
+                    if stage == "startup" and b"\xe2\x80\xba" in output and program_ready(output):
+                        os.write(master, b"/tree\r")
+                        output.clear()
+                        stage = "tree"
+                    elif stage == "tree" and b"Explore context" in output and program_ready(output):
+                        os.write(master, b"\r")
+                        output.clear()
+                        stage = "keep"
+                    elif stage == "keep":
+                        assert b"Context selected" not in output, "accepting /tree's initial choice changed context"
+                        # Keeping context is a local action, not a new busy/idle
+                        # operation. Wait for its receipt and painted composer.
+                        if b"Context unchanged" in output and b"\xe2\x80\xba" in output:
+                            os.write(master, b"/fork\r")
+                            output.clear()
+                            stage = "fork"
+                    elif stage == "fork" and b"Fork before Turn" in output and b"Enter select" in output and program_ready(output):
+                        os.write(master, b"\r")
+                        output.clear()
+                        stage = "restored"
+                    elif (stage == "restored" and b"Forked as" in output and program_ready(output)
+                          and "HIDDEN_ALTERNATIVE_EXPORT" in painted_text(output)):
+                        # Cancel the draft without submitting, then exit normally.
+                        os.write(master, b"\x03\x03\x04\x04")
+                        stage = "exit"
+                    if child.poll() is not None:
+                        break
+                assert stage == "exit", (mode, stage, output[-1600:])
+                assert child.wait(timeout=5) == 0, output[-1600:]
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+                os.close(master)
+            assert len(requests) == before_requests, "browsing/forking dispatched restored input"
+            assert json.loads(ion("--session", image_session, "inspect").stdout) == before, "default tree/fork changed source facts"
+            children = set((work / "ion/sessions").rglob("*.sqlite")) - before_paths
+            assert len(children) == 1, "default fork lost or duplicated a saved copy"
+            copied = json.loads(ion("--session", children.pop(), "inspect").stdout)
+            copied_turns = [entry["data"]["turn"] for entry in copied["entries"] if entry["kind"] == "turn_started"]
+            assert copied_turns[-1] == latest_turn - 1 and latest_turn not in copied_turns, copied_turns
+            assert copied["messages"] == before["messages"]
+            assert sentinel.read_text() == "Current workspace — not a historical snapshot. 🦀\n"
+        print("Ion fork/clone, safe navigation defaults, selected HTML/text export, provider affinity, terminal control and image-note restoration: OK")
     finally:
         server.shutdown()
         server.server_close()

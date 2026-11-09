@@ -43,6 +43,7 @@ pub(super) enum PickerValue {
         target: ForkPickerValue,
         search: MessageSearch,
     },
+    KeepContext,
     Context {
         target: super::navigation::ContextPickerValue,
         search: MessageSearch,

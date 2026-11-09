@@ -58,6 +58,8 @@ During early unstable development, incompatible Session databases are rejected r
 
 Configuration, saved credentials, resources and sessions use `~/.ion` by default, or `ION_HOME` when set; workspace-specific `.ion` is separate. No automatic migration from old XDG storage is performed.
 
+See [Sessions and alternative conversations](docs/sessions.md) for finding saved work, exploring context without changing files, and choosing clone or fork boundaries.
+
 See [Skills, prompts and commands](docs/customization.md) to add project skills, reusable `/name` prompts and explicit `/command:name` executables. `/skills`, `/prompts` and `/commands` show loaded resources; `/reload` refreshes them and reports source warnings.
 
 See [Long-running programs](docs/processes.md) for starting supervised programs, `/attach`, Ctrl-] detachment, inspection and stop/join controls. [Tool selection and operator vetoes](docs/tool-control.md) explains model loadouts, optional pre-dispatch refusal programs and their limits.

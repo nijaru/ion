@@ -227,6 +227,10 @@ pub(super) async fn apply_picker(
         }
         return Ok(());
     }
+    if let PickerValue::KeepContext = value {
+        ui.status = "Context unchanged; workspace files unchanged".into();
+        return Ok(());
+    }
     if ui.clipboard_job.is_some() {
         ui.status = format!(
             "Wait for clipboard paste or cancel it with {}",
@@ -299,6 +303,7 @@ pub(super) async fn apply_picker(
             return Ok(());
         }
         PickerValue::Setting(_)
+        | PickerValue::KeepContext
         | PickerValue::Task(_)
         | PickerValue::Mcp(_)
         | PickerValue::CompletionDelivery(_)
