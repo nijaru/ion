@@ -82,7 +82,8 @@ class Case:
                               env=self.env, check=True, capture_output=True, timeout=15)
 
     def command(self, name):
-        return shlex.join([sys.executable, "-u", str(self.program), name])
+        # Observe the actual supervised child, not a shell-dependent descendant.
+        return "exec " + shlex.join([sys.executable, "-u", str(self.program), name])
 
     def handler(self):
         case = self
