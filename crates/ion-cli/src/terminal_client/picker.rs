@@ -87,6 +87,11 @@ impl Picker {
                                 .get_or_insert_with(|| SessionQuery::new(&self.query))
                                 .matches(search)
                     }
+                    PickerValue::Task(super::tasks::TaskChoice::Open(id)) => {
+                        !named_only
+                            && (item.label.to_ascii_lowercase().contains(&query)
+                                || id.to_string().contains(&query))
+                    }
                     PickerValue::Fork { search, .. } | PickerValue::Context { search, .. } => {
                         !named_only
                             && search.matches(

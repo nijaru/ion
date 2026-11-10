@@ -80,6 +80,12 @@ fn item(job: &BackgroundJobStatus) -> PickerItem {
             if let Some(error) = &job.error {
                 text.push_str(&format!("Error: {error}\n"));
             }
+            text.push_str(&format!(
+                "Task {}\nParent Session {}\nChild Session file: {}\n",
+                job.id,
+                job.parent,
+                job.path.display(),
+            ));
             text.push_str(
                 &job.progress
                     .as_ref()

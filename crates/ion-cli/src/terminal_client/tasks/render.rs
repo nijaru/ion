@@ -358,6 +358,26 @@ mod tests {
     }
 
     #[test]
+    fn task_search_resolves_full_handles_even_when_display_prefixes_collide() {
+        let first = job(&observation());
+        let mut second = first.clone();
+        second.id = uuid::Uuid::from_u128(0xabcdef);
+        let items = vec![item(&first), item(&second)];
+        assert_eq!(items[0].label, items[1].label);
+        let mut picker = super::super::Picker {
+            title: "Background tasks",
+            query: second.id.to_string().to_uppercase(),
+            selected: 0,
+            items,
+        };
+        assert_eq!(picker.matches(false, None), vec![1]);
+        picker.query = first.id.to_string();
+        assert_eq!(picker.matches(false, None), vec![0]);
+        picker.query = "fixture/child".into();
+        assert_eq!(picker.matches(false, None), vec![0, 1]);
+    }
+
+    #[test]
     fn task_actions_follow_cleanup_and_keep_draft_custody() {
         use super::super::{TaskChoice, actions};
         use crate::terminal_client::{Action, Frontend, PickerValue};
@@ -528,6 +548,9 @@ mod tests {
                     .starts_with("Error: FAILURE_CAUSE")
             );
             job.error = None;
+            assert!(text.contains(&format!("Task {}", job.id)));
+            assert!(text.contains(&format!("Parent Session {}", job.parent)));
+            assert!(text.contains(&format!("Child Session file: {}", job.path.display())));
             assert!(text.contains("thinking (content hidden)") && text.contains("elapsed 12.3s"));
             assert!(text.contains("2023-11-14 22:13:20 UTC"));
             assert!(!text.contains("VISIBLE") && !text.contains("HIDDEN_TASK_ARGUMENT"));

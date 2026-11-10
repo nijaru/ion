@@ -576,12 +576,36 @@ def exercise_tasks(work, env):
                 pid = int((cwd / "task.pid").read_text())
                 child_paths = set((Path(env["ION_HOME"]) / "sessions").rglob("children/*.sqlite")) - before_paths
                 assert len(child_paths) == 1, child_paths
+                # Read the actual handle from committed parent facts, not its
+                # shortened display label or the child's distinct Session ID.
+                records = []
+                parent_paths = set((Path(env["ION_HOME"]) / "sessions").rglob("*.sqlite")) - before_paths - child_paths
+                for path in parent_paths:
+                    connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+                    try:
+                        for (body,) in connection.execute("SELECT body FROM entries"):
+                            entry = json.loads(body)
+                            if entry["kind"] == "delegation_admitted":
+                                records.append(entry["data"]["record"])
+                    finally:
+                        connection.close()
+                assert len(records) == 1, records
+                task = records[0]
                 before = len(requests)
                 terminal.output.clear()
                 terminal.send("/tasks\r")
                 terminal.wait(lambda: "Background tasks" in terminal.text())
                 terminal.paint()
-                terminal.send("smoke\r")
+                details = terminal.text()
+                terminal.output.clear()
+                terminal.send(task["run"].upper())
+                terminal.wait(lambda: task["run"].upper() in terminal.text())
+                terminal.paint()
+                # An unchanged match count need not be repainted into this
+                # capture window. Opening the action view below proves a match.
+                assert "0 match(es)" not in terminal.text(), ("full task handle did not match its retained task", terminal.text())
+                assert task["run"] in details and task["site"]["session"] in details, details
+                terminal.send("\r")
                 terminal.wait(lambda: "Task actions" in terminal.text())
                 terminal.paint()
                 assert "Stop task" in terminal.text() and "Remove finished" not in terminal.text(), terminal.text()
