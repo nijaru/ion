@@ -5,12 +5,15 @@ Follow the shared `nijaru/dotfiles/instructions/AGENTS.md` rules. Source is the 
 ## Design and reference policy
 
 Ion is one reusable Rust agent engine with a complete coding application, not
-a coding-only kernel or multiple loops. Pi is the primary agent/workflow
-reference, fx the native/TUI reference, and Pi Durable a source for effect and
-programmatic-tool recovery patterns. Inspect current upstream source for the
-affected workflow, then implement idiomatically in Rust. Reuse working code;
-remove obsolete abstractions through all real callers. The current TUI is
-not accepted for daily use. No autonomous pull requests.
+a coding-only kernel or multiple loops. Pi, including Pi Durable, is the primary
+reference family for runtime, context, tools and Session semantics. Target the
+Pi capabilities that matter in actual use, not every upstream package. User
+interaction should be Pi-like; visual presentation should be fx-like. Consult
+other relevant sources for specific questions. Model useful semantics and
+ownership idiomatically in Rust, not upstream classes or parallel runtimes.
+The model chooses the coding actions; inspect/edit/test is not a hard-coded
+runtime loop. Reuse working code; remove obsolete abstractions through all real
+callers. The current TUI is not accepted for daily use. No autonomous pull requests.
 
 Maintainer-private design, execution plan and source evidence may be available
 through the owner's knowledge repository. Consult them when accessible under

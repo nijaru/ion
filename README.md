@@ -2,6 +2,8 @@
 
 Ion is an **experimental Rust agent harness and coding application**. It shares one agent/session engine across headless CLI, terminal chat, stdio RPC and Rust embedding. Coding tools include files, search, guarded edits, native shell execution, web access and optional MCP/Code Mode. Sessions are stored in SQLite. The core is intended to support non-coding hosts as well.
 
+The target is Pi-like coding capabilities and interaction, with compact fx-like terminal styling, implemented idiomatically in Rust rather than copying either implementation.
+
 **Status:** unreleased v0. Everyday coding reliability and native terminal usability are not yet qualified; the TUI is not a recommended daily driver. Implemented behavior is defined by source, not planned features.
 
 ## Build
