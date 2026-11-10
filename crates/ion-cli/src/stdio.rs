@@ -64,10 +64,14 @@ impl Stdio {
             return Ok(Self::File(tokio::fs::File::from_std(fd.into())));
         }
         fcntl_setfl(&fd, original_flags | OFlags::NONBLOCK)?;
-        Ok(Self::Pollable(AsyncFd::with_interest(
-            NonblockingFd { fd, original_flags },
-            interest,
-        )?))
+        // SAFETY: NonblockingFd owns the duplicated descriptor. Its private fd
+        // is never closed or replaced while registered, and AsRawFd always
+        // returns that same descriptor, including if the caller closes theirs.
+        #[allow(unsafe_code)]
+        let fd = unsafe {
+            AsyncFd::register_with_interest(NonblockingFd { fd, original_flags }, interest)
+        }?;
+        Ok(Self::Pollable(fd))
     }
 }
 
@@ -146,6 +150,21 @@ mod tests {
         time::Duration,
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn registered_stdio_owns_its_descriptors() {
+        let (socket, mut peer) = UnixStream::pair().unwrap();
+        let (mut input, mut output) =
+            Stdio::open((&socket, Interest::READABLE), (&socket, Interest::WRITABLE)).unwrap();
+        drop(socket);
+        peer.write_all(b"r").unwrap();
+        let mut byte = [0];
+        input.read_exact(&mut byte).await.unwrap();
+        assert_eq!(&byte, b"r");
+        output.write_all(b"w").await.unwrap();
+        peer.read_exact(&mut byte).unwrap();
+        assert_eq!(&byte, b"w");
+    }
 
     #[tokio::test]
     async fn aliased_stdio_restores_flags_and_cancelled_reads_preserve_input() {

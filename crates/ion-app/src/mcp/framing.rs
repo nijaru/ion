@@ -11,7 +11,8 @@ use std::{
 };
 
 use futures_util::{Stream, StreamExt};
-use tokio::io::{AsyncRead, ReadBuf};
+use rmcp::{RoleClient, transport::async_rw::AsyncRwTransport};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Aggregate ceiling for one stdio JSON line or HTTP JSON/error body.
 pub(super) const MAX_MCP_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
@@ -42,6 +43,17 @@ impl<R> BoundedLineReader<R> {
             used: 0,
             overflowed: false,
         }
+    }
+
+    pub(super) fn into_transport<W>(self, writer: W) -> AsyncRwTransport<RoleClient, Self, W>
+    where
+        R: AsyncRead + Send + Unpin,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        // The SDK skips over-limit lines instead of ending the connection. Keep
+        // its ceiling aligned so our poisoned reader owns overflow rejection.
+        let max_bytes = self.max_bytes;
+        AsyncRwTransport::new_client(self, writer).with_max_line_length(max_bytes)
     }
 
     fn overflow(&self) -> io::Error {
@@ -223,10 +235,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rmcp::{
-        model::ServerJsonRpcMessage,
-        transport::{Transport, async_rw::AsyncRwTransport},
-    };
+    use rmcp::{model::ServerJsonRpcMessage, transport::Transport};
     use tokio::{
         io::{AsyncWriteExt, duplex, sink},
         sync::oneshot,
@@ -241,8 +250,7 @@ mod tests {
     }
 
     async fn receive_line(line: &[u8], max_bytes: usize) -> Option<ServerJsonRpcMessage> {
-        let mut transport =
-            AsyncRwTransport::new_client(BoundedLineReader::new(line, max_bytes), sink());
+        let mut transport = BoundedLineReader::new(line, max_bytes).into_transport(sink());
         transport.receive().await
     }
 
@@ -258,6 +266,21 @@ mod tests {
         assert!(
             receive_line(&line, line.len() - 1).await.is_none(),
             "over-budget line reached the SDK decoder"
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_stdio_line_cannot_resume_at_a_later_valid_message() {
+        let valid = notification_line();
+        let mut input = valid.clone();
+        input.insert(input.len() - 1, b' ');
+        input.extend_from_slice(&valid);
+        let mut transport =
+            BoundedLineReader::new(input.as_slice(), valid.len()).into_transport(sink());
+        assert!(transport.receive().await.is_none());
+        assert!(
+            transport.receive().await.is_none(),
+            "overflow was not fatal"
         );
     }
 
@@ -291,8 +314,7 @@ mod tests {
             resume.await.unwrap();
             writer.write_all(&line[split..]).await.unwrap();
         });
-        let mut transport =
-            AsyncRwTransport::new_client(BoundedLineReader::new(reader, line_len), sink());
+        let mut transport = BoundedLineReader::new(reader, line_len).into_transport(sink());
 
         started.await.unwrap();
         assert!(

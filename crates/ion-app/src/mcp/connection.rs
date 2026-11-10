@@ -14,8 +14,8 @@ use rmcp::{
     RoleClient,
     service::{QuitReason, RxJsonRpcMessage, ServiceExt, TxJsonRpcMessage},
     transport::{
-        StreamableHttpClientTransport, Transport, async_rw::AsyncRwTransport,
-        common::client_side_sse::SseRetryPolicy, streamable_http_client::StreamableHttpError,
+        StreamableHttpClientTransport, Transport, common::client_side_sse::SseRetryPolicy,
+        streamable_http_client::StreamableHttpError,
     },
 };
 use tokio::{process::Child, sync::oneshot};
@@ -69,10 +69,9 @@ impl Connection {
                 let initialized = initialize(
                     name,
                     &stop,
-                    handler.serve(Tracked(AsyncRwTransport::new_client(
-                        BoundedLineReader::new(stdout, MAX_MCP_MESSAGE_BYTES),
-                        stdin,
-                    ))),
+                    handler.serve(Tracked(
+                        BoundedLineReader::new(stdout, MAX_MCP_MESSAGE_BYTES).into_transport(stdin),
+                    )),
                 )
                 .await;
                 (initialized, OwnedTransport::Stdio { process, stderr })

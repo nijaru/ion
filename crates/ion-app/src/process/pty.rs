@@ -47,7 +47,11 @@ pub(super) async fn run(
     };
     // Register the readiness source before any child exists, so a registration
     // failure cannot abandon an already-started program.
-    let master = match tokio::io::unix::AsyncFd::new(master) {
+    // SAFETY: master is an OwnedFd retained by AsyncFd for the driver lifetime.
+    // The driver only borrows it for I/O/ioctls; it never closes or replaces the
+    // registered descriptor. OwnedFd's AsRawFd always returns that descriptor.
+    #[allow(unsafe_code)]
+    let master = match unsafe { tokio::io::unix::AsyncFd::register(master) } {
         Ok(master) => master,
         Err(error) => {
             state.set_start_error(format!("terminal did not start: {error}"));

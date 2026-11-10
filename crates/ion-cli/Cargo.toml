@@ -16,7 +16,7 @@ ion-ai.workspace = true
 ion-core.workspace = true
 ion-app.workspace = true
 ion-terminal.workspace = true
-pulldown-cmark = { version = "0.13.4", default-features = false, features = ["html"] }
+pulldown-cmark = { version = "0.13.6", default-features = false, features = ["html"] }
 ratatui = "0.30.2"
 rustix = { version = "1.1.4", features = ["fs", "termios"] }
 serde = { version = "1.0.229", features = ["derive"] }
@@ -30,7 +30,7 @@ unicode-width = "0.2.2"
 uuid = { version = "1.25.0", features = ["v7"] }
 
 [dev-dependencies]
-rusqlite = "0.40.2"
+rusqlite = "0.41.1"
 
 [lints]
 workspace = true
