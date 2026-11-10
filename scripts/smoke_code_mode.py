@@ -10,6 +10,7 @@ import select
 import shlex
 import shutil
 from smoke_artifacts import artifact_bytes
+from terminal_style import program_ready
 import signal
 import sqlite3
 import struct
@@ -361,7 +362,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                         output.extend(data)
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
-                    if not submitted and b"\xe2\x80\xba" in output:
+                    if not submitted and b"\xe2\x80\xba" in output and program_ready(output):
                         output.clear()
                         os.write(master, b"ACTIVE\r")
                         submitted = True

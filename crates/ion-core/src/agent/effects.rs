@@ -138,13 +138,12 @@ impl OrderedBatch {
                     )
                 }
             };
+            let previously_activated = activate_tools.len();
             activate_tools.extend(activated);
             let next_context =
-                (index + 1 == self.calls.len() && !activate_tools.is_empty()).then(|| {
-                    ModelContextSnapshot {
-                        instructions: instructions.into(),
-                        tools: catalog.declared_specs_with(&activate_tools),
-                    }
+                (activate_tools.len() != previously_activated).then(|| ModelContextSnapshot {
+                    instructions: instructions.into(),
+                    tools: catalog.declared_specs_with(&activate_tools),
                 });
             let settlement = crate::ToolSettlement {
                 call_id: call.id.clone(),

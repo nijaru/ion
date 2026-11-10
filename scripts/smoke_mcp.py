@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -18,6 +19,7 @@ binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 launch_requests = []
 remote_calls = []
+discovery_requests = []
 
 
 def check_embedded_delivery(body):
@@ -43,9 +45,11 @@ def check_embedded_delivery(body):
 class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        if self.path != "/launch/chat/completions":
+        if self.path not in ("/launch/chat/completions", "/discovery/chat/completions"):
             requests.append(body)
-        if self.path == "/launch/chat/completions":
+        if self.path == "/discovery/chat/completions":
+            changes = self.discovery_changes(body)
+        elif self.path == "/launch/chat/completions":
             changes = self.launch_changes(body)
         elif self.path == "/exposure/chat/completions":
             changes = self.exposure_changes(body)
@@ -232,6 +236,28 @@ class Provider(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def discovery_changes(self, body):
+        discovery_requests.append(body)
+        names = {tool["function"]["name"] for tool in body["tools"]}
+        if len(discovery_requests) == 1:
+            assert "tool_search" in names and "mcp__4_demo__picture" not in names, names
+            calls = [
+                ("discover", "tool_search", {"query": "Visual laboratory", "limit": 1}),
+                ("hold", "exec", {"command": "printf ready > discovery-ready; sleep 30"}),
+                ("unstarted", "write", {"path": "discovery-must-not-exist", "content": "wrong"}),
+            ]
+        elif len(discovery_requests) == 2:
+            assert "mcp__4_demo__picture" in names, "committed discovery was lost on cancellation/reopen"
+            calls = [("use-loaded", "mcp__4_demo__picture", {})]
+        else:
+            assert len(discovery_requests) == 3, discovery_requests
+            check_embedded_delivery(body)
+            return [{"choices": [{"index": 0, "delta": {"content": "MCP_DISCOVERY_REOPEN_OK"}, "finish_reason": "stop"}]}]
+        return [{"choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": index, "id": identity, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+            for index, (identity, name, arguments) in enumerate(calls)
+        ]}, "finish_reason": "tool_calls"}]}]
 
     def launch_changes(self, body):
         launch_requests.append(body)
@@ -845,6 +871,39 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         changed_events = (workspace / "changing-mcp-events.txt").read_text()
         for name in ("first", "second"):
             assert changed_events.count(f"called:{name}") - previous_changed_events.count(f"called:{name}") == 1, changed_events
+        # Hold a middle sibling until SIGINT, then physically reopen the saved
+        # Session. The first search must already have committed future exposure;
+        # the last sibling must not run. Reuse the real MCP image/artifact effect.
+        subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/discovery/chat/completions", "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        discovery_path = work / "discovery.sqlite"
+        command = [binary, "--cwd", workspace, "--session", discovery_path]
+        interrupted = subprocess.Popen([*command, "run", "Discover, then wait."], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            deadline = time.monotonic() + 10
+            while not (workspace / "discovery-ready").exists():
+                assert interrupted.poll() is None, interrupted.communicate()
+                assert time.monotonic() < deadline, "middle sibling did not start"
+                time.sleep(.025)
+            interrupted.send_signal(signal.SIGINT)
+            output, errors = interrupted.communicate(timeout=10)
+            assert interrupted.returncode != 0 and not output, (interrupted.returncode, output, errors)
+        finally:
+            if interrupted.poll() is None:
+                interrupted.kill()
+                interrupted.communicate(timeout=5)
+        assert len(discovery_requests) == 1 and not (workspace / "discovery-must-not-exist").exists()
+        inspected = json.loads(subprocess.run([*command, "inspect"], env=env, check=True, capture_output=True).stdout)
+        results = [entry["data"]["result"] for entry in inspected["entries"] if entry["kind"] == "tool_result"]
+        assert [result["call_id"] for result in results] == ["discover", "hold", "unstarted"], results
+        assert results[0]["outcome"]["output"]["value"]["loaded"][0]["name"] == "mcp__4_demo__picture", results[0]
+        assert results[2]["outcome"]["state"] == "not_dispatched", results[2]
+        assert [entry["data"]["reason"] for entry in inspected["entries"] if entry["kind"] == "turn_ended"] == ["cancelled"]
+        assert (workspace / "mcp-events.txt").read_text().count("called:picture") == 0
+        continued = subprocess.run([*command, "run", "Use the loaded tool without searching again."], env=env, check=True, capture_output=True, text=True, timeout=20)
+        assert continued.stdout.strip() == "MCP_DISCOVERY_REOPEN_OK" and len(discovery_requests) == 3, continued
+        assert (workspace / "mcp-events.txt").read_text().count("called:picture") == 1
+        assert not (workspace / "discovery-must-not-exist").exists()
+        print("Ion discovery: committed load survives middle-sibling SIGINT and physical reopen; unstarted effect rejected; next request uses loaded MCP capability: OK")
         config_path.write_text(saved_config)
 
         # Project MCP configuration is inert until explicitly trusted for its

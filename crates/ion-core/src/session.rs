@@ -116,6 +116,20 @@ impl RequestBasis {
             });
         };
         let mut changes = rest.to_vec();
+        // Per-result activation is durable immediately, but future exposure
+        // must not split sibling results or rewrite their signed prefix.
+        let mut boundary = 0;
+        for change in &mut changes {
+            boundary = boundary.max(change.after_message);
+            while self
+                .messages
+                .get(boundary)
+                .is_some_and(|message| message.role == Role::Tool)
+            {
+                boundary += 1;
+            }
+            change.after_message = boundary;
+        }
         if changes.last().unwrap_or(first).context != current {
             changes.push(ModelContextChange {
                 after_message: self.messages.len(),
@@ -321,8 +335,10 @@ impl State {
                 }
             }
             SessionEntry::ModelContextChanged { turn, context } => {
+                // Discovery commits future exposure with its result, even while
+                // siblings remain bound to the frozen issuing request catalog.
+                // Request admission still requires every sibling to be settled.
                 if self.active != Some(*turn)
-                    || !self.pending.is_empty()
                     || self.last_context.as_ref() == Some(context)
                     || !valid_model_context(context)
                 {

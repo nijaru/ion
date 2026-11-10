@@ -1200,6 +1200,212 @@ async fn coding_task_uses_one_loop_and_resumes_after_reopen() {
 }
 
 #[tokio::test]
+async fn discovery_settles_each_activation_without_widening_the_issued_batch() {
+    struct DeferredLookups;
+    impl ToolSource for DeferredLookups {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            ["alpha_lookup", "beta_lookup"]
+                .into_iter()
+                .map(|name| {
+                    ToolRegistration::new(
+                        ToolDefinition::external(ToolSpec {
+                            name: name.into(),
+                            description: format!("{name} project metadata"),
+                            input_schema: serde_json::json!({"type":"object","additionalProperties":false,"properties":{}}),
+                        })
+                        .deferred(),
+                        self.clone(),
+                    )
+                })
+                .collect()
+        }
+    }
+    impl ToolExecutor for DeferredLookups {
+        fn execute<'a>(
+            &'a self,
+            invocation: crate::ToolInvocation<'a>,
+        ) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async move {
+                ToolOutput::success(serde_json::json!({"tool":invocation.call().name}))
+            })
+        }
+    }
+
+    for cancel_after in [Some("search-alpha"), Some("search-beta"), None] {
+        let root =
+            std::env::temp_dir().join(format!("ion-discovery-boundary-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![
+                Content::ToolCall(ToolCall {
+                    id: "search-alpha".into(),
+                    name: "tool_search".into(),
+                    arguments: serde_json::json!({"query":"alpha_lookup","limit":1}),
+                    raw_arguments: None,
+                }),
+                Content::ToolCall(ToolCall {
+                    id: "search-beta".into(),
+                    name: "tool_search".into(),
+                    arguments: serde_json::json!({"query":"beta_lookup","limit":1}),
+                    raw_arguments: None,
+                }),
+                Content::ToolCall(ToolCall {
+                    id: "premature".into(),
+                    name: "alpha_lookup".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: None,
+                }),
+            ]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(DeferredLookups), model())
+            .with_recovery_scope(crate::AuthorityScope::new("discovery/grants-v1").unwrap());
+        let stop = CancellationToken::new();
+        let result = agent
+            .submit(
+                session.clone(),
+                "find the metadata".into(),
+                "test".into(),
+                stop.clone(),
+                move |event| {
+                    if let AgentEvent::ToolFinished { call_id, .. } = event
+                        && Some(call_id.as_str()) == cancel_after
+                    {
+                        stop.cancel();
+                    }
+                },
+            )
+            .await;
+        if cancel_after.is_some() {
+            assert!(matches!(result, Err(AgentError::Cancelled)), "{result:?}");
+        } else {
+            assert_eq!(result.unwrap(), "done");
+        }
+        let view = session.view().unwrap();
+        let outcomes = view
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                if let crate::SessionEntry::ToolResult { result, .. } = entry {
+                    Some((result.call_id.as_str(), &result.outcome))
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            matches!(outcomes[0], ("search-alpha", crate::ToolOutcome::Observed { output, .. })
+            if !output.is_error && output.value["loaded"][0]["name"] == "alpha_lookup")
+        );
+        assert!(
+            matches!(
+                outcomes[2],
+                ("premature", crate::ToolOutcome::NotDispatched { .. })
+            ),
+            "activation must not authorize a sibling in the frozen issuing catalog"
+        );
+        if cancel_after.is_none() {
+            assert!(
+                matches!(outcomes[2].1, crate::ToolOutcome::NotDispatched { reason }
+                if reason.contains("not declared"))
+            );
+        }
+        let beta_loaded = cancel_after != Some("search-alpha");
+        let expected: Vec<_> = if beta_loaded {
+            vec!["alpha_lookup", "beta_lookup"]
+        } else {
+            vec!["alpha_lookup", "tool_search"]
+        };
+        assert_eq!(
+            session
+                .model_context()
+                .unwrap()
+                .unwrap()
+                .tools
+                .iter()
+                .map(|spec| spec.name.as_str())
+                .collect::<Vec<_>>(),
+            expected,
+            "a successful search must commit its activation, even before siblings settle"
+        );
+        let contexts = view
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                if let crate::SessionEntry::ModelContextChanged { context, .. } = entry {
+                    Some(context)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(contexts.len(), if beta_loaded { 3 } else { 2 });
+        assert!(
+            contexts[1]
+                .tools
+                .iter()
+                .any(|tool| tool.name == "alpha_lookup")
+        );
+        assert!(
+            !contexts[1]
+                .tools
+                .iter()
+                .any(|tool| tool.name == "beta_lookup")
+        );
+        drop((agent, session));
+
+        let reopened = Arc::new(Session::open(&path).unwrap());
+        let continuation = Arc::new(ScriptedModelService::new([
+            response(vec![Content::ToolCall(ToolCall {
+                id: "use-alpha".into(),
+                name: "alpha_lookup".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            })]),
+            response(vec![Content::Text("used loaded tool".into())]),
+        ]));
+        let next = Agent::new(continuation.clone(), Arc::new(DeferredLookups), model());
+        assert_eq!(
+            next.submit(
+                reopened.clone(),
+                "continue".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {}
+            )
+            .await
+            .unwrap(),
+            "used loaded tool"
+        );
+        assert_eq!(
+            continuation.requests()[0]
+                .tools
+                .iter()
+                .map(|spec| spec.name.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        let requests = continuation.requests();
+        let timeline = requests[0].context_timeline.as_ref().unwrap();
+        assert!(
+            timeline
+                .changes
+                .iter()
+                .all(|change| change.after_message == 5),
+            "future exposure must not split the issuing batch's three tool results"
+        );
+        assert!(reopened.view().unwrap().entries.iter().any(|entry| matches!(entry,
+            crate::SessionEntry::ToolResult { result, .. }
+                if result.call_id == "use-alpha" && matches!(&result.outcome,
+                    crate::ToolOutcome::Observed { output, .. } if output.value["tool"] == "alpha_lookup"))));
+        drop((next, reopened));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[tokio::test]
 async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_fork() {
     struct DeferredTool;
 

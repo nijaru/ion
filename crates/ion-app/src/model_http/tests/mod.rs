@@ -409,78 +409,101 @@ fn anthropic_instruction_change_falls_back_to_latest_leading_context() {
 
 #[test]
 fn anthropic_tool_delta_preserves_signed_replay_prefix() {
-    let old_tool = ToolSpec {
-        name: "read".into(),
-        description: "read".into(),
-        input_schema: json!({"type":"object"}),
-    };
-    let new_tool = ToolSpec {
-        name: "write".into(),
-        description: "write".into(),
-        input_schema: json!({"type":"object"}),
-    };
-    let mut initial = request();
-    initial.route.effective.provider = "anthropic".into();
-    initial.route.effective.model = "claude-opus-5-5".into();
-    initial.tools = vec![old_tool.clone()];
-    let initial_body = anthropic_body(&initial, true).unwrap();
-    let prefix = anthropic_body_prefix_digest(&initial_body).unwrap();
-
-    let call = ToolCall {
-        id: "tool_1".into(),
-        name: "read".into(),
-        arguments: json!({"path":"x"}),
-        raw_arguments: None,
-    };
-    let replay = ProviderReplay::new(
-        "anthropic",
-        ANTHROPIC_CONTENT_REPLAY,
-        json!({
-            "blocks":[
-                {"type":"thinking","thinking":"","signature":"signature"},
-                {"type":"tool_use","id":"tool_1","name":"read","input":{"path":"x"}}
-            ],
-            "prefix_sha256":prefix
-        }),
-    )
-    .with_prefix_binding(true);
-
-    let mut continuation = initial.clone();
-    continuation.messages.push(Message {
-        role: Role::Assistant,
-        content: vec![Content::ToolCall(call)],
-        provider_replay: Some(replay),
-    });
-    continuation.messages.push(Message {
-        role: Role::Tool,
-        content: vec![Content::ToolResult(ToolResult {
-            call_id: "tool_1".into(),
+    for siblings in [1, 2] {
+        let old_tool = ToolSpec {
             name: "read".into(),
-            result: json!({"text":"ok"}),
-            images: Vec::new(),
-            is_error: false,
-        })],
-        provider_replay: None,
-    });
-    continuation.tools = vec![new_tool.clone()];
-    continuation.context_timeline = Some(ModelContextTimeline {
-        initial: ModelContextState {
-            instructions: initial.instructions.clone(),
-            tools: vec![old_tool],
-        },
-        changes: vec![ModelContextChange {
-            after_message: 3,
-            context: ModelContextState {
-                instructions: continuation.instructions.clone(),
-                tools: vec![new_tool],
-            },
-        }],
-    });
+            description: "read".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let new_tool = ToolSpec {
+            name: "write".into(),
+            description: "write".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let mut initial = request();
+        initial.route.effective.provider = "anthropic".into();
+        initial.route.effective.model = "claude-opus-5-5".into();
+        initial.tools = vec![old_tool.clone()];
+        let initial_body = anthropic_body(&initial, true).unwrap();
+        let prefix = anthropic_body_prefix_digest(&initial_body).unwrap();
 
-    let body = anthropic_body_for_route(&continuation, true, true).unwrap();
-    assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
-    assert_eq!(body["messages"][3]["role"], "system");
-    assert!(anthropic_body_uses_inline_tools(&body));
+        let calls = (1..=siblings)
+            .map(|index| ToolCall {
+                id: format!("tool_{index}"),
+                name: "read".into(),
+                arguments: json!({"path":"x"}),
+                raw_arguments: None,
+            })
+            .collect::<Vec<_>>();
+        let mut blocks = vec![json!({"type":"thinking","thinking":"","signature":"signature"})];
+        blocks.extend(calls.iter().map(|call| {
+            json!({
+                "type":"tool_use","id":call.id,"name":call.name,"input":call.arguments
+            })
+        }));
+        let replay = ProviderReplay::new(
+            "anthropic",
+            ANTHROPIC_CONTENT_REPLAY,
+            json!({
+                "blocks":blocks,
+                "prefix_sha256":prefix
+            }),
+        )
+        .with_prefix_binding(true);
+
+        let mut continuation = initial.clone();
+        continuation.messages.push(Message {
+            role: Role::Assistant,
+            content: calls.iter().cloned().map(Content::ToolCall).collect(),
+            provider_replay: Some(replay),
+        });
+        continuation
+            .messages
+            .extend(calls.into_iter().map(|call| Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult(ToolResult {
+                    call_id: call.id,
+                    name: call.name,
+                    result: json!({"text":"ok"}),
+                    images: Vec::new(),
+                    is_error: false,
+                })],
+                provider_replay: None,
+            }));
+        continuation.tools = vec![new_tool.clone()];
+        continuation.context_timeline = Some(ModelContextTimeline {
+            initial: ModelContextState {
+                instructions: initial.instructions.clone(),
+                tools: vec![old_tool.clone()],
+            },
+            changes: vec![
+                ModelContextChange {
+                    after_message: continuation.messages.len(),
+                    context: ModelContextState {
+                        instructions: continuation.instructions.clone(),
+                        tools: vec![old_tool, new_tool.clone()],
+                    },
+                },
+                ModelContextChange {
+                    after_message: continuation.messages.len(),
+                    context: ModelContextState {
+                        instructions: continuation.instructions.clone(),
+                        tools: vec![new_tool],
+                    },
+                },
+            ],
+        });
+
+        let body = anthropic_body_for_route(&continuation, true, true).unwrap();
+        assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
+        assert_eq!(
+            body["messages"][2]["content"].as_array().unwrap().len(),
+            siblings
+        );
+        assert_eq!(body["messages"][3]["role"], "system");
+        assert_eq!(body["tools"], initial_body["tools"]);
+        assert!(anthropic_body_uses_inline_tools(&body));
+    }
 }
 
 #[test]
