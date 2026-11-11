@@ -325,6 +325,118 @@ fn finalized_parts_reject_late_deltas_and_unfinished_calls_never_handoff() {
 }
 
 #[tokio::test]
+async fn permanent_responses_failures_do_not_retry_or_lose_accounting() {
+    use ion_core::{
+        Agent, AgentError, AgentEvent, ModelUsagePurpose, Session, SessionEntry, ToolSet,
+    };
+    use std::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
+
+    for (code, kind, attempts) in [
+        ("invalid_prompt", ProviderErrorKind::InvalidRequest, 1),
+        ("server_error", ProviderErrorKind::Server, 3),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let captured = requests.clone();
+        let stop = CancellationToken::new();
+        let server_stop = stop.clone();
+        let payload = event(&json!({"type":"response.failed","response":{
+            "id":"resp_1","status":"failed","output":[],
+            "error":{"code":code,"message":"Request failed"},
+            "usage":{"input_tokens":17,"output_tokens":0}
+        }}));
+        let server = tokio::spawn(async move {
+            loop {
+                let mut socket = tokio::select! {
+                    accepted = listener.accept() => accepted.unwrap().0,
+                    () = server_stop.cancelled() => break,
+                };
+                let body: Value =
+                    serde_json::from_slice(&read_request_body(&mut socket).await).unwrap();
+                captured.lock().unwrap().push(body);
+                socket.write_all(format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}", payload.len()
+                ).as_bytes()).await.unwrap();
+            }
+        });
+        let root =
+            std::env::temp_dir().join(format!("ion-responses-failure-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let service = Arc::new(
+            HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap(),
+        );
+        let agent =
+            Agent::with_tool_set(service, Arc::new(ToolSet::new([])), request().route.logical);
+        let result = agent
+            .submit(
+                session.clone(),
+                "try the request".into(),
+                "fixture".into(),
+                CancellationToken::new(),
+                move |event| {
+                    observed.lock().unwrap().push(event);
+                },
+            )
+            .await;
+        stop.cancel();
+        server.await.unwrap();
+        let facts = session.view().unwrap().entries;
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        let durable = reopened.view().unwrap().entries;
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+
+        assert!(
+            matches!(&result, Err(AgentError::Provider(error)) if error.kind == kind),
+            "{code}: {result:?}"
+        );
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), attempts, "{code}");
+        assert!(
+            requests.iter().all(|body| body == &requests[0]),
+            "retries must retain the frozen wire request"
+        );
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| matches!(event, AgentEvent::ProviderRetry { .. }))
+                .count(),
+            attempts - 1
+        );
+        assert!(!facts.iter().any(|entry| matches!(
+            entry,
+            SessionEntry::Assistant { .. }
+                | SessionEntry::ToolResult { .. }
+                | SessionEntry::Compacted { .. }
+        )));
+        let usage = facts
+            .iter()
+            .filter_map(|entry| match entry {
+                SessionEntry::UncommittedUsage { purpose, usage, .. } => Some((purpose, usage)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(usage.len(), attempts);
+        assert!(
+            usage
+                .iter()
+                .all(|(purpose, usage)| **purpose == ModelUsagePurpose::Assistant
+                    && **usage == Usage::known(17, 0))
+        );
+        assert_eq!(durable, facts);
+    }
+}
+
+#[tokio::test]
 async fn http_preserves_failure_evidence_without_authorizing_completion() {
     let r = request();
     for (output, reported) in [

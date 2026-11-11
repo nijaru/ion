@@ -677,6 +677,11 @@ fn context_rejection_kind_survives_wrapping_and_display_truncation() {
             "This model's maximum context length is 1050000 tokens.",
         ),
         (
+            json!("invalid_prompt"),
+            "Input exceeds the context limit".to_owned(),
+            "",
+        ),
+        (
             Value::Null,
             "input length and max_tokens exceed context limit: 199000 + 8192 > 200000".to_owned(),
             "",

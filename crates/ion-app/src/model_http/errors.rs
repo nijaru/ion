@@ -107,7 +107,9 @@ pub(super) fn chat_stream_error(value: &Value) -> ProviderError {
             Some("server_error") => ProviderErrorKind::Server,
             Some("rate_limit_exceeded" | "rate_limited") => ProviderErrorKind::RateLimited,
             Some("insufficient_quota" | "billing_hard_limit_reached") => ProviderErrorKind::Quota,
-            Some("invalid_request_error") => classify_status_error(400, Some(value)),
+            Some("invalid_request_error" | "invalid_prompt") => {
+                classify_status_error(400, Some(value))
+            }
             None if is_context_error(value) => ProviderErrorKind::ContextLength,
             Some(
                 "context_length_exceeded"
