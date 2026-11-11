@@ -185,14 +185,24 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                     time.sleep(0.02)
         finally:
             os.close(fd)
-        while "Tool output: expanded" not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "resized expanded viewport did not repaint"
+        while True:
+            pane = tmux("capture-pane", "-p", "-t", "ion")
+            if "Tool output: expanded" in pane and viewport_draft in pane:
+                break
+            assert time.monotonic() < deadline, f"resized expanded viewport did not repaint:\n{pane}"
             time.sleep(0.02)
         tmux("send-keys", "-t", "ion", "C-o")
-        while viewport_draft not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "collapsed viewport did not restore the draft"
+        # The draft is also present in Expanded. Await the application's mode
+        # acknowledgement on the restored primary screen, not that shared text.
+        while True:
+            pane = tmux("capture-pane", "-p", "-t", "ion")
+            alternate = tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip()
+            if alternate == "0" and "Tool output: compact" in pane and viewport_draft in pane:
+                break
+            assert time.monotonic() < deadline, f"collapsed viewport did not restore the draft (alternate={alternate}):\n{pane}"
             time.sleep(0.02)
-        assert tmux("capture-pane", "-p", "-t", "ion", "-S", "-").count(viewport_draft) == 1
+        restored = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
+        assert restored.count(viewport_draft) == 1, f"expanded viewport custody failed (alternate={tmux('display-message', '-p', '-t', 'ion', '#{alternate_on}').strip()}):\n{restored}"
         tmux("send-keys", "-t", "ion", "C-u")
         while viewport_draft in tmux("capture-pane", "-p", "-t", "ion", "-S", "-"):
             assert time.monotonic() < deadline, "expanded resize archived provisional input"
