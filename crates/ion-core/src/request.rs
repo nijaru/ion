@@ -130,7 +130,9 @@ impl RequestPlan {
         }
         let scope = RequestScope::new(service, &request)?;
         let calibration = session.request_calibration_for(&scope)?;
-        let measurement = RequestMeasurement::measure(&request, calibration.as_ref())?;
+        let context_overhead = service.context_encoding_overhead(&request)?;
+        let measurement =
+            RequestMeasurement::measure(&request, calibration.as_ref(), context_overhead)?;
         let estimated_input = calibration.as_ref().map_or_else(
             || measurement.fallback_input_tokens(),
             |calibration| calibration.estimate(&measurement),
@@ -306,8 +308,9 @@ impl AgentLimits {
         self,
         request: &ModelRequest,
         ceiling: u32,
+        context_overhead: usize,
     ) -> Result<Option<u32>, serde_json::Error> {
-        let measurement = RequestMeasurement::measure(request, None)?;
+        let measurement = RequestMeasurement::measure(request, None, context_overhead)?;
         Ok(self.output_budget(
             measurement.retained_bytes(),
             measurement.fallback_input_tokens(),

@@ -42,7 +42,7 @@ use anthropic::anthropic_replay_notices;
 use anthropic_request::anthropic_body;
 use anthropic_request::{
     anthropic_body_for_route, anthropic_body_prefix_digest, anthropic_body_uses_inline_tools,
-    managed_anthropic_thinking,
+    anthropic_context_encoding_overhead, managed_anthropic_thinking,
 };
 use chat::ChatState;
 use chat_request::chat_body;
@@ -190,6 +190,10 @@ impl HttpModelService {
             context_window_tokens,
         })
     }
+    fn native_anthropic(&self) -> bool {
+        self.wire == HttpWire::AnthropicMessages
+            && self.endpoint.host_str() == Some("api.anthropic.com")
+    }
 }
 
 fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
@@ -215,9 +219,16 @@ impl ModelService for HttpModelService {
         model: &ion_ai::ModelRef,
         controls: &ion_ai::GenerationControls,
     ) -> Result<(), ProviderError> {
-        let native = self.wire == HttpWire::AnthropicMessages
-            && self.endpoint.host_str() == Some("api.anthropic.com");
+        let native = self.native_anthropic();
         control_fields(model, controls, self.wire, native).map(|_| ())
+    }
+
+    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
+        anthropic_context_encoding_overhead(
+            request,
+            self.native_anthropic(),
+            self.capabilities.context_mutation.inline_tool_definitions,
+        )
     }
 
     fn stream<'a>(
@@ -225,8 +236,7 @@ impl ModelService for HttpModelService {
         request: ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
-            let native_anthropic = self.wire == HttpWire::AnthropicMessages
-                && self.endpoint.host_str() == Some("api.anthropic.com");
+            let native_anthropic = self.native_anthropic();
             let mut body = match self.wire {
                 HttpWire::OpenAiResponses => responses_body(&request)?,
                 HttpWire::AnthropicMessages => anthropic_body_for_route(

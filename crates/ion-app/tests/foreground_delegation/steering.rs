@@ -14,6 +14,13 @@ struct HeldContinuation {
     release: Notify,
 }
 impl ion_ai::ModelService for HeldContinuation {
+    fn context_encoding_overhead(
+        &self,
+        request: &ion_ai::ModelRequest,
+    ) -> Result<usize, ion_ai::ProviderError> {
+        self.model.context_encoding_overhead(request)
+    }
+
     fn stream<'a>(
         &'a self,
         request: ion_ai::ModelRequest,

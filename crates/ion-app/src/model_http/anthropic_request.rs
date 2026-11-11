@@ -109,6 +109,39 @@ fn anthropic_context_fields(
     (system, tools)
 }
 
+fn anthropic_request_context_fields(
+    request: &ModelRequest,
+    instructions: Option<&str>,
+    tools: &[ToolSpec],
+) -> serde_json::Map<String, Value> {
+    let (system, definitions) = anthropic_context_fields(instructions, tools);
+    let mut fields = serde_json::Map::new();
+    if let Some(system) = system {
+        fields.insert("system".into(), system);
+    }
+    if let Some(definitions) = definitions {
+        fields.insert("tools".into(), definitions);
+    }
+    // Historical leading tools still need restrictions after their removal.
+    if !request.tools.is_empty() || !tools.is_empty() {
+        let mut choice = match &request.controls.tool_choice {
+            ToolChoice::None => json!({"type":"none"}),
+            ToolChoice::Auto => json!({"type":"auto"}),
+            ToolChoice::Required => json!({"type":"any"}),
+            ToolChoice::Named(name) => json!({"type":"tool","name":name}),
+        };
+        if request.controls.tool_choice != ToolChoice::None {
+            choice["disable_parallel_tool_use"] = json!(!request.controls.parallel_tool_calls);
+        }
+        fields.insert("tool_choice".into(), choice);
+    }
+    fields
+}
+
+fn anthropic_context_change(blocks: &[Value]) -> Value {
+    json!({"role":"system","content":blocks})
+}
+
 fn anthropic_prefix_digest(
     instructions: Option<&str>,
     tools: &[ToolSpec],
@@ -208,6 +241,50 @@ fn anthropic_context_plan(
     }))
 }
 
+fn anthropic_context_fields_bytes(
+    fields: serde_json::Map<String, Value>,
+) -> Result<usize, ProviderError> {
+    if fields.is_empty() {
+        return Ok(0);
+    }
+    // Drop the braces, but include the separator from the other body fields.
+    serde_json::to_vec(&fields)
+        .map(|encoded| encoded.len() - 1)
+        .map_err(|_| invalid("Anthropic context measurement failed"))
+}
+
+pub(super) fn anthropic_context_encoding_overhead(
+    request: &ModelRequest,
+    native_api: bool,
+    inline_tools_supported: bool,
+) -> Result<usize, ProviderError> {
+    let Some(plan) = anthropic_context_plan(request, native_api && inline_tools_supported)? else {
+        return Ok(0);
+    };
+    // Only compile context fields: validating signed transcript replay here
+    // would move ReplayContextChanged outside Core's issuance recovery path.
+    let initial = anthropic_context_fields_bytes(anthropic_request_context_fields(
+        request,
+        plan.initial.instructions.as_deref(),
+        &plan.initial.tools,
+    ))?;
+    let latest = anthropic_context_fields_bytes(anthropic_request_context_fields(
+        request,
+        request.instructions.as_deref(),
+        &request.tools,
+    ))?;
+    let mut bytes = initial;
+    for blocks in plan.changes.values() {
+        let message = anthropic_context_change(blocks);
+        let length = serde_json::to_vec(&message)
+            .map_err(|_| invalid("Anthropic context measurement failed"))?
+            .len();
+        // Each emitted message also adds a separator to the nonempty transcript.
+        bytes = bytes.saturating_add(length).saturating_add(1);
+    }
+    Ok(bytes.saturating_sub(latest))
+}
+
 pub(super) fn anthropic_body_prefix_digest(body: &Value) -> Result<String, ProviderError> {
     let messages = body["messages"]
         .as_array()
@@ -272,26 +349,8 @@ pub(super) fn anthropic_body_for_route(
             )
         },
     );
-    let (system, tools) = anthropic_context_fields(instructions, top_level_tools);
-    if let Some(system) = system {
-        body["system"] = system;
-    }
-    if let Some(tools) = tools {
-        body["tools"] = tools;
-    }
-    // Inline additions can make tools available without any leading definitions.
-    // Historical definitions still need restrictions even when later removed.
-    if !request.tools.is_empty() || !top_level_tools.is_empty() {
-        let mut choice = match &request.controls.tool_choice {
-            ToolChoice::None => json!({"type":"none"}),
-            ToolChoice::Auto => json!({"type":"auto"}),
-            ToolChoice::Required => json!({"type":"any"}),
-            ToolChoice::Named(name) => json!({"type":"tool","name":name}),
-        };
-        if request.controls.tool_choice != ToolChoice::None {
-            choice["disable_parallel_tool_use"] = json!(!request.controls.parallel_tool_calls);
-        }
-        body["tool_choice"] = choice;
+    for (name, value) in anthropic_request_context_fields(request, instructions, top_level_tools) {
+        body[&name] = value;
     }
     Ok(body)
 }
@@ -394,7 +453,7 @@ fn transcript_messages(
             .and_then(|plan| plan.changes.get(&(message_index + 1)))
             .filter(|blocks| !blocks.is_empty())
         {
-            messages.push(json!({"role":"system","content":change_blocks}));
+            messages.push(anthropic_context_change(change_blocks));
         }
     }
     transcript.finish()?;

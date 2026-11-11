@@ -19,6 +19,10 @@ impl AdmissionModel {
     }
 }
 impl ModelService for AdmissionModel {
+    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
+        self.model.context_encoding_overhead(request)
+    }
+
     fn validate_controls(
         &self,
         _model: &ion_ai::ModelRef,

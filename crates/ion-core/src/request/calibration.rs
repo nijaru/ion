@@ -18,7 +18,7 @@ use crate::{json_size::encoded_len, prompt_size::NeutralMessages};
 
 const IMAGE_INPUT_ALLOWANCE_TOKENS: u64 = 16_384;
 
-/// One frozen request, including its independently bounded retained bytes.
+/// Byte-bound surrogate and input-token estimates for one frozen request.
 #[derive(Clone)]
 pub(crate) struct RequestMeasurement {
     retained_bytes: usize,
@@ -33,6 +33,7 @@ impl RequestMeasurement {
     pub(crate) fn measure(
         request: &ModelRequest,
         calibration: Option<&RequestCalibration>,
+        context_overhead: usize,
     ) -> Result<Self, serde_json::Error> {
         let retained_bytes = encoded_len(&LatestRequest::new(request, &request.messages))?;
         let neutral_bytes = if request
@@ -52,9 +53,12 @@ impl RequestMeasurement {
             &[] as &[Message],
         ))?);
         let images = measure_images(&request.messages);
-        let fallback_input_tokens =
-            bytes_to_tokens(neutral_bytes.saturating_sub(images.encoded_bytes))
-                .saturating_add(images.count.saturating_mul(IMAGE_INPUT_ALLOWANCE_TOKENS));
+        let fallback_input_tokens = bytes_to_tokens(
+            neutral_bytes
+                .saturating_sub(images.encoded_bytes)
+                .saturating_add(context_overhead),
+        )
+        .saturating_add(images.count.saturating_mul(IMAGE_INPUT_ALLOWANCE_TOKENS));
         let trailing_input_tokens = match calibration {
             Some(sample) if sample.image_identity == images.identity => {
                 match request.messages.get(sample.after_message..) {
@@ -78,7 +82,7 @@ impl RequestMeasurement {
             _ => None,
         };
         Ok(Self {
-            retained_bytes,
+            retained_bytes: retained_bytes.saturating_add(context_overhead),
             fallback_input_tokens,
             fixed_input_tokens,
             message_count: request.messages.len(),
@@ -331,7 +335,7 @@ mod tests {
         let service = service();
         let request = request();
         let scope = RequestScope::new(&service, &request).unwrap();
-        let mut measurement = RequestMeasurement::measure(&request, None).unwrap();
+        let mut measurement = RequestMeasurement::measure(&request, None, 0).unwrap();
         let sample = RequestCalibration::new(
             &measurement,
             scope.clone(),
@@ -348,11 +352,52 @@ mod tests {
     }
 
     #[test]
+    fn historical_encoding_counts_for_cold_and_byte_limits_not_twice_in_known_usage() {
+        let service = service();
+        let mut request = request();
+        let scope = RequestScope::new(&service, &request).unwrap();
+        let base = RequestMeasurement::measure(&request, None, 0).unwrap();
+        let overhead = 30_000;
+        let initial = RequestMeasurement::measure(&request, None, overhead).unwrap();
+        assert_eq!(initial.retained_bytes(), base.retained_bytes() + overhead);
+        assert_eq!(
+            initial.fallback_input_tokens(),
+            base.fallback_input_tokens() + 10_000
+        );
+        assert_eq!(initial.fixed_input_tokens(), base.fixed_input_tokens());
+        let sample =
+            RequestCalibration::new(&initial, scope.clone(), Usage::known(11_000, 20)).unwrap();
+        request.messages = vec![
+            Message {
+                role: ion_ai::Role::Assistant,
+                content: vec![Content::Text("known".into())],
+                provider_replay: None,
+            },
+            Message::user_input("new input".into(), []),
+        ];
+        let current = RequestMeasurement::measure(&request, Some(&sample), overhead).unwrap();
+        let trailing =
+            bytes_to_tokens(encoded_len(&NeutralMessages(&request.messages[1..])).unwrap());
+        assert!(sample.applies(&current, &scope));
+        assert_eq!(sample.estimate(&current), 11_020 + trailing);
+        let limits = crate::AgentLimits {
+            max_request_bytes: 20_000,
+            ..crate::AgentLimits::default()
+        };
+        assert_eq!(
+            limits.output_budget(current.retained_bytes(), sample.estimate(&current), 100),
+            None
+        );
+        let saturated = RequestMeasurement::measure(&request, None, usize::MAX).unwrap();
+        assert_eq!(saturated.retained_bytes(), usize::MAX);
+    }
+
+    #[test]
     fn incomplete_usage_does_not_create_a_context_baseline() {
         let service = service();
         let request = request();
         let scope = RequestScope::new(&service, &request).unwrap();
-        let measurement = RequestMeasurement::measure(&request, None).unwrap();
+        let measurement = RequestMeasurement::measure(&request, None, 0).unwrap();
         for usage in [
             Usage::unknown(),
             Usage {
@@ -392,7 +437,7 @@ mod tests {
         let service = service();
         let mut request = request();
         let scope = RequestScope::new(&service, &request).unwrap();
-        let measurement = RequestMeasurement::measure(&request, None).unwrap();
+        let measurement = RequestMeasurement::measure(&request, None, 0).unwrap();
         let sample =
             RequestCalibration::new(&measurement, scope.clone(), Usage::known(100, 20)).unwrap();
         request.messages = vec![
@@ -411,7 +456,7 @@ mod tests {
                 )),
             },
         ];
-        let current = RequestMeasurement::measure(&request, Some(&sample)).unwrap();
+        let current = RequestMeasurement::measure(&request, Some(&sample), 0).unwrap();
         assert!(!sample.applies(&current, &scope));
         assert_eq!(sample.estimate(&current), current.fallback_input_tokens());
     }
@@ -421,7 +466,7 @@ mod tests {
         let service = service();
         let mut request = request();
         let scope = RequestScope::new(&service, &request).unwrap();
-        let prior = RequestMeasurement::measure(&request, None).unwrap();
+        let prior = RequestMeasurement::measure(&request, None, 0).unwrap();
         let sample = RequestCalibration::new(&prior, scope.clone(), Usage::known(100, 20)).unwrap();
         request.messages = vec![
             Message {
@@ -441,7 +486,7 @@ mod tests {
         ];
         let expected_tail =
             bytes_to_tokens(encoded_len(&NeutralMessages(&request.messages[1..])).unwrap());
-        let current = RequestMeasurement::measure(&request, Some(&sample)).unwrap();
+        let current = RequestMeasurement::measure(&request, Some(&sample), 0).unwrap();
         assert!(sample.applies(&current, &scope));
         assert_eq!(sample.estimate(&current), 120 + expected_tail);
     }

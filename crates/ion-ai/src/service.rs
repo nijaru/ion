@@ -32,6 +32,15 @@ pub trait ModelService: Send + Sync {
         Ok(())
     }
 
+    /// Additional encoded model-context bytes beyond the latest instructions
+    /// and tool definitions. Return zero when that context is not transmitted.
+    /// This is a pure planning query: no credentials, transport or generation.
+    /// Forwarding services must delegate it. It is not a whole-wire size or token
+    /// count; known provider usage already covers a stable historical prefix.
+    fn context_encoding_overhead(&self, _request: &ModelRequest) -> Result<usize, ProviderError> {
+        Ok(0)
+    }
+
     fn stream<'a>(
         &'a self,
         request: ModelRequest,

@@ -273,7 +273,7 @@ async fn coding_requests_send_the_context_clamped_model_ceiling() {
         ..agent.limits
     };
     assert_eq!(
-        limits.request_output_budget(&request, 128_000).unwrap(),
+        limits.request_output_budget(&request, 128_000, 0).unwrap(),
         limits.output_budget(bytes, input, 128_000),
     );
     assert!(limits.output_budget(bytes, input, 128_000).is_some());
@@ -282,7 +282,7 @@ async fn coding_requests_send_the_context_clamped_model_ceiling() {
             max_request_bytes: bytes - 1,
             ..limits
         }
-        .request_output_budget(&request, 128_000)
+        .request_output_budget(&request, 128_000, 0)
         .unwrap(),
         None,
     );
@@ -627,6 +627,13 @@ async fn unfinished_cache_refresh_retains_usage_when_tool_finishes_or_stop_joins
         cancel: bool,
     }
     impl ModelService for WarmStream {
+        fn context_encoding_overhead(
+            &self,
+            request: &ModelRequest,
+        ) -> Result<usize, ProviderError> {
+            self.inner.context_encoding_overhead(request)
+        }
+
         fn stream<'a>(
             &'a self,
             request: ModelRequest,
@@ -733,6 +740,10 @@ struct DelayedInitialResponse {
 }
 
 impl ModelService for DelayedInitialResponse {
+    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
+        self.inner.context_encoding_overhead(request)
+    }
+
     fn stream<'a>(
         &'a self,
         request: ModelRequest,
@@ -3355,6 +3366,10 @@ async fn steering_is_recorded_before_the_next_model_step_in_one_turn() {
 
 struct ReasoningScripts(Arc<ScriptedModelService>);
 impl ModelService for ReasoningScripts {
+    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
+        self.0.context_encoding_overhead(request)
+    }
+
     fn validate_controls(
         &self,
         _: &ModelRef,
@@ -4368,6 +4383,13 @@ async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
         steering: Arc<SteeringInbox>,
     }
     impl ModelService for SteerDuringSummary {
+        fn context_encoding_overhead(
+            &self,
+            request: &ModelRequest,
+        ) -> Result<usize, ProviderError> {
+            self.service.context_encoding_overhead(request)
+        }
+
         fn stream<'a>(
             &'a self,
             request: ModelRequest,
@@ -5441,7 +5463,10 @@ async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefi
             assert_eq!(request.route.reason, ModelRouteReason::Auxiliary);
             assert!(request.tools.is_empty());
             assert_eq!(
-                agent.limits.request_output_budget(&request, 4096).unwrap(),
+                agent
+                    .limits
+                    .request_output_budget(&request, 4096, 0)
+                    .unwrap(),
                 Some(request.controls.max_output_tokens)
             );
         }

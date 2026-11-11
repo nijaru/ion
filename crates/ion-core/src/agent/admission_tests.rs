@@ -47,6 +47,10 @@ impl PreflightService {
 }
 
 impl ModelService for PreflightService {
+    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
+        self.scripts.context_encoding_overhead(request)
+    }
+
     fn validate_controls(
         &self,
         _model: &ModelRef,

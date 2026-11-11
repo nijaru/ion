@@ -1,3 +1,4 @@
+mod context_capacity;
 mod responses;
 mod stream_limits;
 mod tool_ids;

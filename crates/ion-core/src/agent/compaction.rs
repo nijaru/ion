@@ -152,7 +152,10 @@ impl Agent {
                 prompt_cache: ion_ai::PromptCacheIntent::Default,
                 controls: self.limits.controls(reasoning, false),
             };
-            let Some(available) = self.limits.request_output_budget(&request, output_tokens)?
+            let context_overhead = self.service.context_encoding_overhead(&request)?;
+            let Some(available) =
+                self.limits
+                    .request_output_budget(&request, output_tokens, context_overhead)?
             else {
                 max_through_entry = plan
                     .smaller_through_entry
