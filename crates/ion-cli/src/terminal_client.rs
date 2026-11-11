@@ -143,6 +143,7 @@ struct Frontend {
     theme_picker: Option<theme_selection::ThemePicker>,
     mode: TuiMode,
     output_detail: crate::tool_output::OutputDetail,
+    tool_expansion_origin: Option<TuiMode>,
     thinking_visibility: crate::transcript_render::ThinkingVisibility,
     conversation: conversation::Conversation,
     presenter: block_presenter::BlockPresenter,
@@ -499,8 +500,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             if let Some(screen) = screen_owner.as_mut()
                 && outcome.is_ok()
             {
-                // Publish pending output, but do not retain identity chrome
-                // after the interactive client relinquishes its surface.
+                // Publish pending output in the original inline surface even
+                // when quitting from temporary expansion. Explicit fullscreen
+                // choices remain fullscreen; identity chrome is not retained.
+                ui.restore_tool_expansion_viewport();
+                ui.view.follow_end();
                 draw(terminal, screen, &mut ui, None, None).await?;
                 release_surface(terminal, screen).await?;
             }
@@ -1090,8 +1094,8 @@ impl Frontend {
                 }
                 Action::None
             }
-            Some(KeyAction::Detail) => {
-                self.open_details(None);
+            Some(KeyAction::ExpandTools) => {
+                self.toggle_tool_output();
                 Action::None
             }
             Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
@@ -1232,7 +1236,7 @@ impl Frontend {
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {
         match self.keys.action(DETAILS, key) {
-            Some(KeyAction::Cancel | KeyAction::Detail) => {
+            Some(KeyAction::Cancel | KeyAction::ExpandTools) => {
                 self.details = None;
                 self.status = "Details closed".into();
             }

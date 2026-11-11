@@ -54,7 +54,7 @@ commands! {
     Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID]", "Choose task progress, result, stop or remove"),
     Attach => (Work, "attach", "[ID]", "Attach to a running PTY program; Ctrl-] detaches"),
     Tools => (Work, "tools", "", "List recorded tool operations"),
-    Tool => (Work, "tool", "[N]", "Inspect recorded tool evidence"),
+    Tool => (Work, "tool", "[N|all]", "Inspect raw tool evidence or the full conversation"),
     Settings => (Editor, "settings", "[compact|expanded|thinking show|thinking hide|completion POLICY]", "Change presentation or receiving completion policy"),
     Tui => (Editor, "tui", "[inline|fullscreen]", "Choose the transcript surface"),
     Image => (Editor, "image", "PATH", "Attach an image to the next input"),

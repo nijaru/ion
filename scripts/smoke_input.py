@@ -214,9 +214,16 @@ def exercise_slash_input(work, base_env, endpoint):
             assert len(requests) == before + 3, "explicit command error became model input"
             terminal.send("\x15\x0b")
             terminal.output.clear()
-            terminal.send("/slash-capture payload\r")
+            terminal.send("/slash-capture payload")
+            terminal.send(b"\x0f")
+            terminal.wait(lambda: "Tool output: expanded" in terminal.text())
+            assert "Conversation ·" not in terminal.text(), "expansion stole composer input"
+            terminal.send("_expanded\r")
             terminal.wait(lambda: len(requests) == before + 4 and b"state=done" in terminal.output)
-            assert user_text(requests[-1]) == "EXPANDED_payload", requests[-1]
+            assert user_text(requests[-1]) == "EXPANDED_payload_expanded", requests[-1]
+            terminal.output.clear()
+            terminal.send(b"\x0f")
+            terminal.wait(lambda: "Tool output: compact" in terminal.text())
             release.clear()
             terminal.output.clear()
             terminal.send("WAIT_HISTORY\r")
@@ -234,9 +241,18 @@ def exercise_slash_input(work, base_env, endpoint):
                        for entry in facts if entry["kind"] == "turn_started"]
             steered = [entry["data"]["input"]["content"][0]["Text"]
                        for entry in facts if entry["kind"] == "steering"]
-            assert started == [*literals, "EXPANDED_payload", "WAIT_HISTORY"], started
+            assert started == [*literals, "EXPANDED_payload_expanded", "WAIT_HISTORY"], started
             assert steered == [steering], steered
+            terminal.output.clear()
+            terminal.send(b"\x0f")
+            terminal.wait(lambda: "Tool output: expanded" in terminal.text())
+            terminal.send("EXIT_EXPANDED\r")
+            terminal.wait(lambda: len(requests) == before + 7 and b"state=done" in terminal.output)
             terminal.finish()
+            terminal.paint()
+            if mode == "inline":
+                published = terminal.output.rsplit(b"\x1b[?1049l", 1)[-1]
+                assert b"DONE_EXIT_EXPANDED" in published, "exit discarded pending native publication"
             assert termios.tcgetattr(terminal.master) == terminal.original_modes
         finally:
             release.set()
@@ -561,6 +577,11 @@ def exercise_keybindings(work, base_env, endpoint):
             terminal.wait(lambda: (cwd / "key.ready").exists())
             pid = int((cwd / "key.pid").read_text())
             terminal.send(b"\x1bo")
+            terminal.wait(lambda: "Tool output: expanded" in terminal.text())
+            terminal.output.clear()
+            terminal.send(b"\x1bo")
+            terminal.wait(lambda: "Tool output: compact" in terminal.text())
+            terminal.send(b"/tool all\x13")
             terminal.wait(lambda: "Conversation ·" in terminal.text())
             terminal.send(b"\x03\x03")
             terminal.paint()

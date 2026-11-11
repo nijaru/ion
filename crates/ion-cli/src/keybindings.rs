@@ -40,7 +40,7 @@ actions! {
     External, "app.editor.external", EDIT, ["ctrl+g"], "Open external editor";
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
     Copy, "app.message.copy", COMPOSER | DETAILS, ["ctrl+x"], "Copy answer or selected tool evidence";
-    Detail, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Open/close transcript details";
+    ExpandTools, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Expand/collapse tool output; close raw evidence inspection";
     FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up";
     Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Recover queued or returned input";
     Scope, "tui.select.toggleScope", PICKER, ["tab"], "Toggle model shortlist/all routes or launch Session folder scope";
@@ -93,6 +93,7 @@ impl KeyAction {
                 | Self::Submit
                 | Self::FollowUp
                 | Self::External
+                | Self::ExpandTools
                 | Self::QuestionCollapse
                 | Self::Scope
                 | Self::NamedSessions

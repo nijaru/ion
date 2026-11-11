@@ -361,13 +361,11 @@ pub(super) fn handle_builtin(
                 ui.mode.label()
             )),
             "inline" | "regular" => {
-                ui.mode = TuiMode::Inline;
-                ui.view.follow_end();
+                ui.set_tui_mode(TuiMode::Inline);
                 ui.status = "Inline TUI · native terminal scrollback".into();
             }
             "fullscreen" => {
-                ui.mode = TuiMode::Fullscreen;
-                ui.view.follow_end();
+                ui.set_tui_mode(TuiMode::Fullscreen);
                 ui.status = format!(
                     "Fullscreen TUI · {} / {} or mouse wheel scrolls",
                     ui.keys.label(crate::keybindings::KeyAction::PageUp),
@@ -584,10 +582,14 @@ pub(super) fn handle_builtin(
         }
         Builtin::Tools => ui.list_tools(),
         Builtin::Tool => {
+            if args == "all" {
+                ui.open_details(None);
+                return Ok(());
+            }
             let number = if args.is_empty() {
                 tools(ui.conversation.items()).count()
             } else {
-                args.parse::<usize>().context("use /tool [N]")?
+                args.parse::<usize>().context("use /tool [N|all]")?
             };
             ui.open_details(Some(number));
         }

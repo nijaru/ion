@@ -45,7 +45,7 @@ impl<'a> RenderOptions<'a> {
             theme,
             detail,
             thinking,
-            details_key: keys.hint(crate::keybindings::KeyAction::Detail),
+            details_key: keys.hint(crate::keybindings::KeyAction::ExpandTools),
         }
     }
 }

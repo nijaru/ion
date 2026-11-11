@@ -378,7 +378,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     sent_first = True
                 if sent_first and trace.exists() and not opened_active:
                     active_start = len(output)
-                    os.write(master, b"\x0f")
+                    os.write(master, b"/tool all\r")
                     opened_active = True
                 if opened_active and not closed_active and b"Conversation" in output[active_start:]:
                     assert b"Read @data.txt" in output[active_start:], "active first-Turn input missing from conversation detail"
@@ -406,7 +406,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if resized and not sent_tool:
                     time.sleep(0.2)
                     tool_start = len(output)
-                    os.write(master, b"\x0f")
+                    os.write(master, b"/tool all\r")
                     sent_tool = True
                 if sent_tool and b"Conversation" in output[tool_start:] and b"RESUMED" in output[tool_start:] and not closed_tool:
                     os.write(master, b"\x0f")
@@ -499,7 +499,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     break
             if child.poll() is not None:
                 drain_terminal(master, output)
-            assert closed_active, "Ctrl-O did not open the first-Turn conversation"
+            assert closed_active, "/tool all did not open the first-Turn conversation"
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             alt_enters = output.count(b"\x1b[?1049h")
             alt_leaves = output.count(b"\x1b[?1049l")

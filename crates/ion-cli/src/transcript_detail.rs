@@ -381,7 +381,7 @@ impl DetailView {
             keys.hint(KeyAction::DetailUp),
             keys.hint(KeyAction::DetailDown),
             keys.hint(KeyAction::Cancel),
-            keys.hint(KeyAction::Detail)
+            keys.hint(KeyAction::ExpandTools)
         )
     }
 }
