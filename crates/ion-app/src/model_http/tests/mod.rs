@@ -2069,6 +2069,92 @@ async fn padded_http_quota_body_keeps_the_bounded_prefix_across_chunks() {
     }
 }
 
+#[test]
+fn declared_stream_failures_need_positive_transport_evidence() {
+    for (code, message, expected) in [
+        (
+            "new_provider_rejection",
+            "Request was rejected",
+            ProviderErrorKind::Unknown,
+        ),
+        (
+            "upstream_request_failed",
+            "Request failed",
+            ProviderErrorKind::Transport,
+        ),
+        (
+            "upstream_stream_read_error",
+            "Failure while checking context limit",
+            ProviderErrorKind::Transport,
+        ),
+        (
+            "invalid_request_error",
+            "Unable to forward upstream",
+            ProviderErrorKind::InvalidRequest,
+        ),
+        (
+            "invalid_request_error",
+            "Prompt exceeds context limit",
+            ProviderErrorKind::ContextLength,
+        ),
+        (
+            "upstream_error",
+            "Upstream request failed",
+            ProviderErrorKind::Transport,
+        ),
+        (
+            "upstream_error",
+            "Upstream rejected the request",
+            ProviderErrorKind::Unknown,
+        ),
+        (
+            "new_provider_rejection",
+            "Unable to forward upstream",
+            ProviderErrorKind::Unknown,
+        ),
+    ] {
+        assert_eq!(
+            chat_stream_error(&json!({"error":{"code":code,"message":message}})).kind,
+            expected,
+            "{code}"
+        );
+        assert_eq!(
+            anthropic_sse_error(&json!({"error":{"type":code,"message":message}})).kind,
+            expected,
+            "{code}"
+        );
+    }
+    for (message, expected) in [
+        ("Request was rejected", ProviderErrorKind::Unknown),
+        ("Unable to forward upstream", ProviderErrorKind::Transport),
+        (
+            "Upstream HTTP/2 stream failed",
+            ProviderErrorKind::Transport,
+        ),
+    ] {
+        let value = json!({"error":{"message":message}});
+        assert_eq!(chat_stream_error(&value).kind, expected);
+        assert_eq!(anthropic_sse_error(&value).kind, expected);
+    }
+    let envelope =
+        json!({"error":{"type":"error","code":null,"message":"Unable to forward upstream stream"}});
+    assert_eq!(
+        chat_stream_error(&envelope).kind,
+        ProviderErrorKind::Transport
+    );
+    let opaque = json!({"error":{"code":"new_rejection\n\u{001b}","type":"new_rejection\n\u{001b}","message":"rejected ".repeat(100)}});
+    for error in [chat_stream_error(&opaque), anthropic_sse_error(&opaque)] {
+        assert_eq!(error.kind, ProviderErrorKind::Unknown);
+        assert!(error.message.contains("new_rejection"));
+        assert!(error.message.contains("rejected"));
+        assert!(!error.message.chars().any(char::is_control));
+        assert_eq!(
+            error.message.split_once(": ").unwrap().1.chars().count(),
+            500
+        );
+    }
+}
+
 #[tokio::test]
 async fn chat_stream_error_preserves_bounded_reason_and_never_completes() {
     let body = concat!(

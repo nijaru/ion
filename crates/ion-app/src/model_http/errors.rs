@@ -4,8 +4,13 @@ use super::{ProviderError, ProviderErrorKind, Value};
 fn provider_code(value: &Value) -> Option<&str> {
     ["/error/code", "/error/type", "/code", "/type"]
         .into_iter()
-        .filter_map(|path| value.pointer(path).and_then(Value::as_str))
-        .find(|code| !code.trim().is_empty())
+        .find_map(|path| {
+            let code = value.pointer(path)?.as_str()?;
+            // Responses error events use `type: error` as envelope framing,
+            // not as a semantic provider error discriminator.
+            (!code.trim().is_empty() && !(path.ends_with("/type") && code == "error"))
+                .then_some(code)
+        })
 }
 
 fn provider_text(value: &Value) -> [Option<&str>; 2] {
@@ -95,6 +100,57 @@ pub(super) fn provider_error_detail_value(value: &Value) -> Option<String> {
     (!detail.is_empty()).then_some(detail)
 }
 
+fn is_gateway_transport_error(value: &Value) -> bool {
+    match provider_code(value) {
+        Some("upstream_request_failed" | "upstream_stream_read_error") => true,
+        Some("upstream_error") => provider_text(value).into_iter().flatten().any(|message| {
+            message
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("upstream request failed")
+        }),
+        None | Some("unknown") => provider_text(value).into_iter().flatten().any(|message| {
+            let lower = message.trim_start().to_ascii_lowercase();
+            [
+                "unable to forward upstream",
+                "upstream http/2 stream failed",
+                "upstream http2 stream failed",
+            ]
+            .iter()
+            .any(|prefix| lower.starts_with(prefix))
+        }),
+        _ => false,
+    }
+}
+
+fn stream_error_detail(value: &Value, kind: ProviderErrorKind) -> Option<String> {
+    let detail = provider_error_detail_value(value);
+    if kind != ProviderErrorKind::Unknown {
+        return detail;
+    }
+    let Some(code) = provider_code(value).filter(|code| provider_text(value)[0] != Some(*code))
+    else {
+        return detail;
+    };
+    // An unmapped discriminator is useful for diagnosis, but is no more
+    // trusted than the provider's message. Keep both within the display bound.
+    let code: String = code
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(64)
+        .collect();
+    if code.is_empty() {
+        return detail;
+    }
+    Some(
+        code.chars()
+            .chain(if detail.is_some() { ": " } else { "" }.chars())
+            .chain(detail.as_deref().unwrap_or("").chars())
+            .take(500)
+            .collect(),
+    )
+}
+
 pub(super) fn chat_stream_error(value: &Value) -> ProviderError {
     let kind = if let Some(status) = value
         .pointer("/error/code")
@@ -117,10 +173,12 @@ pub(super) fn chat_stream_error(value: &Value) -> ProviderError {
                 | "context_window_exceeded"
                 | "request_too_large",
             ) => ProviderErrorKind::ContextLength,
-            _ => ProviderErrorKind::Transport,
+            _ if is_gateway_transport_error(value) => ProviderErrorKind::Transport,
+            // A provider-declared failure is not evidence of a network failure.
+            _ => ProviderErrorKind::Unknown,
         }
     };
-    let message = provider_error_detail_value(value).map_or_else(
+    let message = stream_error_detail(value, kind).map_or_else(
         || "provider sent a stream error".to_owned(),
         |detail| format!("provider stream error: {detail}"),
     );
@@ -139,11 +197,12 @@ pub(super) fn anthropic_sse_error(value: &Value) -> ProviderError {
         Some("overloaded_error") => ProviderErrorKind::Overloaded,
         Some("timeout_error") => ProviderErrorKind::Timeout,
         Some("api_error") => ProviderErrorKind::Server,
+        Some("invalid_request_error") => classify_status_error(400, Some(value)),
+        _ if is_gateway_transport_error(value) => ProviderErrorKind::Transport,
         _ if is_context_error(value) => ProviderErrorKind::ContextLength,
-        Some("invalid_request_error") => ProviderErrorKind::InvalidRequest,
-        _ => ProviderErrorKind::Transport,
+        _ => ProviderErrorKind::Unknown,
     };
-    let message = provider_error_detail_value(value).map_or_else(
+    let message = stream_error_detail(value, kind).map_or_else(
         || "provider sent an SSE error".into(),
         |detail| format!("provider sent an SSE error: {detail}"),
     );

@@ -325,16 +325,50 @@ fn finalized_parts_reject_late_deltas_and_unfinished_calls_never_handoff() {
 }
 
 #[tokio::test]
-async fn permanent_responses_failures_do_not_retry_or_lose_accounting() {
+async fn responses_failures_retry_only_known_transient_errors_and_keep_accounting() {
     use ion_core::{
         Agent, AgentError, AgentEvent, ModelUsagePurpose, Session, SessionEntry, ToolSet,
     };
     use std::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
-    for (code, kind, attempts) in [
-        ("invalid_prompt", ProviderErrorKind::InvalidRequest, 1),
-        ("server_error", ProviderErrorKind::Server, 3),
+    for (code, message, kind, attempts) in [
+        (
+            Some("invalid_prompt"),
+            "Request failed",
+            ProviderErrorKind::InvalidRequest,
+            1,
+        ),
+        (
+            Some("bio_policy"),
+            "Request rejected by provider policy",
+            ProviderErrorKind::Unknown,
+            1,
+        ),
+        (
+            Some("server_error"),
+            "Request failed",
+            ProviderErrorKind::Server,
+            3,
+        ),
+        (
+            Some("upstream_stream_read_error"),
+            "Request failed",
+            ProviderErrorKind::Transport,
+            3,
+        ),
+        (
+            Some("upstream_error"),
+            "Upstream request failed",
+            ProviderErrorKind::Transport,
+            3,
+        ),
+        (
+            None,
+            "Unable to forward upstream",
+            ProviderErrorKind::Transport,
+            3,
+        ),
     ] {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1/responses", listener.local_addr().unwrap());
@@ -342,9 +376,13 @@ async fn permanent_responses_failures_do_not_retry_or_lose_accounting() {
         let captured = requests.clone();
         let stop = CancellationToken::new();
         let server_stop = stop.clone();
+        let error = match code {
+            Some(code) => json!({"code":code,"message":message}),
+            None => json!({"message":message}),
+        };
         let payload = event(&json!({"type":"response.failed","response":{
             "id":"resp_1","status":"failed","output":[],
-            "error":{"code":code,"message":"Request failed"},
+            "error":error,
             "usage":{"input_tokens":17,"output_tokens":0}
         }}));
         let server = tokio::spawn(async move {
@@ -395,10 +433,10 @@ async fn permanent_responses_failures_do_not_retry_or_lose_accounting() {
 
         assert!(
             matches!(&result, Err(AgentError::Provider(error)) if error.kind == kind),
-            "{code}: {result:?}"
+            "{code:?}: {result:?}"
         );
         let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), attempts, "{code}");
+        assert_eq!(requests.len(), attempts, "{code:?}");
         assert!(
             requests.iter().all(|body| body == &requests[0]),
             "retries must retain the frozen wire request"
