@@ -25,8 +25,24 @@ pub(super) fn discover(scope: &FileScope, stop: &CancellationToken) -> Result<Pi
 }
 
 fn discover_directory(path: &Path, stop: &CancellationToken) -> Result<PickerOutput> {
-    let mut entries =
-        std::fs::read_dir(path).with_context(|| format!("list directory {}", path.display()))?;
+    let mut entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        // A prefix can be prose or a path still being typed, not an asserted directory.
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ) =>
+        {
+            return Ok(PickerOutput::Files {
+                paths: Vec::new(),
+                limited: false,
+            });
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("list directory {}", path.display()));
+        }
+    };
     let mut paths = Vec::new();
     let mut visited = 0;
     let limited = loop {
@@ -133,7 +149,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn explicit_directory_listing_is_shallow_and_reports_missing_roots() {
+    fn speculative_directory_prefixes_are_empty_without_masking_real_errors() {
+        let root = std::env::temp_dir().join(format!("ion-prefix-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file"), "not a directory").unwrap();
+        for path in [
+            root.join("input"),
+            root.join("input/output"),
+            root.join("file"),
+            root.join("file/child"),
+        ] {
+            let result = discover(
+                &FileScope::Directory(path.clone()),
+                &CancellationToken::new(),
+            );
+            let PickerOutput::Files { paths, limited } =
+                result.unwrap_or_else(|error| panic!("{}: {error:#}", path.display()))
+            else {
+                panic!("unexpected cancellation")
+            };
+            assert!(paths.is_empty() && !limited);
+            assert!(
+                !root.join("input").exists(),
+                "completion must not create speculative paths"
+            );
+        }
+        let error = discover(
+            &FileScope::Directory(root.join("invalid\0directory")),
+            &CancellationToken::new(),
+        )
+        .err()
+        .expect("invalid filesystem requests remain errors");
+        assert!(format!("{error:#}").contains("list directory"));
+        assert!(
+            discover(
+                &FileScope::Project(root.join("missing")),
+                &CancellationToken::new()
+            )
+            .is_err(),
+            "a missing workspace is not a speculative prefix"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explicit_directory_listing_is_shallow() {
         let root = std::env::temp_dir().join(format!("ion-directory-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir_all(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/nested.rs"), "fixture").unwrap();
@@ -156,13 +216,6 @@ mod tests {
         assert!(!paths.iter().any(|path| path.contains("nested")));
         #[cfg(unix)]
         assert!(paths.iter().any(|path| path == "linked/"));
-        assert!(
-            discover(
-                &FileScope::Directory(root.join("missing")),
-                &CancellationToken::new()
-            )
-            .is_err()
-        );
         assert!(discover(&FileScope::HomeUnavailable, &CancellationToken::new()).is_err());
         std::fs::remove_dir_all(root).unwrap();
     }

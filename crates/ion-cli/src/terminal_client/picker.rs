@@ -583,14 +583,11 @@ impl Pickers {
                 let PickerRequest::Files(request) = job.request else {
                     unreachable!("file output has a file request")
                 };
-                let empty = paths.is_empty();
                 self.files = Some((request, paths));
                 if limited {
                     Some(format!(
                         "File discovery limited to {MAX_PATHS} paths or {MAX_ENTRIES} entries; results may be incomplete"
                     ))
-                } else if empty {
-                    Some("No files available for completion".into())
                 } else {
                     None
                 }
@@ -1647,6 +1644,21 @@ mod tests {
             pickers.files(&FileScope::Project(PathBuf::new())).unwrap(),
             ["draft query.rs"]
         );
+
+        let (mut empty, release) = held_file_job(Ok(PickerOutput::Files {
+            paths: Vec::new(),
+            limited: false,
+        }));
+        release.send(()).unwrap();
+        assert!(
+            empty.complete().await.is_none(),
+            "an optional completion miss is not a user-facing notice"
+        );
+        assert_eq!(
+            empty.files(&FileScope::Project(PathBuf::new())),
+            Some([].as_slice())
+        );
+        empty.shutdown().await.unwrap();
 
         let (mut pickers, release) = held_file_job(Err(anyhow::anyhow!("read failed")));
         release.send(()).unwrap();

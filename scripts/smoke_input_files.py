@@ -195,6 +195,20 @@ def exercise_file_input(binary, work, env, mode, requests, user_text):
             if action == "clipped":
                 terminal.resize(30, 100)
             terminal.wait_turn()
+        # A path-looking word in ordinary prose is only a speculative lookup.
+        # With the cursor on that token, the absent menu means discovery settled.
+        for prompt in ("Preserve input/output", "Inspect plain.rs/member", "Explain ratio 1/2"):
+            before = len(requests)
+            terminal.send(prompt)
+            terminal.wait(lambda: terminal.editor_matches(prompt, len(prompt), False))
+            observed = terminal.tmux("capture-pane", "-p", "-t", "ion:0.0", "-S", "-")
+            assert "File discovery failed" not in observed and "No files available for completion" not in observed, observed
+            assert not (cwd / "input").exists() and not (cwd / "1").exists()
+            assert len(requests) == before, "speculative completion dispatched a model request"
+            terminal.send(b"\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            assert user_text(requests[-1]) == prompt, requests[-1]
+            terminal.wait_turn()
         terminal.finish()
     finally:
         terminal.close()
