@@ -26,11 +26,10 @@ enum CommandKind<'a> {
     Builtin(Builtin),
     CycleModel(ModelCycleDirection),
     UserCommand(&'a str),
-    Other(&'a str),
 }
 
 struct ParsedCommand<'a> {
-    kind: CommandKind<'a>,
+    kind: Option<CommandKind<'a>>,
     args: &'a str,
 }
 
@@ -38,11 +37,11 @@ impl CommandInput {
     fn parsed(&self) -> ParsedCommand<'_> {
         match self {
             Self::Shortcut(builtin) => ParsedCommand {
-                kind: CommandKind::Builtin(*builtin),
+                kind: Some(CommandKind::Builtin(*builtin)),
                 args: "",
             },
             Self::CycleModel(direction) => ParsedCommand {
-                kind: CommandKind::CycleModel(*direction),
+                kind: Some(CommandKind::CycleModel(*direction)),
                 args: "",
             },
             Self::Editor(source) => {
@@ -50,13 +49,9 @@ impl CommandInput {
                 let (name, args) = syntax
                     .split_once(char::is_whitespace)
                     .unwrap_or((syntax, ""));
-                let kind = if let Some(builtin) = Builtin::parse(name) {
-                    CommandKind::Builtin(builtin)
-                } else if let Some(name) = name.strip_prefix("/command:") {
-                    CommandKind::UserCommand(name)
-                } else {
-                    CommandKind::Other(name)
-                };
+                let kind = Builtin::parse(name)
+                    .map(CommandKind::Builtin)
+                    .or_else(|| name.strip_prefix("/command:").map(CommandKind::UserCommand));
                 ParsedCommand {
                     kind,
                     args: args.trim(),
@@ -83,6 +78,18 @@ pub(super) async fn dispatch_command(
     input: CommandInput,
 ) -> Result<()> {
     let ParsedCommand { kind, args } = input.parsed();
+    let Some(kind) = kind else {
+        // Only recognized commands consume slash input. Host owns resource
+        // expansion; every other literal uses ordinary prompt admission.
+        let delivery = editor_delivery(runtime);
+        submit_editor(
+            runtime,
+            ui,
+            delivery,
+            input.into_editor().expect("prompt originates in editor"),
+        );
+        return Ok(());
+    };
     if ui.clipboard_job.is_some()
         && !matches!(
             kind,
@@ -116,9 +123,7 @@ pub(super) async fn dispatch_command(
     if ui.session_io.blocks_input()
         && matches!(
             kind,
-            CommandKind::UserCommand(_)
-                | CommandKind::Other(_)
-                | CommandKind::Builtin(Builtin::Compact)
+            CommandKind::UserCommand(_) | CommandKind::Builtin(Builtin::Compact)
         )
     {
         if let Some(source) = input.into_editor() {
@@ -293,36 +298,6 @@ pub(super) async fn dispatch_command(
                     }
                     ui.status = format!("{error:#}");
                 }
-            }
-        }
-        CommandKind::Other(name) => {
-            // Recognition only, after foreground guards: Host expands once when
-            // it admits the original Prompt, including during an operation.
-            let resource = runtime
-                .resources()
-                .skills()
-                .any(|skill| name.strip_prefix("/skill:") == Some(skill.name.as_str()))
-                || runtime
-                    .resources()
-                    .templates()
-                    .any(|template| name.strip_prefix('/') == Some(template.name.as_str()));
-            if resource {
-                let delivery = editor_delivery(runtime);
-                submit_editor(
-                    runtime,
-                    ui,
-                    delivery,
-                    input
-                        .into_editor()
-                        .expect("resource command originates in editor"),
-                );
-            } else {
-                ui.status = format!("Unknown command: {name}. Type /help");
-                ui.restore_editor(
-                    input
-                        .into_editor()
-                        .expect("unknown command originates in editor"),
-                );
             }
         }
     }

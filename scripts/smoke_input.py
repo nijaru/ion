@@ -180,6 +180,70 @@ class Terminal:
         self.child.wait(timeout=5)
 
 
+def exercise_slash_input(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        sandbox = work / f"slash-{mode}"
+        cwd = sandbox / "workspace"
+        prompts = cwd / ".ion/prompts"
+        prompts.mkdir(parents=True)
+        (prompts / "slash-capture.md").write_text("EXPANDED_$1")
+        env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"))
+        subprocess.run([binary, "use", "smoke", "slash-model", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        database = sandbox / "conversation.sqlite"
+        terminal = Terminal(cwd, env, mode, ["--cwd", cwd, "--session", database,
+                            "--tui-mode", mode, "chat"])
+        before = len(requests)
+        literals = ["  /Users/nick/project/src/main.rs\nInspect this file 🦀  ",
+                    "/unregistered-command literal prompt", "/skill:missing literal skill input"]
+        try:
+            terminal.wait_ready(lambda: "smoke/slash-model · /help" in terminal.text())
+            for index, literal in enumerate(literals, 1):
+                terminal.output.clear()
+                terminal.send("\x1b[200~" + literal + "\x1b[201~\r")
+                terminal.wait(lambda: len(requests) == before + index and b"state=done" in terminal.output)
+                assert user_text(requests[-1]) == literal, requests[-1]
+            terminal.output.clear()
+            terminal.send("/help\r")
+            terminal.wait(lambda: "Type / to discover commands" in terminal.text())
+            assert len(requests) == before + 3, "registered builtin became model input"
+            terminal.output.clear()
+            terminal.send("/command:missing\r")
+            terminal.wait(lambda: "unknown user command /command:missing" in terminal.text())
+            assert len(requests) == before + 3, "explicit command error became model input"
+            terminal.send("\x15\x0b")
+            terminal.output.clear()
+            terminal.send("/slash-capture payload\r")
+            terminal.wait(lambda: len(requests) == before + 4 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == "EXPANDED_payload", requests[-1]
+            release.clear()
+            terminal.output.clear()
+            terminal.send("WAIT_HISTORY\r")
+            terminal.wait(lambda: len(requests) == before + 5)
+            steering = "/tmp/project/src/main.rs steer while running 🦀"
+            terminal.send("\x1b[200~" + steering + "\x1b[201~\r")
+            terminal.paint()
+            assert len(requests) == before + 5, "steering bypassed the active request"
+            release.set()
+            terminal.wait(lambda: len(requests) == before + 6 and b"state=done" in terminal.output)
+            assert user_text(requests[-1]) == steering, requests[-1]
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+            started = [entry["data"]["input"]["content"][0]["Text"]
+                       for entry in facts if entry["kind"] == "turn_started"]
+            steered = [entry["data"]["input"]["content"][0]["Text"]
+                       for entry in facts if entry["kind"] == "steering"]
+            assert started == [*literals, "EXPANDED_payload", "WAIT_HISTORY"], started
+            assert steered == [steering], steered
+            terminal.finish()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            release.set()
+            terminal.close()
+        print(f"Slash input {mode}: literal prompts/steering, Host expansion and local command errors: OK", flush=True)
+
+
 def exercise_usage(work, base_env, endpoint):
     for mode in ("inline", "fullscreen"):
         sandbox = work / f"usage-{mode}"
@@ -1367,6 +1431,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     thread.start()
     try:
         exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
+        exercise_slash_input(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")

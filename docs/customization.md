@@ -10,6 +10,11 @@ to browse command completions; Tab completes a choice without submitting it.
 keybindings and themes. It reports loaded counts and the files and reasons for
 warnings. Reloading and listing resources do not invoke a model or run a command.
 
+Unrecognized slash-prefixed text, including absolute file paths, is ordinary
+model input. Known skills and templates expand into prompts. Built-in controls
+and explicit `/command:NAME` invocations keep their command behavior; an invalid
+`/command:NAME` reports an error instead of becoming a prompt.
+
 ## Add a skill
 
 Create `.agents/skills/review/SKILL.md` in your project:
