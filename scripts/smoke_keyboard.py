@@ -349,7 +349,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                     until(lambda: terminal.alternate)
                     drain()
                     assert terminal.stacks[1][-1] == (3 if supported else 8)
-                    os.write(master, b"\x1b[27u" if supported else b"\x1b")
+                    os.write(master, b"\x0f")  # Collapse the expanded conversation viewport.
                     until(lambda: not terminal.alternate)
                 # Visible answer text can precede Host settlement. Explicit
                 # quit joins either state; Ctrl-C could only request stop.

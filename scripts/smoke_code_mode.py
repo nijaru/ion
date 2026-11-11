@@ -420,7 +420,7 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
                             os.write(master, b"\x1b[2;1R")
                     if not opened and b"child calls" in output and (b"Read 2" in output or b"Read one" in output):
                         output.clear()
-                        os.write(master, b"\x0f")
+                        os.write(master, b"/tool all\r")
                         opened = True
                     if opened and not closed and b"Conversation" in output and b"PRIVATE_ONE_" not in output and time.monotonic() - last_page > 0.3:
                         os.write(master, b"\x1b[5~")

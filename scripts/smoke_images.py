@@ -280,8 +280,8 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                         os.write(master, b"\x1b[2;1R")
                 if not detail_sent and b"result not shared with model" in output:
                     assert b"Read" in output and b"Read failed" not in output
-                    output.clear()  # Detail must qualify from fresh output.
-                    os.write(master, b"\x0f")
+                    output.clear()  # Raw detail must qualify from fresh output.
+                    os.write(master, b"/tool all\r")
                     detail_sent = True
                 if detail_sent and not detail_closed and b"Image result not shared with this text-only model" in output and b"[image: image/png]" in output:
                     os.write(master, b"\x1b")

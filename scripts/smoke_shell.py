@@ -115,7 +115,7 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
             # Force a changed live frame; an unchanged idle frame need not write.
             os.write(input_master, b"draft after output failure")
         else:
-            os.write(input_master, b"\x0f")
+            os.write(input_master, b"/tool all\r")
             modal = bytearray()
             while b"Conversation" not in modal or b"\x1b[?25l" not in modal:
                 assert time.monotonic() < deadline, "details did not hide the terminal cursor"
@@ -266,7 +266,7 @@ for mode in ("inline", "fullscreen"):
                     step = 4
                 if step == 4 and b"PRIVATE_OUTPUT" in segment and b"not shared with model" in segment:
                     segment_start = len(output)
-                    os.write(master, b"\x0f")
+                    os.write(master, b"/tool all\r")
                     step = 5
                 if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"User shell" in segment:
                     os.write(master, b"\x0f")
