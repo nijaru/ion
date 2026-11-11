@@ -868,6 +868,286 @@ fn deep_tool_child_shell_and_diff_fields_survive_remeasurement_and_hidden_disclo
 }
 
 #[test]
+fn folded_notices_keep_their_actual_owner_when_reading_starts_compact() {
+    use ion_core::{
+        ActivityGroup, ActivityResult, ActivityState, ToolActivity, ToolActivityKind,
+        ToolOccurrence, TranscriptActivity, TranscriptActivityIdentity,
+    };
+    use serde_json::json;
+    let occurrence = ToolOccurrence {
+        assistant_entry: 10,
+        ordinal: 0,
+    };
+    let first = TranscriptActivity {
+        identity: TranscriptActivityIdentity::Tool(occurrence),
+        call_id: "reused".into(),
+        name: "grep".into(),
+        activity: ToolActivity {
+            kind: ToolActivityKind::Search,
+            subject: Some("first query".into()),
+        },
+        arguments: json!({}),
+        state: ActivityState::Completed,
+        result: Some(ActivityResult {
+            projection: Some(ion_core::ToolResultProjection::Observed),
+            value: json!({"matches":[],"exhaustive":false,"omissions":["REPEATED_OMISSION"],
+                "diagnostics":[{"message":"REPEATED_DIAGNOSTIC"}]}),
+            artifacts: vec![],
+            image_mime_types: vec![],
+            is_error: false,
+        }),
+        children: vec![],
+    };
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    let compact = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    let expanded = RenderOptions::new(
+        OutputDetail::Expanded,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    for nested in [false, true] {
+        let mut first = first.clone();
+        let mut second = first.clone();
+        second.activity.subject = Some("second query".into());
+        let activities = if nested {
+            first.identity = TranscriptActivityIdentity::Child {
+                parent: occurrence,
+                child: 0,
+            };
+            second.identity = TranscriptActivityIdentity::Child {
+                parent: occurrence,
+                child: 1,
+            };
+            let mut parent = first.clone();
+            parent.identity = TranscriptActivityIdentity::Tool(occurrence);
+            parent.name = "code_mode".into();
+            parent.activity.kind = ToolActivityKind::External;
+            parent.result.as_mut().unwrap().value = json!({"output":[]});
+            parent.children = vec![first, second.clone()];
+            vec![parent]
+        } else {
+            second.identity = TranscriptActivityIdentity::Tool(ToolOccurrence {
+                assistant_entry: 10,
+                ordinal: 1,
+            });
+            vec![first, second.clone()]
+        };
+        let source = TranscriptSource { entry: 10, part: 0 };
+        let document = fixtures::document(TranscriptProjection {
+            items: vec![
+                TranscriptItem::ActivityGroup(ActivityGroup {
+                    source,
+                    turn: 1,
+                    open: false,
+                    activities,
+                }),
+                assistant(20, vec![TranscriptPart::Text("tail\n\n".repeat(20))]),
+            ],
+        });
+        for component in [
+            Component::Item {
+                index: 0,
+                field: Field::Omission,
+            },
+            Component::Value {
+                field: Field::Diagnostics,
+                node: 2,
+                key: false,
+            },
+        ] {
+            let mut presenter = BlockPresenter::default();
+            let mut view = ConversationView::default();
+            let point = ReadingPoint {
+                root: ContentRoot::Activity(second.identity),
+                point: TextPoint::Component { component, byte: 0 },
+            };
+            read_at(
+                &mut presenter,
+                &document,
+                &mut view,
+                (Key::Fact(source), point),
+                100,
+                &compact,
+            );
+            let retained = view.anchor.unwrap().position.unwrap();
+            assert_eq!(retained.root, point.root, "nested={nested}, {component:?}");
+            for (width, options) in [
+                (24, &expanded),
+                (60, &compact),
+                (100, &expanded),
+                (8, &compact),
+                (100, &compact),
+            ] {
+                presenter.window(&document, &mut view, (width, 8), false, false, options);
+                assert_eq!(
+                    view.anchor.unwrap().position,
+                    Some(retained),
+                    "nested={nested}, {component:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn repeated_observation_items_and_value_leaves_keep_distinct_reading_coordinates() {
+    use ion_core::{
+        ActivityGroup, ActivityResult, ActivityState, ToolActivity, ToolActivityKind,
+        ToolOccurrence, TranscriptActivity, TranscriptActivityIdentity,
+    };
+    use serde_json::json;
+    let text = format!(
+        "{}TARGET_SECOND{}",
+        "café 👩‍💻 ".repeat(15),
+        " literal".repeat(30)
+    );
+    let occurrence = ToolOccurrence {
+        assistant_entry: 10,
+        ordinal: 0,
+    };
+    let search = TranscriptActivity {
+        identity: TranscriptActivityIdentity::Tool(occurrence),
+        call_id: "reused".into(),
+        name: "grep".into(),
+        activity: ToolActivity {
+            kind: ToolActivityKind::Search,
+            subject: Some("query".into()),
+        },
+        arguments: json!({}),
+        state: ActivityState::Completed,
+        result: Some(ActivityResult {
+            projection: Some(ion_core::ToolResultProjection::Observed),
+            value: json!({"matches":[{"path":"same.rs","line":1,"text":text,"truncated":false},
+                {"path":"same.rs","line":2,"text":text,"truncated":false}]}),
+            artifacts: vec![],
+            image_mime_types: vec![],
+            is_error: false,
+        }),
+        children: vec![],
+    };
+    let parent_occurrence = ToolOccurrence {
+        assistant_entry: 10,
+        ordinal: 1,
+    };
+    let mut parent = search.clone();
+    parent.identity = TranscriptActivityIdentity::Tool(parent_occurrence);
+    parent.activity.kind = ToolActivityKind::External;
+    parent.name = "code".into();
+    parent.result.as_mut().unwrap().value = json!({"output":[]});
+    let mut child = search.clone();
+    child.identity = TranscriptActivityIdentity::Child {
+        parent: parent_occurrence,
+        child: 0,
+    };
+    child.activity.kind = ToolActivityKind::External;
+    child.name = "mcp".into();
+    child.result.as_mut().unwrap().value =
+        json!({"content":"", "structured_content":{"leaves":[text,text]}});
+    parent.children.push(child.clone());
+    let source = TranscriptSource { entry: 10, part: 0 };
+    let mut document = fixtures::document(TranscriptProjection {
+        items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            source,
+            turn: 1,
+            open: false,
+            activities: vec![search.clone(), parent],
+        })],
+    });
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    let expanded = RenderOptions::new(
+        OutputDetail::Expanded,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    let compact = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    let mut presenter = BlockPresenter::default();
+    let mut view = ConversationView::default();
+    for (identity, component) in [
+        (
+            search.identity,
+            Component::Item {
+                index: 1,
+                field: Field::Content,
+            },
+        ),
+        (
+            child.identity,
+            Component::Value {
+                field: Field::Structured,
+                node: 3,
+                key: false,
+            },
+        ),
+    ] {
+        let point = ReadingPoint {
+            root: ContentRoot::Activity(identity),
+            point: TextPoint::Component {
+                component,
+                byte: text.find("TARGET_SECOND").unwrap(),
+            },
+        };
+        let before = read_at(
+            &mut presenter,
+            &document,
+            &mut view,
+            (Key::Fact(source), point),
+            60,
+            &expanded,
+        );
+        assert!(
+            before
+                .iter()
+                .map(|row| row.to_string().trim_start_matches([' ', '│']).to_owned())
+                .collect::<String>()
+                .contains("TARGET_SECOND")
+        );
+        let retained = view.anchor.unwrap().position.unwrap();
+        assert_eq!(retained.root, point.root);
+        assert!(
+            matches!(retained.point,TextPoint::Component {component:actual,..} if actual==component)
+        );
+        let entry = 100 + document.revision();
+        fixtures::append(&mut document, item(entry));
+        presenter.window(&document, &mut view, (8, 8), false, false, &compact);
+        assert_eq!(view.anchor.unwrap().position, Some(retained));
+        for width in [8, 24, 100, 60] {
+            let output =
+                presenter.window(&document, &mut view, (width, 8), false, false, &expanded);
+            assert!(output.iter().all(|row| row.width() <= width));
+            assert_eq!(view.anchor.unwrap().position, Some(retained));
+            if width >= 24 {
+                let visible = output
+                    .iter()
+                    .map(|row| row.to_string().trim_start_matches([' ', '│']).to_owned())
+                    .collect::<String>();
+                assert!(
+                    visible.contains("TARGET_SECOND"),
+                    "{component:?}, width={width}: {visible}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn idle_fullscreen_keeps_the_continuous_tail_and_repeated_notice_reading_points() {
     use ion_core::{
         ActivityGroup, ActivityState, ToolActivity, ToolActivityKind, ToolOccurrence,

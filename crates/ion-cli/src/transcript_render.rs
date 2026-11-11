@@ -263,6 +263,26 @@ impl BlockLayout {
             })
     }
 
+    /// Retained fields keep their member root even when shared chrome coalesces.
+    fn extend_folded_observations(
+        &mut self,
+        activities: &[TranscriptActivity],
+        prefix: &str,
+        width: usize,
+        detail: &RenderOptions<'_>,
+    ) {
+        if activities.len() <= 1 {
+            return;
+        }
+        for activity in activities {
+            let mut rows = Vec::new();
+            crate::tool_output::render_folded_observation(
+                &mut rows, activity, prefix, width, detail,
+            );
+            self.extend(ContentRoot::Activity(activity.identity), rows);
+        }
+    }
+
     fn extend_activities(&mut self, activities: &[TranscriptActivity], rows: Vec<MappedLine>) {
         let first = activities
             .first()
@@ -847,7 +867,7 @@ fn render_group(
                 detail,
             );
         } else {
-            crate::tool_output::render_folded_reads(
+            crate::tool_output::render_folded_summary(
                 &mut rows,
                 &group.activities[item.source.clone()],
                 if last { "  " } else { "│ " },
@@ -863,6 +883,12 @@ fn render_group(
             detail,
         );
         block.extend_activities(&group.activities[item.source.clone()], rows);
+        block.extend_folded_observations(
+            &group.activities[item.source.clone()],
+            if last { "  " } else { "│ " },
+            width,
+            detail,
+        );
         render_children(
             block,
             &group.activities[item.source.start].children,
@@ -910,7 +936,7 @@ fn render_children(
                 detail,
             );
         } else {
-            crate::tool_output::render_folded_reads(
+            crate::tool_output::render_folded_summary(
                 &mut rows,
                 &children[item.source.clone()],
                 &continuation,
@@ -931,6 +957,12 @@ fn render_children(
             );
         }
         block.extend_activities(&children[item.source.clone()], rows);
+        block.extend_folded_observations(
+            &children[item.source.clone()],
+            &continuation,
+            width,
+            detail,
+        );
     }
 }
 

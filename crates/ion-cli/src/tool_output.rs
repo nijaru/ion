@@ -50,6 +50,8 @@ impl<'a> RenderOptions<'a> {
     }
 }
 
+mod observations;
+
 enum Preview {
     Head(usize),
     Tail(usize),
@@ -75,8 +77,8 @@ pub(crate) fn render_activity(
     let Some(result) = &activity.result else {
         return;
     };
-    match activity.activity.kind {
-        ToolActivityKind::Command => render_command(
+    if activity.activity.kind == ToolActivityKind::Command {
+        render_command(
             rows,
             &result.value,
             prefix,
@@ -84,52 +86,63 @@ pub(crate) fn render_activity(
             detail,
             3,
             activity.state == ActivityState::Completed && !result.is_error,
-        ),
-        ToolActivityKind::Read => {
-            if let Some(text) = result.value["content"].as_str() {
-                note(
-                    rows,
-                    prefix,
-                    &read_label(&result.value),
-                    width,
-                    detail.theme,
-                );
-                render_text(
-                    rows,
-                    text,
-                    prefix,
-                    Field::Content,
-                    width,
-                    detail,
-                    Preview::Head(3),
-                );
-                if result.value["start_line"]
-                    .as_u64()
-                    .is_some_and(|line| line > 1)
-                {
-                    note(
-                        rows,
-                        prefix,
-                        "… earlier file lines are outside this recorded range",
-                        width,
-                        detail.theme,
-                    );
-                }
-                if result.value["has_more"].as_bool() == Some(true) {
-                    note(
-                        rows,
-                        prefix,
-                        "… file continues beyond this recorded range",
-                        width,
-                        detail.theme,
-                    );
-                }
-            }
-        }
-        _ => {}
+        );
     }
+    if let Some(text) = result.value["content"].as_str() {
+        note(
+            rows,
+            prefix,
+            &if activity.activity.kind == ToolActivityKind::Read {
+                read_label(&result.value)
+            } else {
+                "content".into()
+            },
+            width,
+            detail.theme,
+        );
+        render_text(
+            rows,
+            text,
+            prefix,
+            Field::Content,
+            width,
+            detail,
+            Preview::Head(3),
+        );
+        if activity.activity.kind == ToolActivityKind::Read
+            && result.value["start_line"]
+                .as_u64()
+                .is_some_and(|line| line > 1)
+        {
+            note(
+                rows,
+                prefix,
+                "… earlier file lines are outside this recorded range",
+                width,
+                detail.theme,
+            );
+        }
+        if activity.activity.kind == ToolActivityKind::Read
+            && result.value["has_more"].as_bool() == Some(true)
+        {
+            note(
+                rows,
+                prefix,
+                "… file continues beyond this recorded range",
+                width,
+                detail.theme,
+            );
+        }
+    }
+    observations::render(rows, activity, prefix, width, detail);
+    observations::notices(rows, &result.value, prefix, width, detail);
     render_artifacts(rows, &result.artifacts, prefix, width, detail);
-    if let Some(error) = result.value["error"].as_str() {
+    if let Some(error) = result.value["error"].as_str().or_else(|| {
+        result
+            .value
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+    }) {
         note(rows, prefix, "error", width, detail.theme);
         render_text(
             rows,
@@ -155,70 +168,91 @@ fn read_label(value: &Value) -> String {
     }
 }
 
-pub(crate) fn render_folded_reads(
+pub(crate) fn render_folded_summary(
     rows: &mut Vec<MappedLine>,
     activities: &[TranscriptActivity],
     prefix: &str,
     width: usize,
     detail: &RenderOptions<'_>,
 ) {
-    if activities
-        .first()
-        .is_none_or(|activity| activity.activity.kind != ToolActivityKind::Read)
-    {
+    let Some(first) = activities.first() else {
         return;
-    }
+    };
     note(
         rows,
         prefix,
         &format!(
-            "… {} read outputs folded · /settings expanded · {}",
+            "… {} {} outputs folded · /settings expanded · {}",
             activities.len(),
+            crate::transcript_render::kind_label(first.activity.kind),
             detail.details_key
         ),
         width,
         detail.theme,
     );
-    for activity in activities {
-        let Some(result) = &activity.result else {
-            continue;
-        };
-        render_artifacts(rows, &result.artifacts, prefix, width, detail);
-        let preceding = result.value["start_line"]
-            .as_u64()
-            .is_some_and(|start| start > 1);
-        let following = result.value["has_more"].as_bool() == Some(true);
-        if preceding || following {
-            let subject = activity
+}
+
+pub(crate) fn render_folded_observation(
+    rows: &mut Vec<MappedLine>,
+    activity: &TranscriptActivity,
+    prefix: &str,
+    width: usize,
+    detail: &RenderOptions<'_>,
+) {
+    let Some(result) = &activity.result else {
+        return;
+    };
+    render_artifacts(rows, &result.artifacts, prefix, width, detail);
+    let mut notices = Vec::new();
+    observations::notices(&mut notices, &result.value, prefix, width, detail);
+    if !notices.is_empty() {
+        note(
+            rows,
+            prefix,
+            activity
                 .activity
                 .subject
                 .as_deref()
-                .unwrap_or(&activity.name);
-            note(
-                rows,
-                prefix,
-                &format!(
-                    "{subject}: {} · {}{}",
-                    read_label(&result.value),
+                .unwrap_or(&activity.name),
+            width,
+            detail.theme,
+        );
+        rows.extend(notices);
+    }
+    let preceding = result.value["start_line"]
+        .as_u64()
+        .is_some_and(|start| start > 1);
+    let following = result.value["has_more"].as_bool() == Some(true);
+    if preceding || following {
+        let subject = activity
+            .activity
+            .subject
+            .as_deref()
+            .unwrap_or(&activity.name);
+        note(
+            rows,
+            prefix,
+            &format!(
+                "{subject}: {} · {}{}",
+                read_label(&result.value),
+                if preceding {
+                    "earlier lines not recorded"
+                } else {
+                    ""
+                },
+                if following {
                     if preceding {
-                        "earlier lines not recorded"
+                        "; file continues"
                     } else {
-                        ""
-                    },
-                    if following {
-                        if preceding {
-                            "; file continues"
-                        } else {
-                            "file continues"
-                        }
-                    } else {
-                        ""
+                        "file continues"
                     }
-                ),
-                width,
-                detail.theme,
-            );
-        }
+                } else {
+                    ""
+                }
+            ),
+            width,
+            detail.theme,
+        );
     }
 }
 

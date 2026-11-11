@@ -981,6 +981,319 @@ fn activity(
 }
 
 #[test]
+fn recorded_discovery_and_external_output_is_visible_including_nested_calls() {
+    use serde_json::json;
+    let cases = [
+        (
+            ToolActivityKind::List,
+            json!({"entries":[
+            {"name":"FIRST_ENTRY", "type":"file"}, {"name":"SECOND_ENTRY", "type":"directory"},
+            {"name":"THIRD_ENTRY", "type":"symlink"}, {"name":"LAST_ENTRY", "type":"file"}
+        ], "exhaustive":false, "omissions":["PARTIAL_OBSERVATION"]}),
+            "FIRST_ENTRY",
+            "LAST_ENTRY",
+        ),
+        (
+            ToolActivityKind::Search,
+            json!({"files":["FIRST_FILE", "SECOND_FILE", "THIRD_FILE", "LAST_FILE"],
+            "exhaustive":false, "omissions":["PARTIAL_OBSERVATION"]}),
+            "FIRST_FILE",
+            "LAST_FILE",
+        ),
+        (
+            ToolActivityKind::Search,
+            json!({"matches":[
+            {"path":"src/a.rs", "line":7, "text":"FIRST_MATCH", "truncated":false},
+            {"path":"src/b.rs", "line":8, "text":"SECOND_MATCH", "truncated":false},
+            {"path":"src/c.rs", "line":9, "text":"THIRD_MATCH", "truncated":false},
+            {"path":"src/d.rs", "line":10, "text":"LAST_MATCH", "truncated":true}
+        ], "exhaustive":false, "omissions":["PARTIAL_OBSERVATION"]}),
+            "FIRST_MATCH",
+            "LAST_MATCH",
+        ),
+        (
+            ToolActivityKind::External,
+            json!({"content":"FIRST_EXTERNAL\nSECOND_EXTERNAL\nTHIRD_EXTERNAL\nLAST_EXTERNAL",
+            "conversion_notices":["PARTIAL_OBSERVATION"]}),
+            "FIRST_EXTERNAL",
+            "LAST_EXTERNAL",
+        ),
+        (
+            ToolActivityKind::Read,
+            json!({"error":{"kind":"network", "message":"FIRST_REMOTE_ERROR\nPARTIAL_OBSERVATION\nTHIRD_ERROR\nLAST_REMOTE_ERROR"}}),
+            "FIRST_REMOTE_ERROR",
+            "LAST_REMOTE_ERROR",
+        ),
+    ];
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    for (kind, value, first, last) in cases {
+        for nested in [false, true] {
+            let mut observed = activity(
+                "observed",
+                kind,
+                "query",
+                if value.get("error").is_some() {
+                    ActivityState::Failed
+                } else {
+                    ActivityState::Completed
+                },
+                Some(value.clone()),
+            );
+            observed.result.as_mut().unwrap().projection =
+                Some(ion_core::ToolResultProjection::RequestLimitExceeded);
+            let root = if nested {
+                observed.identity = ion_core::TranscriptActivityIdentity::Child {
+                    parent: ion_core::ToolOccurrence {
+                        assistant_entry: 1,
+                        ordinal: 0,
+                    },
+                    child: 0,
+                };
+                let mut parent = activity(
+                    "code",
+                    ToolActivityKind::External,
+                    "script",
+                    ActivityState::Completed,
+                    Some(json!({"output":[]})),
+                );
+                parent.children.push(observed);
+                parent
+            } else {
+                observed
+            };
+            let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+                source: ion_core::TranscriptSource { entry: 1, part: 0 },
+                turn: 1,
+                open: false,
+                activities: vec![root],
+            })];
+            for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+                let rendered = rows(
+                    &items,
+                    120,
+                    &RenderOptions::new(
+                        mode,
+                        &keys,
+                        &theme,
+                        ThinkingVisibility::Hidden,
+                        std::path::Path::new("/workspace"),
+                    ),
+                )
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+                assert!(
+                    rendered.contains(first),
+                    "{kind:?}, nested={nested}, {mode:?}: {rendered}"
+                );
+                assert_eq!(
+                    rendered.contains(last),
+                    mode == OutputDetail::Expanded,
+                    "{rendered}"
+                );
+                assert!(rendered.contains("PARTIAL_OBSERVATION"), "{rendered}");
+                assert!(rendered.contains("not shared with model"), "{rendered}");
+                assert_eq!(rendered.matches(first).count(), 1, "{rendered}");
+            }
+        }
+    }
+}
+
+#[test]
+fn folded_discovery_keeps_capture_limitations_outside_the_body_preview() {
+    use serde_json::json;
+    let value = json!({"matches":[{"path":"src/a.rs", "line":7, "text":"FOLDED_MATCH", "truncated":true}],
+        "exhaustive":false, "omissions":["LIMITED_SCAN"],
+        "diagnostics":[{"path":"unreadable", "error":"PERMISSION_DENIED"}]});
+    let mut second = activity(
+        "same",
+        ToolActivityKind::Search,
+        "second",
+        ActivityState::Completed,
+        Some(value.clone()),
+    );
+    second.identity = ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+        assistant_entry: 1,
+        ordinal: 1,
+    });
+    let projection = TranscriptProjection {
+        items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            source: ion_core::TranscriptSource { entry: 1, part: 0 },
+            turn: 1,
+            open: false,
+            activities: vec![
+                activity(
+                    "same",
+                    ToolActivityKind::Search,
+                    "first",
+                    ActivityState::Completed,
+                    Some(value),
+                ),
+                second,
+            ],
+        })],
+    };
+    let rendered = plain_rows(&projection, 120).join("\n");
+    assert!(rendered.contains("2 search outputs folded"), "{rendered}");
+    assert!(!rendered.contains("FOLDED_MATCH"), "{rendered}");
+    for text in [
+        "LIMITED_SCAN",
+        "PERMISSION_DENIED",
+        "incomplete observation",
+        "recorded match text is truncated",
+    ] {
+        assert_eq!(rendered.matches(text).count(), 2, "{rendered}");
+    }
+}
+
+#[test]
+fn external_structured_values_and_capture_notices_are_literal_and_width_safe() {
+    use serde_json::json;
+    let value = json!({"content":"**literal** first\nsecond\nthird\nLAST_TEXT",
+        "structured_content":{"a":"first", "b":false, "c":0, "d":[], "e":{},
+            "f":{"unsafe\u{1b}]52;c;KEY\u{7}":["LAST_STRUCTURED\t café 👩‍💻\u{1b}[2J", "LAST_STRUCTURED"]}},
+        "conversion_notices":["CONVERSION_OMISSION\u{1b}[2J"], "truncated":true,
+        "full_output_error":"CAPTURE_FAILURE",
+        "output_schema_validation":{"notice":"SCHEMA_NOT_ESTABLISHED"}});
+    let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+        source: ion_core::TranscriptSource { entry: 1, part: 0 },
+        turn: 1,
+        open: false,
+        activities: vec![activity(
+            "mcp",
+            ToolActivityKind::External,
+            "remote",
+            ActivityState::Completed,
+            Some(value),
+        )],
+    })];
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+        for width in [1, 8, 24, 120] {
+            let output = rows(
+                &items,
+                width,
+                &RenderOptions::new(
+                    mode,
+                    &keys,
+                    &theme,
+                    ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
+                ),
+            );
+            assert!(output.iter().all(|row| row.width() <= width));
+            let rendered = output
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(!rendered.contains(['\u{1b}', '\u{7}', '\r']), "{rendered}");
+            if width == 120 {
+                for text in [
+                    "**literal**",
+                    "CONVERSION_OMISSION",
+                    "recorded output truncated",
+                    "CAPTURE_FAILURE",
+                    "SCHEMA_NOT_ESTABLISHED",
+                ] {
+                    assert!(rendered.contains(text), "{rendered}");
+                }
+                assert_eq!(
+                    rendered.contains("LAST_TEXT"),
+                    mode == OutputDetail::Expanded,
+                    "{rendered}"
+                );
+                assert_eq!(
+                    rendered.contains("LAST_STRUCTURED"),
+                    mode == OutputDetail::Expanded,
+                    "{rendered}"
+                );
+                if mode == OutputDetail::Expanded {
+                    for text in ["b: false", "c: 0", "d: []", "e: {}"] {
+                        assert!(rendered.contains(text), "{rendered}");
+                    }
+                }
+            }
+        }
+    }
+    let omitted = [TranscriptItem::ActivityGroup(ActivityGroup {
+        source: ion_core::TranscriptSource { entry: 1, part: 0 },
+        turn: 1,
+        open: false,
+        activities: vec![activity(
+            "mcp_omitted",
+            ToolActivityKind::External,
+            "remote",
+            ActivityState::Completed,
+            Some(
+                json!({"content":"RETAINED_PREVIEW", "structured_content":null, "structured_content_omitted":true,
+                "truncated":true, "raw_result_error":"RAW_CAPTURE_FAILURE"}),
+            ),
+        )],
+    })];
+    for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+        let rendered = rows(
+            &omitted,
+            120,
+            &RenderOptions::new(
+                mode,
+                &keys,
+                &theme,
+                ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
+            ),
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+        for text in [
+            "RETAINED_PREVIEW",
+            "structured content omitted",
+            "RAW_CAPTURE_FAILURE",
+        ] {
+            assert!(rendered.contains(text), "{rendered}");
+        }
+    }
+    let empty = [TranscriptItem::ActivityGroup(ActivityGroup {
+        source: ion_core::TranscriptSource { entry: 1, part: 0 },
+        turn: 1,
+        open: false,
+        activities: vec![activity(
+            "empty",
+            ToolActivityKind::List,
+            "root",
+            ActivityState::Completed,
+            Some(json!({"entries":[], "exhaustive":false, "omissions":["EMPTY_PARTIAL_SCAN"]})),
+        )],
+    })];
+    let rendered = rows(
+        &empty,
+        120,
+        &RenderOptions::new(
+            OutputDetail::Compact,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        ),
+    )
+    .iter()
+    .map(ToString::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(
+        rendered.contains("0 recorded")
+            && rendered.contains("EMPTY_PARTIAL_SCAN")
+            && rendered.contains("not proof of absence"),
+        "{rendered}"
+    );
+}
+
+#[test]
 fn grouped_tools_are_hierarchical_and_mutations_are_visually_distinct() {
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {

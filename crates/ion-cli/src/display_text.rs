@@ -91,6 +91,11 @@ pub(super) enum Field {
     Diff,
     Summary,
     Detail,
+    Path,
+    Structured,
+    Diagnostics,
+    Omission,
+    Notice,
 }
 
 impl Field {
@@ -104,6 +109,11 @@ impl Field {
             Self::Diff => "diff",
             Self::Summary => "summary",
             Self::Detail => "detail",
+            Self::Path => "path",
+            Self::Structured => "structured content",
+            Self::Diagnostics => "diagnostics",
+            Self::Omission => "omission",
+            Self::Notice => "notice",
         }
     }
 }
@@ -115,6 +125,18 @@ pub(super) enum Component {
         kind: ParsedComponent,
     },
     Field(Field),
+    /// Literal fields in a recorded collection; each item has its own byte origin.
+    Item {
+        index: usize,
+        field: Field,
+    },
+    /// Original value-tree nodes, numbered before preview clipping. Keys and
+    /// string values have separate scalar-local bytes, never JSON-dump offsets.
+    Value {
+        field: Field,
+        node: usize,
+        key: bool,
+    },
     Readiness,
     /// A named writer component, measured before wrapping (not Session bytes).
     Generated(usize),
@@ -263,6 +285,22 @@ impl MappedLine {
                     bytes: start..start + len,
                 },
                 linear: true,
+            }],
+        }
+    }
+
+    /// A named generated boundary with no claim to scalar/source bytes.
+    pub fn boundary(line: Line<'static>, component: Component) -> Self {
+        let len = line.spans.iter().map(|span| span.content.len()).sum();
+        Self {
+            line,
+            map: vec![Mapping {
+                display: 0..len,
+                origin: Origin::Component {
+                    component,
+                    bytes: 0..0,
+                },
+                linear: false,
             }],
         }
     }
