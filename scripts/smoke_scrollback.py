@@ -160,17 +160,17 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.1)
         check_history()
 
-        # Withdraw the mutable tail before a modal saves the primary cursor.
+        # Withdraw the mutable tail before expansion saves the primary cursor.
         # A tiny alternate-screen resize must not archive the draft/footer or
         # destroy the evidence needed to return to inline publication.
-        modal_draft = "MODAL_UNSENT café 界 👩‍💻"
-        tmux("send-keys", "-t", "ion", "-l", modal_draft)
-        while modal_draft not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "modal draft did not paint"
+        viewport_draft = "EXPANDED_UNSENT café 界 👩‍💻"
+        tmux("send-keys", "-t", "ion", "-l", viewport_draft)
+        while viewport_draft not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "expanded-view draft did not paint"
             time.sleep(0.02)
         tmux("send-keys", "-t", "ion", "C-o")
-        while "Conversation" not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "draft-preserving modal did not open"
+        while "Tool output: expanded" not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "draft-preserving expanded viewport did not open"
             time.sleep(0.02)
         pane_tty = tmux("display-message", "-p", "-t", "ion", "#{pane_tty}").strip()
         fd = os.open(pane_tty, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
@@ -181,24 +181,24 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 # tmux can defer kernel PTY resize after changing its grid.
                 # Observe the real dimensions, not a sleep or requested size.
                 while struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, bytes(8)))[:2] != expected:
-                    assert time.monotonic() < deadline, "modal PTY resize did not settle"
+                    assert time.monotonic() < deadline, "expanded viewport PTY resize did not settle"
                     time.sleep(0.02)
         finally:
             os.close(fd)
-        while "Conversation" not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "resized modal did not repaint"
+        while "Tool output: expanded" not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "resized expanded viewport did not repaint"
             time.sleep(0.02)
-        tmux("send-keys", "-t", "ion", "Escape")
-        while modal_draft not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "resized modal did not restore the draft"
+        tmux("send-keys", "-t", "ion", "C-o")
+        while viewport_draft not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "collapsed viewport did not restore the draft"
             time.sleep(0.02)
-        assert tmux("capture-pane", "-p", "-t", "ion", "-S", "-").count(modal_draft) == 1
+        assert tmux("capture-pane", "-p", "-t", "ion", "-S", "-").count(viewport_draft) == 1
         tmux("send-keys", "-t", "ion", "C-u")
-        while modal_draft in tmux("capture-pane", "-p", "-t", "ion", "-S", "-"):
-            assert time.monotonic() < deadline, "modal resize archived provisional input"
+        while viewport_draft in tmux("capture-pane", "-p", "-t", "ion", "-S", "-"):
+            assert time.monotonic() < deadline, "expanded resize archived provisional input"
             time.sleep(0.02)
         check_history()
-        assert len(requests) == 2, "modal resize submitted the draft"
+        assert len(requests) == 2, "expanded resize submitted the draft"
 
         def command(text, expected):
             tmux("send-keys", "-t", "ion", "-l", text)
