@@ -23,6 +23,7 @@ from terminal_style import program_ready
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+history_image_entry = None
 long_image_path = "long-subject-" + "x" * 96 + "/red.png"
 rpc_request_entered = threading.Event()
 release_rpc_request = threading.Event()
@@ -53,7 +54,13 @@ class Handler(BaseHTTPRequestHandler):
         if held_rpc_request:
             rpc_request_entered.set()
             assert release_rpc_request.wait(15), "RPC image request was never released"
-        if isinstance(latest_user["content"], list) and latest_user["content"][0].get("text") == "INSPECTION_JSON" and not any(message["role"] == "tool" for message in body["messages"][latest_user_index + 1:]):
+        if any(message.get("content") == "RECOVER_COMPACTED_IMAGE" for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
+            assert history_image_entry is not None
+            events = [
+                {"id": "history-image", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "history-image", "type": "function", "function": {"name": "history", "arguments": json.dumps({"action": "image", "entry": history_image_entry, "image": 0})}}]}, "finish_reason": None}]},
+                {"id": "history-image", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif isinstance(latest_user["content"], list) and latest_user["content"][0].get("text") == "INSPECTION_JSON" and not any(message["role"] == "tool" for message in body["messages"][latest_user_index + 1:]):
             code = "return " + json.dumps(raw_inspection_json) + ";"
             events = [
                 {"id": "raw-json", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "raw-json", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}, "finish_reason": None}]},
@@ -303,12 +310,13 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         # text. Exercise the actual compact/reopen entry point on a fresh scope.
         summary_work = work / "summary-workspace"
         summary_work.mkdir()
+        summary_session = work / "summary.sqlite"
         (summary_work / "red.png").write_bytes(tiny_png())
         subprocess.run([binary, "use", "smoke", "vision", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         start = len(requests)
-        subprocess.run([binary, "--cwd", summary_work, "--image", "red.png", "run", "Retain the visual findings."], env=env, check=True, capture_output=True)
-        before = json.loads(subprocess.run([binary, "--cwd", summary_work, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout)["entries"]
-        subprocess.run([binary, "--cwd", summary_work, "--continue", "compact"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "--cwd", summary_work, "--session", summary_session, "--image", "red.png", "run", "Retain the visual findings."], env=env, check=True, capture_output=True)
+        before = json.loads(subprocess.run([binary, "--cwd", summary_work, "--session", summary_session, "inspect"], env=env, check=True, capture_output=True, text=True).stdout)["entries"]
+        subprocess.run([binary, "--cwd", summary_work, "--session", summary_session, "compact"], env=env, check=True, capture_output=True)
         assert len(requests) == start + 2
         summary_request = requests[-1]
         assert not summary_request.get("tools"), summary_request
@@ -317,11 +325,37 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         image_parts = [part for part in parts if part["type"] == "image_url"]
         assert len(image_parts) == 1 and image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,")
         assert not any("iVBORw0KGgo" in part.get("text", "") for part in parts)
-        after = json.loads(subprocess.run([binary, "--cwd", summary_work, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout)
+        after = json.loads(subprocess.run([binary, "--cwd", summary_work, "--session", summary_session, "inspect"], env=env, check=True, capture_output=True, text=True).stdout)
         assert after["entries"][:len(before)] == before and after["compacted_through"] is not None
-        subprocess.run([binary, "--cwd", summary_work, "--continue", "run", "Continue after the visual summary."], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "--cwd", summary_work, "--session", summary_session, "run", "Continue after the visual summary."], env=env, check=True, capture_output=True)
         assert len(requests) == start + 3
         assert not any("iVBORw0KGgo" in json.dumps(message.get("content")) for message in requests[-1]["messages"])
+        # Recover the original pixels through history, not a source-file read.
+        # Independent SQLite facts qualify the actual typed bytes and archive.
+        (summary_work / "red.png").unlink()
+        history_image_entry = next(index + 1 for index, entry in enumerate(before) if entry["kind"] == "turn_started")
+        with sqlite3.connect(f"file:{summary_session}?mode=ro", uri=True) as connection:
+            original = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+        source_image = next(part["Image"] for part in original[history_image_entry - 1]["data"]["input"]["content"] if "Image" in part)
+        recovered = subprocess.run([binary, "--cwd", summary_work, "--session", summary_session, "--tools", "history", "run", "RECOVER_COMPACTED_IMAGE"], env=env, check=True, capture_output=True, text=True)
+        assert recovered.stdout.strip() == "IMAGE_OK", recovered
+        assert len(requests) == start + 5
+        query_request, image_request = requests[-2:]
+        assert {tool["function"]["name"] for tool in query_request["tools"]} == {"history"}, query_request["tools"]
+        assert not any("iVBORw0KGgo" in json.dumps(message.get("content")) for message in query_request["messages"])
+        image_parts = [part for message in image_request["messages"] if isinstance(message.get("content"), list) for part in message["content"] if part["type"] == "image_url"]
+        assert image_parts == [{"type": "image_url", "image_url": {"url": f"data:{source_image['mime_type']};base64,{source_image['data']}"}}], image_parts
+        result = json.loads(next(message["content"] for message in image_request["messages"] if message["role"] == "tool"))
+        assert not result["is_error"] and result["result"]["entry"] == history_image_entry and result["result"]["image_index"] == 0, result
+        assert source_image["data"] not in json.dumps(result), result
+        with sqlite3.connect(f"file:{summary_session}?mode=ro", uri=True) as connection:
+            facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+        assert facts[:len(original)] == original
+        tools = [entry["data"]["result"] for entry in facts if entry["kind"] == "tool_result"]
+        assert len(tools) == 1 and tools[0]["name"] == "history", tools
+        assert tools[0]["outcome"]["output"]["images"] == [source_image], tools
+        assert not (summary_work / "red.png").exists()
+        assert [entry["data"]["reason"] for entry in facts if entry["kind"] == "turn_ended"] == ["completed"] * 3
         # Unit preparation tests inject ready messages/tasks. Exercise actual
         # normalization and image custody through the built RPC connection too.
         rpc_work = work / "rpc-workspace"
@@ -434,7 +468,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                 rpc.stdin.close()
             rpc.stdout.close()
             rpc.stderr.close()
-        print("Ion images, RPC custody/cancel/reopen, raw-JSON inspection fidelity and typed summary images: OK")
+        print("Ion images, RPC custody/cancel/reopen, raw-JSON inspection fidelity, typed summary images and compacted image retrieval: OK")
     finally:
         server.shutdown()
         server.server_close()

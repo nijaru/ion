@@ -42,6 +42,13 @@ fn history_query(session: &Session, value: Value) -> Result<Value, HistoryError>
             session.entry_count().unwrap(),
         )?
         .read(&CancellationToken::new())
+        .map(|output| {
+            assert!(
+                output.images.is_empty(),
+                "document actions must not return typed images"
+            );
+            output.value
+        })
 }
 
 fn read_all(session: &Session, entry: u64, limit: usize) -> Result<String, HistoryError> {
@@ -63,6 +70,471 @@ fn read_all(session: &Session, entry: u64, limit: usize) -> Result<String, Histo
         }
     }
     Ok(document)
+}
+
+#[tokio::test]
+async fn image_retrieval_restores_a_compacted_user_attachment_to_the_model() {
+    use crate::{Agent, AgentLimits, ToolSet};
+    use ion_ai::{
+        ModelResponse, ModelStreamEvent, ResponseTermination, Script, ScriptedModelService,
+    };
+    use std::sync::Arc;
+
+    let (root, path) = fixture();
+    let session = Arc::new(Session::create(&path, None).unwrap());
+    let first = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+        .unwrap()
+        .content;
+    let second = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255])
+        .unwrap()
+        .content;
+    let (turn, _) = session
+        .begin_turn_message(
+            Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text("Two screenshots".into()),
+                    Content::Image(first),
+                    Content::Text("Second screenshot".into()),
+                    Content::Image(second.clone()),
+                ],
+                provider_replay: None,
+            },
+            model(),
+        )
+        .unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("Observed".into())],
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let plan = session
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+        .unwrap()
+        .unwrap();
+    session
+        .record_compaction(
+            plan.through_entry,
+            "Earlier screenshots were discussed.".into(),
+            execution(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let source = before
+        .iter()
+        .position(|entry| matches!(entry, SessionEntry::TurnStarted { .. }))
+        .unwrap() as u64
+        + 1;
+    let response = |content| {
+        Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content,
+                provider_replay: None,
+            },
+            usage: Usage::unknown(),
+            termination: ResponseTermination::Completed,
+            returned_model: None,
+        })])
+    };
+    let scripts = Arc::new(ScriptedModelService::new([
+        response(vec![Content::ToolCall(ToolCall {
+            id: "recover-picture".into(),
+            name: "history".into(),
+            arguments: json!({"action":"image","entry":source,"image":1}),
+            raw_arguments: None,
+        })]),
+        response(vec![Content::Text("Recovered".into())]),
+    ]));
+    let agent = Agent::with_tool_set(
+        scripts.clone(),
+        Arc::new(ToolSet::new([]).with_history()),
+        model(),
+    )
+    .with_limits(AgentLimits {
+        image_input: true,
+        ..AgentLimits::default()
+    });
+    agent
+        .submit(
+            session.clone(),
+            "Inspect the second screenshot again".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let requests = scripts.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        !requests[0]
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .any(|part| matches!(part, Content::Image(_)))
+    );
+    let result = requests[1]
+        .messages
+        .iter()
+        .flat_map(|message| &message.content)
+        .find_map(|part| match part {
+            Content::ToolResult(result) if result.name == "history" => Some(result),
+            _ => None,
+        })
+        .unwrap();
+    assert!(!result.is_error, "{}", result.result);
+    assert_eq!(result.images.as_slice(), std::slice::from_ref(&second));
+    assert_eq!(result.result["entry"], source);
+    assert_eq!(result.result["image_index"], 1);
+    assert!(!result.result.to_string().contains(second.data()));
+    assert_eq!(
+        &session.view().unwrap().entries[..before.len()],
+        before.as_slice()
+    );
+    session.shutdown().await.unwrap();
+    drop((agent, session));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn image_reads_recover_steering_and_withheld_observations_without_crossing_their_bound() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, None).unwrap();
+    let first = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+        .unwrap()
+        .content;
+    let second = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255])
+        .unwrap()
+        .content;
+    let (turn, _) = session.begin_turn("Images".into(), model()).unwrap();
+    session
+        .record_steerings(
+            turn,
+            vec![Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text("Steered picture".into()),
+                    Content::Image(first.clone()),
+                ],
+                provider_replay: None,
+            }],
+        )
+        .unwrap();
+    let steering = session.entry_count().unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content: ["picture", "opaque", "unknown", "skipped"]
+                    .into_iter()
+                    .map(|id| {
+                        Content::ToolCall(ToolCall {
+                            id: id.into(),
+                            name: "picture".into(),
+                            arguments: json!({}),
+                            raw_arguments: None,
+                        })
+                    })
+                    .collect(),
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let bound = session.entry_count().unwrap();
+    let picture = bound + 1;
+    let query = json!({"action":"image","entry":picture,"image":1}).to_string();
+    let frozen = session.prepare_history(&query, bound).unwrap();
+    session
+        .record_tool_result_with_context(
+            turn,
+            ToolResult {
+                call_id: "picture".into(),
+                name: "picture".into(),
+                result: json!({"historical":true}),
+                images: vec![first.clone(), second.clone()],
+                is_error: false,
+            },
+            ToolResultProjection::ImagesUnsupported,
+            None,
+        )
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&session.context_messages().unwrap())
+            .unwrap()
+            .contains(second.data())
+    );
+    assert!(matches!(
+        frozen.read(&CancellationToken::new()),
+        Err(HistoryError::Request(_))
+    ));
+    let observed = session
+        .prepare_history(&query, picture)
+        .unwrap()
+        .read(&CancellationToken::new())
+        .unwrap();
+    assert_eq!(observed.images.as_slice(), std::slice::from_ref(&second));
+    assert_eq!(observed.value["kind"], "tool_result");
+    assert_eq!(observed.value["image_count"], 2);
+    assert_eq!(observed.value["image_index"], 1);
+    assert_eq!(observed.value["provenance"]["through_entry"], picture);
+    assert_eq!(observed.value["provenance"]["historical"], true);
+    assert!(!observed.value.to_string().contains(second.data()));
+    let steered = session
+        .prepare_history(
+            &json!({"action":"image","entry":steering,"image":0}).to_string(),
+            picture,
+        )
+        .unwrap()
+        .read(&CancellationToken::new())
+        .unwrap();
+    assert_eq!(steered.images, [first]);
+    assert_eq!(steered.value["kind"], "steering");
+    assert_eq!(steered.value["image_count"], 1);
+    // An opaque output containing valid image-shaped JSON grants no image access.
+    session
+        .record_tool_result(
+            turn,
+            ToolResult {
+                call_id: "opaque".into(),
+                name: "picture".into(),
+                result: json!({"Image":second,"images":[second]}),
+                images: Vec::new(),
+                is_error: false,
+            },
+        )
+        .unwrap();
+    let opaque = session.entry_count().unwrap();
+    session
+        .record_tool_settlement_with_context(
+            turn,
+            settlement("unknown", "picture", ToolOutcome::Unknown),
+            None,
+        )
+        .unwrap();
+    let unknown = session.entry_count().unwrap();
+    session
+        .record_tool_settlement_with_context(
+            turn,
+            settlement(
+                "skipped",
+                "picture",
+                ToolOutcome::NotDispatched {
+                    reason: "not admitted".into(),
+                },
+            ),
+            None,
+        )
+        .unwrap();
+    let skipped = session.entry_count().unwrap();
+    for (entry, image) in [
+        (1, 0),
+        (bound, 0),
+        (picture, 2),
+        (opaque, 0),
+        (unknown, 0),
+        (skipped, 0),
+        (skipped + 1, 0),
+    ] {
+        let query = json!({"action":"image","entry":entry,"image":image}).to_string();
+        assert!(
+            matches!(
+                session
+                    .prepare_history(&query, skipped)
+                    .unwrap()
+                    .read(&CancellationToken::new()),
+                Err(HistoryError::Request(_))
+            ),
+            "{query}"
+        );
+    }
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn image_reads_validate_arguments_and_report_malformed_retained_images_as_storage_failures() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, None).unwrap();
+    let image = ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
+        .unwrap()
+        .content;
+    session
+        .begin_turn_message(
+            Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text("Stored picture".into()),
+                    Content::Image(image),
+                ],
+                provider_replay: None,
+            },
+            model(),
+        )
+        .unwrap();
+    let entry = session.entry_count().unwrap();
+    for query in [
+        json!({"action":"image","entry":entry}),
+        json!({"action":"image","image":0}),
+        json!({"action":"image","entry":0,"image":0}),
+        json!({"action":"image","entry":entry,"image":null}),
+        json!({"action":"image","entry":entry,"image":-1}),
+        json!({"action":"image","entry":entry,"image":u64::MAX}),
+        json!({"action":"image","entry":entry,"image":0,"offset":0}),
+    ] {
+        assert!(
+            matches!(
+                session.prepare_history(&query.to_string(), entry),
+                Err(HistoryError::Request(_))
+            ),
+            "{query}"
+        );
+    }
+    let read = session
+        .prepare_history(
+            &json!({"action":"image","entry":entry,"image":0}).to_string(),
+            entry,
+        )
+        .unwrap();
+    let stop = CancellationToken::new();
+    stop.cancel();
+    assert!(matches!(read.read(&stop), Err(HistoryError::Request(_))));
+    let seq = i64::try_from(entry).unwrap();
+    let original: Vec<u8> = session
+        .lock_store()
+        .unwrap()
+        .connection
+        .query_row("SELECT body FROM entries WHERE seq=?1", [seq], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    for malformed in [
+        json!(null),
+        json!({"mime_type":"image/png","data":"not base64"}),
+    ] {
+        // Preserve the journal's kind-first envelope so this reaches image
+        // decoding, rather than failing the bounded kind-prefix reader first.
+        session
+            .lock_store()
+            .unwrap()
+            .connection
+            .execute(
+                "UPDATE entries SET body=CAST(json_set(CAST(?1 AS TEXT),'$.data.input.content[1].Image',json(?2)) AS BLOB) WHERE seq=?3",
+                rusqlite::params![original, malformed.to_string(), seq],
+            )
+            .unwrap();
+        assert!(matches!(
+            read.read(&CancellationToken::new()),
+            Err(HistoryError::Session(super::SessionError::InvalidHistory))
+        ));
+    }
+    session
+        .lock_store()
+        .unwrap()
+        .connection
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=?2",
+            rusqlite::params![original, seq],
+        )
+        .unwrap();
+    let mut recovered = read.read(&CancellationToken::new()).unwrap();
+    assert_eq!(recovered.images.len(), 1);
+    let image = recovered.images.pop().unwrap();
+    session
+        .record_assistant(
+            1,
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall(ToolCall {
+                    id: "stored-tool-image".into(),
+                    name: "picture".into(),
+                    arguments: json!({}),
+                    raw_arguments: None,
+                })],
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    session
+        .record_tool_result(
+            1,
+            ToolResult {
+                call_id: "stored-tool-image".into(),
+                name: "picture".into(),
+                result: json!({}),
+                images: vec![image],
+                is_error: false,
+            },
+        )
+        .unwrap();
+    let entry = session.entry_count().unwrap();
+    let seq = i64::try_from(entry).unwrap();
+    let read = session
+        .prepare_history(
+            &json!({"action":"image","entry":entry,"image":0}).to_string(),
+            entry,
+        )
+        .unwrap();
+    let original: Vec<u8> = session
+        .lock_store()
+        .unwrap()
+        .connection
+        .query_row("SELECT body FROM entries WHERE seq=?1", [seq], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let tool_body: Value = serde_json::from_slice(&original).unwrap();
+    let json_looking_string =
+        tool_body["data"]["result"]["outcome"]["output"]["images"][0].to_string();
+    for malformed in [
+        json!(null),
+        json!(1),
+        json!("not JSON"),
+        json!({}),
+        json!(json_looking_string),
+    ] {
+        session
+            .lock_store()
+            .unwrap()
+            .connection
+            .execute(
+                "UPDATE entries SET body=CAST(json_set(CAST(?1 AS TEXT),'$.data.result.outcome.output.images[0]',json(?2)) AS BLOB) WHERE seq=?3",
+                rusqlite::params![original, malformed.to_string(), seq],
+            )
+            .unwrap();
+        assert!(matches!(
+            read.read(&CancellationToken::new()),
+            Err(HistoryError::Session(super::SessionError::InvalidHistory))
+        ));
+    }
+    session
+        .lock_store()
+        .unwrap()
+        .connection
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=?2",
+            rusqlite::params![original, seq],
+        )
+        .unwrap();
+    assert_eq!(
+        read.read(&CancellationToken::new()).unwrap().images.len(),
+        1
+    );
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -646,7 +1118,7 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
             session.entry_count().unwrap(),
         )
         .unwrap();
-    let first = prepared.read(&CancellationToken::new()).unwrap();
+    let first = prepared.read(&CancellationToken::new()).unwrap().value;
     assert!(first["entries"].as_array().unwrap().is_empty(), "{first}");
     assert!(first["scanned_entries"].as_u64().unwrap() <= super::MAX_SCAN_ENTRIES as u64);
     let mut cursor = first["next_before"].as_u64().unwrap();
@@ -682,7 +1154,7 @@ fn search_cursor_scan_bound_and_committed_upper_snapshot_are_truthful() {
             crate::ToolOutput::success(json!({"stdout":"LATER_COMMIT"})),
         )
         .unwrap();
-    let bounded = prepared.read(&CancellationToken::new()).unwrap();
+    let bounded = prepared.read(&CancellationToken::new()).unwrap().value;
     assert_eq!(bounded["provenance"]["through_entry"], committed_upper);
     assert!(
         bounded["entries"]
@@ -792,14 +1264,17 @@ fn prepared_history_does_not_join_shell_settlement_committed_after_its_bound() {
         )
         .unwrap();
 
-    let bounded = prepared_read.read(&CancellationToken::new()).unwrap();
+    let bounded = prepared_read.read(&CancellationToken::new()).unwrap().value;
     assert_eq!(bounded["provenance"]["through_entry"], admission);
     let document: Value =
         serde_json::from_str(bounded["entry"]["content"].as_str().unwrap()).unwrap();
     assert_eq!(document["outcome"]["state"], "unknown");
     assert!(!document.to_string().contains("PREPARED_SHELL_OUTPUT"));
 
-    let search = prepared_search.read(&CancellationToken::new()).unwrap();
+    let search = prepared_search
+        .read(&CancellationToken::new())
+        .unwrap()
+        .value;
     assert!(search["entries"].as_array().unwrap().is_empty(), "{search}");
     let fresh = read_all(&session, admission, 64).unwrap();
     assert!(fresh.contains("PREPARED_SHELL_OUTPUT"));

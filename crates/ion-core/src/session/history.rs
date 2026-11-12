@@ -6,7 +6,9 @@
 //! gate. Tool-result documents are the original observed output JSON; other
 //! documents are a safe model-facing record projection. Thinking, provider
 //! replay, typed image bytes, context/configuration snapshots and private
-//! direct-shell records never enter either search or read.
+//! direct-shell records never enter either search or read. Explicit image reads
+//! return one original user/steering or observed top-level tool attachment in
+//! the typed image channel, not inside the JSON document.
 mod records;
 
 use std::path::PathBuf;
@@ -78,6 +80,10 @@ enum Input {
         #[serde(default = "list_limit")]
         limit: usize,
     },
+    Image {
+        entry: u64,
+        image: usize,
+    },
     Artifact {
         entry: u64,
         artifact: usize,
@@ -136,7 +142,8 @@ pub(crate) fn definition() -> ToolDefinition {
                 "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
                 "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",
                 "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return data with encoding utf8 for readable text or base64 for other bytes, and data_bytes is the page's original raw byte count, not its string or encoded length. Follow raw-byte next_offset; consume final data before treating null next_offset as EOF; text pages preserve character boundaries. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
-                "Thinking, provider replay, image bytes, configuration and private !! shells are excluded. Historical evidence is not current workspace state and does not authorize repeating effects."
+                "To recover one original typed image omitted by compaction, call history directly with {action:'image',entry:N,image:0}. The index counts images, not text parts. Sources are user inputs/steering and observed top-level tool results; one image is returned in the image channel, never base64 JSON/text. Code Mode returns only metadata, so use a direct call to view it. ",
+                "Thinking, provider replay, typed image bytes, configuration and private !! shells are excluded from search/read JSON. Historical evidence is not current workspace state and does not authorize repeating effects."
             )
             .into(),
             input_schema: json!({
@@ -144,11 +151,12 @@ pub(crate) fn definition() -> ToolDefinition {
                 "additionalProperties":false,
                 "required":["action"],
                 "properties":{
-                    "action":{"enum":["search","list","read","artifact"]},
+                    "action":{"enum":["search","list","read","artifact","image"]},
                     "query":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Required for search; literal ASCII case-insensitive text (up to 512 UTF-8 bytes)."},
                     "tool":{"type":"string","minLength":1,"maxLength":MAX_QUERY_BYTES,"description":"Search/list only: select original top-level tool results by exact tool name (up to 512 UTF-8 bytes)."},
                     "before":{"type":"integer","minimum":1,"description":"Search/list only: exclusive one-based entry bound for older results."},
-                    "entry":{"type":"integer","minimum":1,"description":"Required for read/artifact; stable one-based committed Session entry coordinate."},
+                    "entry":{"type":"integer","minimum":1,"description":"Required for read/artifact/image; stable one-based committed Session entry coordinate."},
+                    "image":{"type":"integer","minimum":0,"description":"Image only: required zero-based index among the original typed images in the source entry."},
                     "offset":{"type":"integer","minimum":0,"description":"Zero-based byte offset; artifact offsets address raw bytes."},
                     "artifact":{"type":"integer","minimum":0,"description":"Artifact only: zero-based index in the source record's typed artifacts array."},
                     "limit":{"type":"integer","minimum":1,"maximum":READ_MAX_LIMIT,"description":"Search/list result count (1..10), read byte limit (4..16384), or artifact raw-byte limit (1..16384)."}
@@ -195,6 +203,13 @@ impl Session {
                 limit,
             } => {
                 validate_page(tool.as_deref(), *before, *limit)?;
+            }
+            Input::Image { entry, image } => {
+                if *entry == 0 || i64::try_from(*image).is_err() {
+                    return Err(HistoryError::request(
+                        "image requires a committed entry and a supported zero-based image index",
+                    ));
+                }
             }
             Input::Artifact { entry, limit, .. }
                 if *entry == 0 || !(1..=READ_MAX_LIMIT).contains(limit) =>
@@ -252,7 +267,7 @@ fn validate_page(
 }
 
 impl HistoryRead {
-    pub(crate) fn read(&self, stop: &CancellationToken) -> Result<Value, HistoryError> {
+    pub(crate) fn read(&self, stop: &CancellationToken) -> Result<ToolOutput, HistoryError> {
         if stop.is_cancelled() {
             return Err(HistoryError::request("history read cancelled"));
         }
@@ -268,24 +283,31 @@ impl HistoryRead {
                 tool,
                 before,
                 limit,
-            } => self.search(
-                &snapshot,
-                stop,
-                Some(query),
-                tool.as_deref(),
-                *before,
-                *limit,
-            ),
+            } => self
+                .search(
+                    &snapshot,
+                    stop,
+                    Some(query),
+                    tool.as_deref(),
+                    *before,
+                    *limit,
+                )
+                .map(ToolOutput::success),
             Input::List {
                 tool,
                 before,
                 limit,
-            } => self.search(&snapshot, stop, None, tool.as_deref(), *before, *limit),
+            } => self
+                .search(&snapshot, stop, None, tool.as_deref(), *before, *limit)
+                .map(ToolOutput::success),
             Input::Read {
                 entry,
                 offset,
                 limit,
-            } => self.read_entry(&snapshot, stop, *entry, *offset, *limit),
+            } => self
+                .read_entry(&snapshot, stop, *entry, *offset, *limit)
+                .map(ToolOutput::success),
+            Input::Image { entry, image } => self.read_image(&snapshot, stop, *entry, *image),
             Input::Artifact {
                 entry,
                 artifact,
@@ -307,7 +329,7 @@ impl HistoryRead {
                 result["entry"] = json!(entry);
                 result["artifact_index"] = json!(artifact);
                 result["provenance"] = self.provenance();
-                Ok(result)
+                Ok(ToolOutput::success(result))
             }
         }
     }
@@ -505,12 +527,7 @@ pub(crate) async fn execute(
         })
         .await;
     match result {
-        Ok(Ok(value)) => ToolOutput {
-            artifacts: Vec::new(),
-            value,
-            images: Vec::new(),
-            is_error: false,
-        },
+        Ok(Ok(output)) => output,
         Ok(Err(error)) => failure(error.to_string()),
         Err(error) => failure(error.to_string()),
     }

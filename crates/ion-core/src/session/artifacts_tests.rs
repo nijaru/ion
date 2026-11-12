@@ -88,6 +88,8 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
         .unwrap()
         .read(&CancellationToken::new())
         .unwrap();
+    assert!(page.images.is_empty());
+    let page = page.value;
     assert_eq!(page_bytes(&page), expected[262140..262153]);
     assert_eq!(page["next_offset"], 262153);
     assert_eq!(page["label_truncated"], true);
@@ -618,7 +620,31 @@ fn shared_shell_typed_images_remain_durable_but_not_model_or_history_text() {
             },
         )
         .unwrap();
+    let private = session
+        .admit_user_shell("private image".into(), true)
+        .unwrap();
+    session
+        .record_user_shell(
+            private,
+            crate::ToolOutput {
+                images: vec![image.clone()],
+                ..crate::ToolOutput::success(json!({"private":"not model-facing"}))
+            },
+        )
+        .unwrap();
     let check = |session: &Session| {
+        for entry in [admission, admission + 1, private, private + 1] {
+            let read = session
+                .prepare_history(
+                    &json!({"action":"image","entry":entry,"image":0}).to_string(),
+                    session.entry_count().unwrap(),
+                )
+                .unwrap();
+            assert!(matches!(
+                read.read(&CancellationToken::new()),
+                Err(super::history::HistoryError::Request(_))
+            ));
+        }
         let context = serde_json::to_string(&session.context_messages().unwrap()).unwrap();
         assert!(!context.contains(image.data()));
         assert!(context.contains("OPAQUE_VALUE_PRESERVED"));
@@ -627,7 +653,8 @@ fn shared_shell_typed_images_remain_durable_but_not_model_or_history_text() {
             .unwrap()
             .read(&CancellationToken::new())
             .unwrap();
-        let text = serde_json::to_string(&page).unwrap();
+        assert!(page.images.is_empty());
+        let text = serde_json::to_string(&page.value).unwrap();
         assert!(!text.contains(image.data()));
         assert!(text.contains("OPAQUE_VALUE_PRESERVED"));
         let found = session
@@ -638,7 +665,8 @@ fn shared_shell_typed_images_remain_durable_but_not_model_or_history_text() {
             .unwrap()
             .read(&CancellationToken::new())
             .unwrap();
-        assert!(found["entries"].as_array().unwrap().is_empty());
+        assert!(found.images.is_empty());
+        assert!(found.value["entries"].as_array().unwrap().is_empty());
         assert!(session.view().unwrap().entries.iter().any(|entry| matches!(entry,SessionEntry::UserShellSettled {outcome:UserShellOutcome::Observed {output},..} if output.images==[image.clone()])));
     };
     check(&session);

@@ -59,18 +59,7 @@ impl HistoryRead {
         if stop.is_cancelled() {
             return Err(HistoryError::request("history read cancelled"));
         }
-        if entry > self.upper_entry {
-            return Err(HistoryError::request(format!(
-                "entry {entry} is newer than this read's committed bound {}",
-                self.upper_entry
-            )));
-        }
-        let prefix = entry_prefix(connection, entry).map_err(|error| match error {
-            SessionError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
-                HistoryError::request(format!("entry {entry} is not a committed entry"))
-            }
-            error => error.into(),
-        })?;
+        let prefix = self.committed_prefix(connection, entry)?;
         let kind = kind_from_prefix(&prefix).ok_or(SessionError::InvalidHistory)?;
         match kind {
             "tool_result" => self.read_tool_result(connection, stop, entry, offset, limit),
@@ -90,6 +79,101 @@ impl HistoryRead {
                 "entry {entry} is not a model-facing record"
             ))),
         }
+    }
+
+    fn committed_prefix(
+        &self,
+        connection: &Connection,
+        entry: u64,
+    ) -> Result<String, HistoryError> {
+        if entry > self.upper_entry {
+            return Err(HistoryError::request(format!(
+                "entry {entry} is newer than this read's committed bound {}",
+                self.upper_entry
+            )));
+        }
+        entry_prefix(connection, entry).map_err(|error| match error {
+            SessionError::Sqlite(rusqlite::Error::QueryReturnedNoRows) => {
+                HistoryError::request(format!("entry {entry} is not a committed entry"))
+            }
+            error => error.into(),
+        })
+    }
+
+    pub(super) fn read_image(
+        &self,
+        connection: &Connection,
+        stop: &CancellationToken,
+        entry: u64,
+        image_index: usize,
+    ) -> Result<crate::ToolOutput, HistoryError> {
+        if stop.is_cancelled() {
+            return Err(HistoryError::request("history read cancelled"));
+        }
+        let prefix = self.committed_prefix(connection, entry)?;
+        let kind = kind_from_prefix(&prefix).ok_or(SessionError::InvalidHistory)?;
+        // These are typed model-input paths, never arbitrary JSON discovery.
+        // Shell images are not shared by the shell's model projection, and
+        // composed children retain their separate inspectSaved authority.
+        let (path, selection, condition) = match kind {
+            "turn_started" | "steering" => (
+                "$.data.input.content",
+                "p.value -> '$.Image'",
+                "json_type(p.value,'$.Image') IS NOT NULL",
+            ),
+            "tool_result" => (
+                "$.data.result.outcome.output.images",
+                // JSON1 exposes scalars as SQL values. Keep their JSON type
+                // for ImageContent validation, including null and JSON-looking strings.
+                "CASE WHEN p.type IN ('object','array') THEN p.value ELSE json_quote(p.value) END",
+                "json_extract(e.body,'$.data.result.outcome.state')='observed'",
+            ),
+            _ => {
+                return Err(HistoryError::request(format!(
+                    "entry {entry} is not a user input or observed top-level tool image source"
+                )));
+            }
+        };
+        // JSON1 parses the bounded source row, but Rust receives only the one
+        // requested image, not a potentially large surrounding output document.
+        let (encoded, count) = connection
+            .query_row(
+                &format!(
+                    "SELECT {selection},count(*) OVER ()
+                FROM entries e,json_each(CAST(e.body AS TEXT),?3) p
+                WHERE e.seq=?1 AND {condition}
+                ORDER BY CAST(p.key AS INTEGER) LIMIT 1 OFFSET ?2"
+                ),
+                params![
+                    i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
+                    i64::try_from(image_index).map_err(|_| SessionError::InvalidHistory)?,
+                    path,
+                ],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+            .ok_or_else(|| {
+                HistoryError::request(format!(
+                    "entry {entry} has no retained image at index {image_index}"
+                ))
+            })?;
+        if stop.is_cancelled() {
+            return Err(HistoryError::request("history read cancelled"));
+        }
+        let image: ion_ai::ImageContent =
+            serde_json::from_str(&encoded).map_err(|_| SessionError::InvalidHistory)?;
+        // Decode is bounded by ImageContent's existing byte/pixel limits. Like
+        // SQLite I/O it cannot be interrupted; the retained leaf is joined.
+        if stop.is_cancelled() {
+            return Err(HistoryError::request("history read cancelled"));
+        }
+        let mut output = crate::ToolOutput::success(json!({
+            "entry":entry,"kind":kind,"image_index":image_index,"image_count":count,
+            "mime_type":image.mime_type().as_str(),"content":"Retrieved retained image",
+            "provenance":self.provenance(),
+        }));
+        output.images.push(image);
+        Ok(output)
     }
 
     fn read_tool_result(
