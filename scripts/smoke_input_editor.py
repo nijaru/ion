@@ -4,6 +4,7 @@ import json
 import shlex
 import subprocess
 import sys
+import threading
 
 from smoke_input_files import FileTerminal
 
@@ -32,9 +33,23 @@ sys.exit(7 if config["fail"] else 0)
     # macOS revokes the slave TTY when its session leader exits, even with an
     # open descriptor. The launcher records before cleaning its own TTY only.
     launcher = cwd / "launcher.py"
-    launcher.write_text('''import json, pathlib, signal, subprocess, sys, termios
+    launcher.write_text('''import json, os, pathlib, select, signal, subprocess, sys, termios, time, tty
 signal.signal(signal.SIGINT, signal.SIG_IGN)
 before = termios.tcgetattr(0)
+try:
+    tty.setraw(0, when=termios.TCSANOW)
+    os.write(1, b"\\x1b[?1049$p")
+    reply = b""
+    deadline = time.monotonic() + 0.2
+    while time.monotonic() < deadline:
+        if select.select([0], [], [], max(0, deadline - time.monotonic()))[0]:
+            reply += os.read(0, 1024)
+            if reply.endswith(b"$y"):
+                break
+finally:
+    termios.tcsetattr(0, termios.TCSANOW, before)
+assert reply in (b"", b"\\x1b[?1049;2$y"), reply
+pathlib.Path(sys.argv[1]).with_name("surface-reporting").write_text("native" if reply else "fixture")
 child = subprocess.run(sys.argv[2:])
 after = termios.tcgetattr(0)
 comparison = [list(before), list(after)]
@@ -47,10 +62,35 @@ termios.tcsetattr(0, termios.TCSANOW, before)
 sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)
 ''')
     modes_file = cwd / "exit-modes.json"
-    terminal = FileTerminal(binary, cwd, dict(env, VISUAL=shlex.join([sys.executable, str(helper)])), mode,
+    capture = cwd / "terminal.capture"
+    terminal = FileTerminal(binary, cwd, dict(env, VISUAL=shlex.join([sys.executable, str(helper)]),
+                                            ION_TERMINAL_CAPTURE=str(capture)), mode,
                             launcher=(sys.executable, launcher, modes_file))
+    stop_reports = threading.Event()
+    report_errors = []
+    reporter = None
     seed = "EDITOR_BASE_" + mode
     try:
+        terminal.wait(lambda: (cwd / "surface-reporting").exists())
+        reporting = (cwd / "surface-reporting").read_text()
+        if reporting == "fixture":
+            # tmux 3.6a renders/switches real screens but does not answer 1049
+            # queries. Complete that protocol boundary from its actual pane
+            # state, never from the expected outcome. Ion must still issue the
+            # query and perform the reset itself. New tmux answers natively.
+            def report_surface():
+                seen = 0
+                try:
+                    while not stop_reports.wait(0.001):
+                        count = capture.read_bytes().count(b"\x1b[?1049$p") if capture.exists() else 0
+                        for _ in range(seen, count):
+                            alternate = terminal.tmux("display-message", "-p", "-t", "ion:0.0", "#{alternate_on}").strip()
+                            terminal.send(f"\x1b[?1049;{1 if alternate == '1' else 2}$y")
+                        seen = count
+                except BaseException as error:
+                    report_errors.append(error)
+            reporter = threading.Thread(target=report_surface)
+            reporter.start()
         terminal.wait(lambda: terminal.editor_matches("", 0, False))
         terminal.send(seed + "\r")
         terminal.wait_turn()
@@ -126,8 +166,15 @@ sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)
         view = json.loads(subprocess.run([binary, "--session", terminal.database, "inspect"], env=env, capture_output=True, text=True, check=True, timeout=10).stdout)
         ended = [entry["data"]["reason"] for entry in view["entries"] if entry["kind"] == "turn_ended"]
         assert ended == ["completed"] * (len(outcomes) + 1), ended
-        print(f"External editor {mode}: {', '.join(outcomes)}, draft/caret, viewport, caller TTY, exact prompts and native history: OK", flush=True)
+        assert not report_errors, report_errors
+        print(f"External editor {mode} ({reporting} surface reports): {', '.join(outcomes)}, draft/caret, viewport, caller TTY, exact prompts and native history: OK", flush=True)
     finally:
         # Unblock a helper even if a screen assertion failed while it owned input.
         (cwd / "release").touch()
-        terminal.close()
+        stop_reports.set()
+        try:
+            if reporter is not None:
+                reporter.join(timeout=6)
+        finally:
+            terminal.close()
+        assert reporter is None or not reporter.is_alive(), "fixture surface reporter did not stop"

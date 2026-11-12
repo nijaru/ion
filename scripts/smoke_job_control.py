@@ -148,6 +148,7 @@ def exercise(mode):
             terminal.until(lambda: "›".encode() in terminal.output and terminal.queries == 1)
             assert terminal.grapheme_mode == 1, "initial composer lacks grapheme clustering"
             caller_mode = 2
+            caller_termios = original
             job = os.tcgetpgrp(master)
             assert job != shell.pid and job > 0, "Ion is not a distinct foreground job"
 
@@ -158,7 +159,7 @@ def exercise(mode):
                 state = subprocess.check_output(["ps", "-o", "stat=", "-p", str(job)]).strip()
                 assert b"T" in state, (job, state)
                 assert os.tcgetpgrp(master) == shell.pid
-                assert termios.tcgetattr(slave) == original, "shell did not regain cooked termios"
+                assert termios.tcgetattr(slave) == caller_termios, "shell did not regain its current cooked termios"
                 assert terminal.stacks == [[4], [8]] and not terminal.alternate
                 assert terminal.grapheme_mode == caller_mode, "shell inherited Ion's grapheme mode"
                 assert CLEAR in terminal.output[checkpoint:], "suspended job left a stale status record"
@@ -186,9 +187,15 @@ def exercise(mode):
             terminal.send(b"\x1b[D" * 4)
             suspend(b"\x1a")
             assert not requests, "suspension admitted an unsent draft"
-            # The shell may change this terminal-global bit while Ion is stopped.
-            terminal.send("printf '\\033[?2027h'\n")
+            # Both terminal-global preferences and stty changes belong to the
+            # shell's new acquisition. An editor scope's retained baseline must
+            # not be reused here: fg must capture what the shell now supplied.
+            caller_termios = list(original)
+            caller_termios[0] ^= termios.IXON
+            flow_control = "ixon" if caller_termios[0] & termios.IXON else "-ixon"
+            terminal.send(f"stty {flow_control} && printf '\\033[?2027h'\n")
             terminal.until(lambda: terminal.grapheme_mode == 1)
+            assert termios.tcgetattr(slave) == caller_termios, "fixture did not change the shell's termios"
             caller_mode = 1
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 32, 84, 0, 0))
             # `bg` must not let an interactive job steal the shell terminal.
@@ -197,7 +204,7 @@ def exercise(mode):
             terminal.until(lambda: PROMPT in terminal.output[checkpoint:])
             terminal.until(lambda: b"T" in subprocess.check_output(
                 ["ps", "-o", "stat=", "-p", str(job)]))
-            assert termios.tcgetattr(slave) == original
+            assert termios.tcgetattr(slave) == caller_termios
             assert terminal.stacks == [[4], [8]] and not terminal.alternate
             foreground()
             terminal.send("X\r")
@@ -218,6 +225,7 @@ def exercise(mode):
             terminal.send(b"\x04\x04")
             terminal.until(lambda: PROMPT in terminal.output[checkpoint:])
             assert terminal.grapheme_mode == caller_mode, "exit reset the shell's new setting"
+            assert termios.tcgetattr(slave) == caller_termios, "exit reset the shell's changed stty preference"
             assert terminal.stacks == [[4], [8]] and not terminal.alternate
             terminal.send("exit\n")
             terminal.until(lambda: shell.poll() is not None)
@@ -229,7 +237,7 @@ def exercise(mode):
             endings = [entry for entry in facts if entry["kind"] == "turn_ended"]
             assert len(endings) == 2 and all(entry["data"]["reason"] == "completed" for entry in endings), endings
             assert len([entry for entry in facts if entry["kind"] == "turn_started"]) == 2
-            print(f"Ion {mode} Ctrl-Z/fg: cooked shell, retained cursor, resize, busy no-replay: OK")
+            print(f"Ion {mode} Ctrl-Z/fg: fresh shell stty, retained cursor, resize, busy no-replay: OK")
         finally:
             release.set()
             if job is not None:
