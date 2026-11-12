@@ -321,12 +321,12 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     env = os.environ.copy()
     env.update(ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke", WAYLAND_DISPLAY="ion-smoke", ION_SMOKE_CLIPBOARD=str(copy_file), PATH=f"{copy_bin}:{env['PATH']}")
     port_file, trace = work / "port", work / "requests"
-    server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env | {"ION_SMOKE_TERMINAL": "1"}, stderr=subprocess.PIPE)
+    server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env | {"ION_SMOKE_TERMINAL": "1", "ION_SMOKE_THINKING": "1"}, stderr=subprocess.PIPE)
     try:
         while not port_file.exists():
             assert time.monotonic() < deadline, "mock provider did not start"
             time.sleep(0.02)
-        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port_file.read_text()}/v1/chat/completions", "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port_file.read_text()}/v1/chat/completions", "--wire", "openrouter-chat", "--images"], env=env, check=True, capture_output=True)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
         def attach_controlling_terminal():
@@ -517,8 +517,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert has_foreground(bytes(output), b'"SYNTAX_LITERAL"', ("ansi", 2)), "syntax string color did not reach terminal publication"
             assert b"-sample data" in plain_output and b"+sample data updated" in plain_output, "actual edit patch was not rendered"
             assert b"+created by ion" in plain_output, "actual write patch was not rendered"
-            assert "• ".encode() in output, "semantic activity group header was not rendered"
-            assert b"\xe2\x94\x9c " in output or b"\xe2\x94\x94 " in output, "grouped tool tree was not rendered"
+            assert "• 3 actions".encode() in plain_output, "hidden thinking split consecutive tool activity after steering"
+            assert "├ Edited data.txt".encode() in plain_output and "└ Ran cat data.txt created.txt".encode() in plain_output, "grouped tool tree was not rendered"
+            assert b"THINKING_STEP_" not in plain_output, "hidden reasoning leaked into the terminal"
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_preparation and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
             assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
@@ -530,6 +531,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             session_id = named[0].split("\t")[0]
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
+            thinking = [part["Thinking"] for entry in entries if entry["kind"] == "assistant" for part in entry["data"]["message"]["content"] if "Thinking" in part]
+            assert thinking == [f"THINKING_STEP_{index}" for index in range(4)], thinking
             assert "**MARKDOWN_BOLD**" in str(entries), "formatted view replaced the original saved Markdown"
             code_source = '```rust\nfn syntax_probe() {\n    let message = "SYNTAX_LITERAL"; // syntax comment\n}\n```'
             assert any(code_source in part.get("Text", "") for entry in entries if entry["kind"] == "assistant" for part in entry["data"]["message"]["content"]), "syntax rendering changed committed code"

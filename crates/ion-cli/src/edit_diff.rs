@@ -248,6 +248,7 @@ mod tests {
         assert!(expanded.contains("diff capture truncated") && !expanded.contains('\u{1b}'));
         let history = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: ion_core::TranscriptSource { entry: 1, part: 0 },
                 turn: 1,
                 open: false,

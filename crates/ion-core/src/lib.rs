@@ -114,7 +114,7 @@ pub use composition::{
 pub use tool_result::{ToolOutcome, ToolOutput, ToolResultProjection, ToolSettlement};
 
 pub use transcript::{
-    ActivityGroup, ActivityResult, ActivityState, LiveTranscript, TranscriptActivity,
-    TranscriptActivityIdentity, TranscriptItem, TranscriptMessage, TranscriptPart,
-    TranscriptProjection, TranscriptSource, UserShellActivity,
+    ActivityGroup, ActivityResult, ActivityState, GroupThinking, LiveTranscript,
+    TranscriptActivity, TranscriptActivityIdentity, TranscriptItem, TranscriptMessage,
+    TranscriptPart, TranscriptProjection, TranscriptSource, UserShellActivity,
 };

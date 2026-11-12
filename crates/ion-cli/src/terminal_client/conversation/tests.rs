@@ -29,12 +29,16 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
         AgentEvent::AssistantCommitted {
             entry: 2,
             turn: 1,
-            content: vec![Content::ToolCall(ToolCall {
-                id: "read".into(),
-                name: "read".into(),
-                arguments: serde_json::json!({"path":"src/lib.rs"}),
-                raw_arguments: None,
-            })],
+            content: vec![
+                Content::Thinking("Leading reasoning remains a separate source.".into()),
+                Content::ToolCall(ToolCall {
+                    id: "read".into(),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path":"src/lib.rs"}),
+                    raw_arguments: None,
+                }),
+                Content::Thinking("Interleaved reasoning does not seal the run.".into()),
+            ],
             tool_activities: vec![StoredToolActivity {
                 call_id: "read".into(),
                 activity: activity.clone(),
@@ -65,7 +69,10 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
     };
     assert_eq!(
         sources(&conversation, true),
-        [TranscriptSource { entry: 1, part: 0 }]
+        [
+            TranscriptSource { entry: 1, part: 0 },
+            TranscriptSource { entry: 2, part: 0 }
+        ]
     );
     fixtures::publish(&mut conversation);
 
@@ -81,7 +88,7 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
     assert!(sources(&conversation, true).is_empty());
     assert_eq!(
         conversation.items().count(),
-        2,
+        3,
         "restart removes only provisional prose"
     );
     conversation.observe(
@@ -97,20 +104,20 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
     assert_eq!(
         sources(&conversation, true),
         [
-            TranscriptSource { entry: 2, part: 0 },
+            TranscriptSource { entry: 2, part: 1 },
             TranscriptSource { entry: 4, part: 0 }
         ]
     );
     assert_eq!(
         conversation.items().count(),
-        3,
+        4,
         "promoted blocks do not duplicate their live counterparts"
     );
     fixtures::publish(&mut conversation);
     conversation.clear_live();
     assert_eq!(
         conversation.items().count(),
-        3,
+        4,
         "discarding the overlay retains sealed facts"
     );
     assert!(sources(&conversation, true).is_empty());

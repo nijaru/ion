@@ -115,6 +115,7 @@ fn custom_theme_styles_activity_and_diff_semantics_but_not_observations() {
         ),
     ];
     let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: Vec::new(),
         source: ion_core::TranscriptSource { entry: 13, part: 0 },
         turn: 1,
         open: true,
@@ -249,6 +250,7 @@ fn disclosure_hints_follow_configured_or_disabled_detail_action() {
         ),
     ];
     let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: Vec::new(),
         source: ion_core::TranscriptSource { entry: 14, part: 0 },
         turn: 1,
         open: false,
@@ -432,6 +434,93 @@ fn thinking_visibility_preserves_literal_source_and_wrapping() {
     );
 }
 
+#[test]
+fn interleaved_thinking_is_transparent_when_hidden_and_breaks_visible_folds() {
+    let mut group = ActivityGroup {
+        source: ion_core::TranscriptSource { entry: 2, part: 0 },
+        turn: 1,
+        open: false,
+        activities: vec![
+            activity(
+                "first",
+                ToolActivityKind::Read,
+                "first.txt",
+                ActivityState::Completed,
+                None,
+            ),
+            activity(
+                "second",
+                ToolActivityKind::Read,
+                "second.txt",
+                ActivityState::Completed,
+                None,
+            ),
+        ],
+        thinking: Vec::new(),
+    };
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    let hidden = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    let shown = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Visible,
+        std::path::Path::new("/workspace"),
+    );
+    let baseline = layout(&TranscriptItem::ActivityGroup(group.clone()), 80, &hidden).rows;
+    group.thinking = vec![
+        ion_core::GroupThinking {
+            source: ion_core::TranscriptSource { entry: 4, part: 0 },
+            before: 1,
+            text: "**BETWEEN**\nsecond line".into(),
+        },
+        ion_core::GroupThinking {
+            source: ion_core::TranscriptSource { entry: 6, part: 0 },
+            before: 2,
+            text: "TRAILING\nlast line".into(),
+        },
+    ];
+    let item = TranscriptItem::ActivityGroup(group);
+    assert_eq!(layout(&item, 80, &hidden).rows, baseline);
+    for width in [18, 80] {
+        let block = layout(&item, width, &shown);
+        assert!(block.rows.iter().all(|row| row.width() <= width));
+        assert_eq!(
+            block
+                .activities
+                .iter()
+                .map(|row| row.source.clone())
+                .collect::<Vec<_>>(),
+            [0..1, 1..2]
+        );
+        let text = block
+            .rows
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let positions = [
+            "first.txt",
+            "**BETWEEN**",
+            "second.txt",
+            "TRAILING",
+            "last line",
+        ]
+        .map(|needle| text.find(needle).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        assert!(block.provenance.iter().flatten().any(|(root, origin)| *root
+            == ContentRoot::Thinking(ion_core::TranscriptSource { entry: 4, part: 0 })
+            && matches!(origin, Origin::Raw(_))));
+    }
+}
+
 fn plain_rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
     super::rows(
         &projection.items,
@@ -508,6 +597,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
         vec![crate::tool_output::tests::artifact("stdout", true)];
     let single = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 15, part: 0 },
             turn: 1,
             open: false,
@@ -559,6 +649,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     );
     let grouped = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 16, part: 0 },
             turn: 1,
             open: false,
@@ -637,6 +728,7 @@ fn activity_styles_follow_typed_state_and_wrapping_keeps_the_tree() {
     let subject = "deep/project/with/a/long/path/界界/important.rs";
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 17, part: 0 },
             turn: 1,
             open: true,
@@ -878,6 +970,7 @@ fn nested_wrapping_keeps_sibling_rails_for_actions_and_details() {
     ];
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 18, part: 0 },
             turn: 1,
             open: true,
@@ -1063,6 +1156,7 @@ fn recorded_discovery_and_external_output_is_visible_including_nested_calls() {
                 observed
             };
             let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: ion_core::TranscriptSource { entry: 1, part: 0 },
                 turn: 1,
                 open: false,
@@ -1120,6 +1214,7 @@ fn folded_discovery_keeps_capture_limitations_outside_the_body_preview() {
     });
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 1, part: 0 },
             turn: 1,
             open: false,
@@ -1158,6 +1253,7 @@ fn external_structured_values_and_capture_notices_are_literal_and_width_safe() {
         "full_output_error":"CAPTURE_FAILURE",
         "output_schema_validation":{"notice":"SCHEMA_NOT_ESTABLISHED"}});
     let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: Vec::new(),
         source: ion_core::TranscriptSource { entry: 1, part: 0 },
         turn: 1,
         open: false,
@@ -1220,6 +1316,7 @@ fn external_structured_values_and_capture_notices_are_literal_and_width_safe() {
         }
     }
     let omitted = [TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: Vec::new(),
         source: ion_core::TranscriptSource { entry: 1, part: 0 },
         turn: 1,
         open: false,
@@ -1259,6 +1356,7 @@ fn external_structured_values_and_capture_notices_are_literal_and_width_safe() {
         }
     }
     let empty = [TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: Vec::new(),
         source: ion_core::TranscriptSource { entry: 1, part: 0 },
         turn: 1,
         open: false,
@@ -1297,6 +1395,7 @@ fn external_structured_values_and_capture_notices_are_literal_and_width_safe() {
 fn grouped_tools_are_hierarchical_and_mutations_are_visually_distinct() {
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 19, part: 0 },
             turn: 1,
             open: false,
@@ -1386,6 +1485,7 @@ fn withheld_result_notice_survives_long_subject_without_overflow() {
         read.result.as_mut().unwrap().projection = Some(projection);
         let history = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: ion_core::TranscriptSource { entry: 20, part: 0 },
                 turn: 1,
                 open: false,
@@ -1408,6 +1508,7 @@ fn withheld_result_notice_survives_long_subject_without_overflow() {
 fn failed_command_surfaces_exit_and_stderr() {
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 21, part: 0 },
             turn: 1,
             open: false,
@@ -1563,6 +1664,7 @@ fn live_budget_keeps_earlier_exception_and_mutations_across_narrative() {
     let projection = TranscriptProjection {
         items: vec![
             TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: ion_core::TranscriptSource { entry: 22, part: 0 },
                 turn: 1,
                 open: false,
@@ -1579,6 +1681,7 @@ fn live_budget_keeps_earlier_exception_and_mutations_across_narrative() {
                 )],
             }),
             TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: ion_core::TranscriptSource { entry: 23, part: 0 },
                 turn: 1,
                 open: true,
@@ -1645,6 +1748,7 @@ fn file_labels_are_relative_but_external_paths_and_nonfile_subjects_stay_literal
     .collect();
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 24, part: 0 },
             turn: 1,
             open: false,
@@ -1706,6 +1810,7 @@ fn nested_failure_remains_visible_under_a_running_parent() {
     )];
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 24, part: 0 },
             turn: 1,
             open: true,
@@ -1733,6 +1838,7 @@ fn exception_pin_uses_source_location_when_call_ids_are_reused() {
     let projection = TranscriptProjection {
         items: vec![
             TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: ion_core::TranscriptSource { entry: 25, part: 0 },
                 turn: 1,
                 open: true,
@@ -1795,6 +1901,7 @@ fn exception_pin_uses_source_location_when_call_ids_are_reused() {
 fn running_call_keeps_its_tree_when_later_calls_are_queued() {
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 26, part: 0 },
             turn: 1,
             open: true,
@@ -1869,6 +1976,7 @@ fn compact_group_never_hides_mutations_or_failures() {
     ));
     let projection = TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source: ion_core::TranscriptSource { entry: 27, part: 0 },
             turn: 1,
             open: false,

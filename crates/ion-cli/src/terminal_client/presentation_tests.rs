@@ -27,6 +27,7 @@ fn history_with_tools(mut activities: Vec<TranscriptActivity>) -> TranscriptProj
                 parts: vec![TranscriptPart::Text("LAST_ASSISTANT_ANSWER".into())],
             }),
             TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: TranscriptSource { entry: 2, part: 0 },
                 turn: 1,
                 open: false,

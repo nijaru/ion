@@ -4,7 +4,8 @@
 use super::{Entry, EntryKey};
 use crate::display_text::{Component, MappedLine, Mapping, Origin};
 use crate::transcript_render::{
-    BlockLayout, ReadingPoint, kind_label, source_message_layout, state_label,
+    BlockLayout, ReadingPoint, kind_label, source_message_layout, source_thinking_layout,
+    state_label,
 };
 use ion_core::{TranscriptActivity, TranscriptItem};
 use ratatui::text::{Line, Span};
@@ -130,6 +131,14 @@ impl Document {
         self.generated(key, Field::Gap, "", width);
         match entry {
             Entry::Tool(activity) => self.activity(activity, &number.to_string(), width),
+            Entry::Thinking(note) => {
+                self.generated(key, Field::Heading, "Assistant", width);
+                self.push(
+                    key,
+                    Field::Message,
+                    source_thinking_layout(&note.text, width),
+                );
+            }
             Entry::Item(item) => match item {
                 TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
                     let user = matches!(item, TranscriptItem::User(_));

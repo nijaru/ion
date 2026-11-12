@@ -132,6 +132,34 @@ struct Block<'a> {
     gap: bool,
 }
 
+impl Block<'_> {
+    fn project_anchor(&self, anchor: &Anchor) -> Option<Anchor> {
+        if self.key == anchor.key {
+            return Some(*anchor);
+        }
+        let Key::Fact(source) = anchor.key else {
+            return None;
+        };
+        let Segment::Item(TranscriptItem::ActivityGroup(group)) = &self.segment else {
+            return None;
+        };
+        if !group.thinking.iter().any(|note| note.source == source) {
+            return None;
+        }
+        // A streamed note retains its committed fact coordinate. Resolve that
+        // member into this block without rewriting the reader's source point.
+        let position = anchor.position.map(|mut point| {
+            assert_eq!(point.root, crate::transcript_render::ContentRoot::Part(0));
+            point.root = crate::transcript_render::ContentRoot::Thinking(source);
+            point
+        });
+        Some(Anchor {
+            key: self.key,
+            position,
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Point {
     block: usize,
@@ -483,10 +511,13 @@ impl BlockPresenter {
                 .and_then(|anchor| {
                     blocks
                         .iter()
-                        .position(|block| block.key == anchor.key)
-                        .map(|block| {
+                        .enumerate()
+                        .find_map(|(index, block)| {
+                            block.project_anchor(anchor).map(|point| (index, point))
+                        })
+                        .map(|(block, point)| {
                             let layout = self.layout(&blocks[block], revision, width, options);
-                            let row = anchor.row(layout, blocks[block].gap);
+                            let row = point.row(layout, blocks[block].gap);
                             Point { block, row }
                         })
                 })

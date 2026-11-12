@@ -398,6 +398,7 @@ fn activity_reading_uses_occurrences_and_children_through_fold_and_reflow() {
     let source = TranscriptSource { entry: 10, part: 0 };
     let mut document = fixtures::document(TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source,
             turn: 1,
             open: false,
@@ -538,6 +539,127 @@ async fn growing_uncommitted_text_keeps_its_original_byte_location() {
     assert_eq!(
         view.anchor.unwrap().key,
         Key::Fact(TranscriptSource { entry: 2, part: 0 })
+    );
+    assert_eq!(view.anchor.unwrap().position, Some(point));
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn streamed_thinking_retains_its_source_when_committed_inside_an_activity_group() {
+    use ion_ai::{Content, Message, ResponseTermination, ToolCall};
+    use ion_core::{AgentEvent, StoredToolActivity, ToolActivity};
+    let mut fixture = crate::terminal_client::tests::Fixture::new();
+    let operation = fixture
+        .control
+        .compact(
+            None,
+            crate::terminal_client::EditorDraft::at_end(String::new()),
+        )
+        .unwrap();
+    let mut document = fixtures::document(TranscriptProjection::default());
+    let call = |id: &str| {
+        Content::ToolCall(ToolCall {
+            id: id.into(),
+            name: "read".into(),
+            arguments: serde_json::json!({}),
+            raw_arguments: None,
+        })
+    };
+    let activity = |id: &str| StoredToolActivity {
+        call_id: id.into(),
+        activity: ToolActivity::external(id),
+    };
+    for event in [
+        AgentEvent::TurnAccepted {
+            entry: 1,
+            turn: 1,
+            input: Message::user_input("request".into(), []),
+        },
+        AgentEvent::AssistantCommitted {
+            entry: 2,
+            turn: 1,
+            content: vec![call("first")],
+            tool_activities: vec![activity("first")],
+            termination: ResponseTermination::Completed,
+        },
+    ] {
+        assert!(!document.observe(operation, &event));
+    }
+    let text = (0..100)
+        .map(|line| format!("MARK{line:03} original reasoning bytes\n\n"))
+        .collect::<String>();
+    assert!(!document.observe(
+        operation,
+        &AgentEvent::ThinkingDelta {
+            block: 0,
+            text: text.clone()
+        }
+    ));
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    let shown = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Visible,
+        std::path::Path::new("/workspace"),
+    );
+    let hidden = RenderOptions::new(
+        OutputDetail::Expanded,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    let mut presenter = BlockPresenter::default();
+    let mut view = ConversationView::default();
+    let point = ReadingPoint {
+        root: ContentRoot::Part(0),
+        point: TextPoint::Raw(text.find("MARK090").unwrap()),
+    };
+    read_at(
+        &mut presenter,
+        &document,
+        &mut view,
+        (
+            Key::Provisional(Some(TranscriptSource { entry: 2, part: 0 })),
+            point,
+        ),
+        80,
+        &shown,
+    );
+    let commit = AgentEvent::AssistantCommitted {
+        entry: 4,
+        turn: 1,
+        content: vec![Content::Thinking(text), call("second")],
+        tool_activities: vec![activity("second")],
+        termination: ResponseTermination::Completed,
+    };
+    view.commit_response(document.live().unwrap(), &commit);
+    assert!(!document.observe(operation, &commit));
+    for (width, options) in [(80, &shown), (23, &shown), (23, &hidden), (80, &shown)] {
+        let rows = presenter.window(&document, &mut view, (width, 8), false, true, options);
+        if options.thinking == ThinkingVisibility::Visible {
+            assert!(rows[0].to_string().contains("MARK090"), "{rows:?}");
+        }
+        assert_eq!(
+            view.anchor.unwrap().key,
+            Key::Fact(TranscriptSource { entry: 4, part: 0 })
+        );
+        assert_eq!(view.anchor.unwrap().position, Some(point));
+    }
+    let refreshed = TranscriptProjection {
+        items: document.items().cloned().collect(),
+    };
+    document.clear_live();
+    presenter.window(&document, &mut view, (23, 8), false, false, &shown);
+    assert_eq!(view.anchor.unwrap().position, Some(point));
+    document = fixtures::document(refreshed);
+    let restored = presenter.window(&document, &mut view, (80, 8), false, false, &shown);
+    assert!(restored[0].to_string().contains("MARK090"));
+    assert_eq!(
+        view.anchor.unwrap().key,
+        Key::Fact(TranscriptSource { entry: 4, part: 0 })
     );
     assert_eq!(view.anchor.unwrap().position, Some(point));
     fixture.control.shutdown().await;
@@ -773,6 +895,7 @@ fn deep_tool_child_shell_and_diff_fields_survive_remeasurement_and_hidden_disclo
     let mut document = fixtures::document(TranscriptProjection {
         items: vec![
             TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source: group_source,
                 turn: 1,
                 open: false,
@@ -945,6 +1068,7 @@ fn folded_notices_keep_their_actual_owner_when_reading_starts_compact() {
         let document = fixtures::document(TranscriptProjection {
             items: vec![
                 TranscriptItem::ActivityGroup(ActivityGroup {
+                    thinking: Vec::new(),
                     source,
                     turn: 1,
                     open: false,
@@ -1056,6 +1180,7 @@ fn repeated_observation_items_and_value_leaves_keep_distinct_reading_coordinates
     let source = TranscriptSource { entry: 10, part: 0 };
     let mut document = fixtures::document(TranscriptProjection {
         items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+            thinking: Vec::new(),
             source,
             turn: 1,
             open: false,
@@ -1154,6 +1279,7 @@ fn idle_fullscreen_keeps_the_continuous_tail_and_repeated_notice_reading_points(
         TranscriptActivity, TranscriptActivityIdentity,
     };
     let interrupted = TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: Vec::new(),
         source: TranscriptSource { entry: 2, part: 0 },
         turn: 1,
         open: false,

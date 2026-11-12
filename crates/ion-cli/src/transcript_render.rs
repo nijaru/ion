@@ -76,6 +76,7 @@ pub(super) struct ActivityRow {
 pub(super) enum ContentRoot {
     Block,
     Part(usize),
+    Thinking(ion_core::TranscriptSource),
     Activity(ion_core::TranscriptActivityIdentity),
 }
 
@@ -598,6 +599,35 @@ fn render_message_layout(
     }
 }
 
+pub(super) fn source_thinking_layout(text: &str, width: usize) -> BlockLayout {
+    let mut block = BlockLayout::default();
+    source_thinking(&mut block, ContentRoot::Part(0), text, width);
+    block
+}
+
+fn source_thinking(block: &mut BlockLayout, root: ContentRoot, text: &str, width: usize) {
+    block.extend(
+        root,
+        wrap_mapped(
+            "",
+            "",
+            MappedLine::component(Line::raw("Thinking"), Component::Generated(0), 0),
+            width,
+            Wrapping::Literal,
+        ),
+    );
+    block.extend(
+        root,
+        wrap_mapped(
+            "  ",
+            "  ",
+            MappedLine::raw(Line::from(Span::raw(text.to_owned())), 0..text.len()),
+            width,
+            Wrapping::Literal,
+        ),
+    );
+}
+
 /// Inspection keeps the original human-visible source, not the formatted view.
 pub(super) fn source_message_layout(
     message: &TranscriptMessage,
@@ -617,21 +647,8 @@ pub(super) fn source_message_layout(
         let continuation = if user { "  " } else { "" };
         let (prefix, continuation, source) = match part {
             TranscriptPart::Thinking(text) => {
-                block.extend(
-                    root,
-                    wrap_mapped(
-                        "",
-                        "",
-                        MappedLine::component(Line::raw("Thinking"), Component::Generated(0), 0),
-                        width,
-                        Wrapping::Literal,
-                    ),
-                );
-                (
-                    "  ",
-                    "  ",
-                    MappedLine::raw(Line::from(Span::raw(text.clone())), 0..text.len()),
-                )
+                source_thinking(&mut block, root, text, width);
+                continue;
             }
             TranscriptPart::Text(text) => (
                 prefix,
@@ -792,9 +809,18 @@ fn render_group(
         return;
     }
     let theme = detail.theme;
-    let display = display_activities(&group.activities, detail);
+    let thinking = if detail.thinking == ThinkingVisibility::Visible {
+        group.thinking.as_slice()
+    } else {
+        &[]
+    };
+    let display = display_activities(&group.activities, detail, thinking);
+    let mut notes = thinking.iter().peekable();
 
     if group.activities.len() == 1 {
+        while let Some(note) = notes.next_if(|note| note.before == 0) {
+            render_group_thinking(block, note, ("", ""), width, detail);
+        }
         let item = &display[0];
         block.activities.push(ActivityRow {
             source: item.source.clone(),
@@ -813,6 +839,9 @@ fn render_group(
         crate::edit_diff::render(&mut rows, &group.activities[0], "  ", width, detail);
         block.extend_activities(&group.activities[..1], rows);
         render_children(block, &group.activities[0].children, "  ", width, detail);
+        for note in notes {
+            render_group_thinking(block, note, ("", ""), width, detail);
+        }
         return;
     }
 
@@ -828,13 +857,16 @@ fn render_group(
     );
     let total_children = display.len();
     for (index, item) in display.iter().enumerate() {
+        while let Some(note) = notes.next_if(|note| note.before == item.source.start) {
+            render_group_thinking(block, note, ("├ ", "│ "), width, detail);
+        }
         block.activities.push(ActivityRow {
             source: item.source.clone(),
             row: block.rows.len(),
             priority: item.priority(),
         });
         let mut rows = Vec::new();
-        let last = index + 1 == total_children;
+        let last = index + 1 == total_children && notes.peek().is_none();
         let branch = if last { "└ " } else { "├ " };
         push_activity(
             &mut rows,
@@ -897,6 +929,54 @@ fn render_group(
             detail,
         );
     }
+    while let Some(note) = notes.next() {
+        let prefixes = if notes.peek().is_none() {
+            ("└ ", "  ")
+        } else {
+            ("├ ", "│ ")
+        };
+        render_group_thinking(block, note, prefixes, width, detail);
+    }
+}
+
+fn render_group_thinking(
+    block: &mut BlockLayout,
+    note: &ion_core::GroupThinking,
+    prefixes: (&str, &str),
+    width: usize,
+    detail: &RenderOptions<'_>,
+) {
+    let root = ContentRoot::Thinking(note.source);
+    block.extend(
+        root,
+        wrap_mapped(
+            prefixes.0,
+            prefixes.1,
+            MappedLine::generated(
+                Line::styled("Thinking", detail.theme.style(Role::Secondary)),
+                0,
+            ),
+            width,
+            Wrapping::Literal,
+        ),
+    );
+    let body = format!("{}  ", prefixes.1);
+    block.extend(
+        root,
+        wrap_mapped(
+            &body,
+            &body,
+            MappedLine::raw(
+                Line::from(Span::styled(
+                    note.text.clone(),
+                    detail.theme.style(Role::Secondary),
+                )),
+                0..note.text.len(),
+            ),
+            width,
+            Wrapping::Words,
+        ),
+    );
 }
 
 fn render_children(
@@ -907,7 +987,7 @@ fn render_children(
     detail: &RenderOptions<'_>,
 ) {
     let theme = detail.theme;
-    let display = display_activities(children, detail);
+    let display = display_activities(children, detail, &[]);
     for (index, item) in display.iter().enumerate() {
         let mut rows = Vec::new();
         let last = index + 1 == display.len();
@@ -1034,6 +1114,7 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
 fn display_activities(
     activities: &[TranscriptActivity],
     detail: &RenderOptions<'_>,
+    thinking: &[ion_core::GroupThinking],
 ) -> Vec<DisplayActivity> {
     if detail.detail == OutputDetail::Expanded {
         return activities
@@ -1043,8 +1124,11 @@ fn display_activities(
             .collect();
     }
     let mut display = Vec::new();
+    let mut boundaries = thinking.iter().map(|note| note.before).peekable();
     let mut index = 0;
     while index < activities.len() {
+        while boundaries.next_if(|before| *before <= index).is_some() {}
+        let limit = boundaries.peek().copied().unwrap_or(activities.len());
         let current = &activities[index];
         if is_observation(current.activity.kind)
             && current.state == ActivityState::Completed
@@ -1052,7 +1136,7 @@ fn display_activities(
         {
             let kind = current.activity.kind;
             let mut end = index + 1;
-            while end < activities.len()
+            while end < limit
                 && activities[end].activity.kind == kind
                 && activities[end].state == ActivityState::Completed
                 && model_result_notice(&activities[end]).is_none()

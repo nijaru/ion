@@ -103,6 +103,8 @@ class Handler(BaseHTTPRequestHandler):
                         assert body["messages"][-2]["tool_calls"][0]["id"] == f"call-{count}"
                 name, arguments = steps[count]
                 delta = {"tool_calls": [{"index": 0, "id": f"call-{count + 1}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+                if os.environ.get("ION_SMOKE_THINKING") == "1":
+                    delta["reasoning_content"] = f"THINKING_STEP_{count}"
                 finish = "tool_calls"
                 if count == 0 and require_steering:
                     time.sleep(0.75)

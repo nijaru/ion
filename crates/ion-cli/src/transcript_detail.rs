@@ -55,6 +55,7 @@ struct Page {
 enum Entry<'a> {
     Item(&'a TranscriptItem),
     Tool(&'a TranscriptActivity),
+    Thinking(&'a ion_core::GroupThinking),
 }
 
 impl Entry<'_> {
@@ -62,6 +63,7 @@ impl Entry<'_> {
         match self {
             Self::Item(item) => item.source().map_or(EntryKey::Provisional, EntryKey::Fact),
             Self::Tool(activity) => EntryKey::Tool(activity.identity),
+            Self::Thinking(note) => EntryKey::Fact(note.source),
         }
     }
 
@@ -279,7 +281,7 @@ impl DetailView {
                 .iter()
                 .filter_map(|entry| match entry {
                     Entry::Tool(activity) => Some(*activity),
-                    Entry::Item(..) => None,
+                    Entry::Item(..) | Entry::Thinking(..) => None,
                 })
                 .enumerate()
                 .find(|(_, activity)| activity.identity == *identity);
@@ -388,14 +390,23 @@ impl DetailView {
 
 fn entries<'a>(items: impl Iterator<Item = &'a TranscriptItem>) -> impl Iterator<Item = Entry<'a>> {
     items.flat_map(|item| {
-        let activities = match item {
-            TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
-            _ => &[],
-        };
-        (!matches!(item, TranscriptItem::ActivityGroup(_)))
-            .then_some(Entry::Item(item))
-            .into_iter()
-            .chain(activities.iter().map(Entry::Tool))
+        let mut activity = 0;
+        let mut thinking = 0;
+        let mut single = Some(item);
+        std::iter::from_fn(move || {
+            let TranscriptItem::ActivityGroup(group) = item else {
+                return single.take().map(Entry::Item);
+            };
+            if let Some(note) = group.thinking.get(thinking)
+                && note.before == activity
+            {
+                thinking += 1;
+                return Some(Entry::Thinking(note));
+            }
+            let next = group.activities.get(activity)?;
+            activity += 1;
+            Some(Entry::Tool(next))
+        })
     })
 }
 
@@ -404,7 +415,7 @@ pub fn tools<'a>(
 ) -> impl Iterator<Item = &'a TranscriptActivity> {
     entries(items.into_iter()).filter_map(|entry| match entry {
         Entry::Tool(activity) => Some(activity),
-        Entry::Item(..) => None,
+        Entry::Item(..) | Entry::Thinking(..) => None,
     })
 }
 
@@ -524,12 +535,56 @@ mod tests {
     fn tool_history(activities: Vec<TranscriptActivity>) -> TranscriptProjection {
         TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ion_core::ActivityGroup {
+                thinking: Vec::new(),
                 source: TranscriptSource { entry: 2, part: 0 },
                 turn: 1,
                 activities,
                 open: true,
             })],
         }
+    }
+
+    #[test]
+    fn inspection_keeps_group_thinking_in_source_order_without_renumbering_tools() {
+        let mut history = tool_history(vec![activity(0), activity(1)]);
+        let TranscriptItem::ActivityGroup(group) = &mut history.items[0] else {
+            unreachable!()
+        };
+        group.thinking = vec![
+            ion_core::GroupThinking {
+                source: TranscriptSource { entry: 4, part: 0 },
+                before: 1,
+                text: "**BETWEEN**\r\nkept literally".into(),
+            },
+            ion_core::GroupThinking {
+                source: TranscriptSource { entry: 6, part: 0 },
+                before: 2,
+                text: "TRAILING".into(),
+            },
+        ];
+        let mut view = DetailView::default();
+        view.prepare(history.items.iter(), &[], 0, 80);
+        let text = view.rows().join("\n");
+        let positions = [
+            "Tool 1:",
+            "**BETWEEN**",
+            "kept literally",
+            "Tool 2:",
+            "TRAILING",
+        ]
+        .map(|needle| text.find(needle).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        assert_eq!(tools(history.items.iter()).count(), 2);
+        let note = entries(history.items.iter()).nth(1).unwrap();
+        assert_eq!(
+            note.key(),
+            EntryKey::Fact(TranscriptSource { entry: 4, part: 0 })
+        );
+        read_marker(&mut view, "**BETWEEN**");
+        let retained = view.anchor.clone();
+        view.prepare(history.items.iter(), &[], 0, 23);
+        assert!(view.window(8)[0].contains("**BETWEEN**"));
+        assert_eq!(view.anchor, retained);
     }
 
     fn read_marker(view: &mut DetailView, marker: &str) {

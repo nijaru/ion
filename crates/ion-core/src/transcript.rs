@@ -79,12 +79,24 @@ pub struct TranscriptActivity {
     pub children: Vec<TranscriptActivity>,
 }
 
+/// Reasoning interleaved with a run of tool calls, without ending that run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupThinking {
+    pub source: TranscriptSource,
+    /// Number of activities preceding this note. Notes are appended in source
+    /// order; equal positions and a trailing position are both meaningful.
+    pub before: usize,
+    pub text: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActivityGroup {
     pub source: TranscriptSource,
     pub turn: u64,
     pub activities: Vec<TranscriptActivity>,
-    /// Whether subsequent silent calls can join this presentation group.
+    /// Notes in source order, at non-decreasing positions in `activities`.
+    pub thinking: Vec<GroupThinking>,
+    /// Whether subsequent tool calls or reasoning can join this run.
     /// Closed groups can still have pending outcomes; this is not immutability.
     pub open: bool,
 }
@@ -334,6 +346,23 @@ impl TranscriptBuilder {
             };
             let visible = visible_part(part, true);
             if let Some(part) = visible {
+                if let Some((active_turn, index)) = self.active_group
+                    && active_turn == turn
+                    && let TranscriptPart::Thinking(text) = part
+                {
+                    let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[index]
+                    else {
+                        unreachable!("the active group is an activity group");
+                    };
+                    group.thinking.push(GroupThinking {
+                        source,
+                        before: group.activities.len(),
+                        text,
+                    });
+                    continue;
+                }
+                // Leading reasoning is already a sealed source item. Never
+                // move it backwards into a group created by a later call.
                 self.close_group();
                 self.projection
                     .items
@@ -471,6 +500,7 @@ impl TranscriptBuilder {
         self.projection
             .items
             .push(TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
                 source,
                 turn,
                 activities: Vec::new(),
@@ -881,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn historical_projection_groups_silent_tool_steps_and_splits_on_prose() {
+    fn historical_projection_groups_tool_steps_across_thinking_and_splits_on_prose() {
         let model = ModelRef {
             provider: "test".into(),
             model: "model".into(),
@@ -918,7 +948,10 @@ mod tests {
                 },
                 assistant(
                     1,
-                    vec![call("b", "edit", serde_json::json!({"path":"b.rs"}))],
+                    vec![
+                        Content::Thinking("Reasoning between tool steps.".into()),
+                        call("b", "edit", serde_json::json!({"path":"b.rs"})),
+                    ],
                 ),
                 SessionEntry::ToolResult {
                     turn: 1,
@@ -974,6 +1007,42 @@ mod tests {
         };
 
         let projected = TranscriptProjection::from_session(&view);
+        let mut live = LiveTranscript::default();
+        for (index, entry) in view.entries.iter().enumerate() {
+            let event = match entry {
+                SessionEntry::TurnStarted { turn, input, .. } => AgentEvent::TurnAccepted {
+                    turn: *turn,
+                    entry: index as u64 + 1,
+                    input: input.clone(),
+                },
+                SessionEntry::Assistant {
+                    turn,
+                    message,
+                    tool_activities,
+                    termination,
+                    ..
+                } => AgentEvent::AssistantCommitted {
+                    turn: *turn,
+                    entry: index as u64 + 1,
+                    content: message.content.clone(),
+                    tool_activities: tool_activities.clone(),
+                    termination: termination.clone(),
+                },
+                SessionEntry::ToolResult { result, .. } => AgentEvent::ToolFinished {
+                    call_id: result.call_id.clone(),
+                    name: result.name.clone(),
+                    activity: ToolActivity::external(&result.name),
+                    outcome: result.outcome.clone(),
+                },
+                SessionEntry::TurnEnded { turn, reason } => AgentEvent::TurnEnded {
+                    turn: *turn,
+                    reason: reason.clone(),
+                },
+                _ => unreachable!("this fixture contains only Turn, response and outcome facts"),
+            };
+            live.observe(&event);
+        }
+        assert_eq!(live.projection(), &projected);
         let groups = projected
             .items
             .iter()
@@ -993,6 +1062,15 @@ mod tests {
             ToolActivityKind::Edit
         );
         assert_eq!(groups[1].activities.len(), 1);
+        assert_eq!(
+            groups[0].thinking,
+            [GroupThinking {
+                source: TranscriptSource { entry: 4, part: 0 },
+                before: 1,
+                text: "Reasoning between tool steps.".into(),
+            }]
+        );
+        assert!(groups[1].thinking.is_empty());
         assert_eq!(groups[0].source, TranscriptSource { entry: 2, part: 0 });
         assert_eq!(groups[1].source, TranscriptSource { entry: 6, part: 1 });
         assert_eq!(projected.sealed_prefix(), projected.items.len());
@@ -1055,6 +1133,7 @@ mod tests {
 
         // Reused provider IDs cannot replace the first committed occurrence.
         record(vec![
+            Content::Thinking("Reasoning before another uncertain effect.".into()),
             Content::Text("  ".into()),
             call("same", "read", serde_json::json!({})),
             Content::Text("pending work".into()),
@@ -1086,6 +1165,8 @@ mod tests {
             panic!()
         };
         assert!(!group.open);
+        assert_eq!(group.thinking.len(), 1);
+        assert_eq!(group.thinking[0].before, 1);
         assert_eq!(group.source, growing.items[1].source().unwrap());
         assert_ne!(group.activities[0].identity, group.activities[1].identity);
         assert_eq!(
