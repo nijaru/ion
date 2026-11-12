@@ -800,6 +800,81 @@ async fn completed_file_paste_clears_reader_status() {
 }
 
 #[tokio::test]
+async fn pending_clipboard_stays_with_composer_when_settings_opens() {
+    for (paste, expected, added_image) in [
+        (
+            PreparedPaste::Text("pasted\n🦀".into()),
+            "before pasted\n🦀after",
+            0,
+        ),
+        (
+            PreparedPaste::Files(vec![
+                PathBuf::from("/tmp/a b.rs"),
+                PathBuf::from("/tmp/c.rs"),
+            ]),
+            "before /tmp/a b.rs\n/tmp/c.rs after",
+            0,
+        ),
+        (
+            PreparedPaste::Image(ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap()),
+            "before after",
+            1,
+        ),
+    ] {
+        let (release, held) = tokio::sync::oneshot::channel();
+        let mut ui = Frontend {
+            status: "Reading clipboard…".into(),
+            clipboard_job: Some(ClipboardJob {
+                stop: CancellationToken::new(),
+                task: tokio::spawn(async move { Ok(Some(held.await.unwrap())) }),
+            }),
+            ..Frontend::default()
+        };
+        ui.insert("before after");
+        ui.editor.cursor = "before ".len();
+        ui.attach_image(ImageSource::Path("retained.png".into()));
+        ui.editor.files.push(ion_app::prompt_files::TextFile {
+            name: "retained.rs".into(),
+            text: "literal file contents".into(),
+        });
+        // /settings is intentionally allowed during clipboard acquisition.
+        ui.open_settings(ion_core::CompletionDelivery::Inbox);
+        ui.key(
+            KeyEvent::new(KeyCode::Char('t'), Modifiers::NONE),
+            None,
+            None,
+        );
+        assert_eq!(ui.pickers.active().unwrap().query, "t");
+        release
+            .send(paste)
+            .unwrap_or_else(|_| panic!("clipboard worker is retained"));
+        finish_clipboard_paste(&mut ui).await.unwrap();
+        assert_eq!(ui.editor.draft, expected);
+        assert_eq!(ui.editor.cursor, expected.len() - "after".len());
+        assert_eq!(ui.editor.images.len(), 1 + added_image);
+        assert_eq!(ui.editor.files[0].text, "literal file contents");
+        let picker = ui.pickers.active().expect("paste must not close Settings");
+        assert_eq!(
+            (picker.title, picker.query.as_str(), picker.selected),
+            ("Settings", "t", 0)
+        );
+        ui.pickers.close();
+        if added_image == 0 {
+            ui.key(
+                KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL),
+                None,
+                None,
+            );
+            assert_eq!(
+                ui.editor.draft, "before after",
+                "paste is one composer undo edit"
+            );
+            assert_eq!(ui.editor.cursor, "before ".len());
+        }
+    }
+}
+
+#[tokio::test]
 async fn pending_clipboard_keeps_literal_input_before_admission() {
     for (literal, modifiers) in [
         ("prompt", Modifiers::NONE),

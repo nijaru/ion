@@ -113,7 +113,7 @@ pub(super) fn prepare_clipboard(
 }
 
 pub(super) fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Result<()> {
-    match content {
+    let text = match content {
         PreparedPaste::Files(paths) => {
             let shell = ui.editor.draft.trim_start().starts_with('!');
             let text = clipboard_paths(&paths, shell)?;
@@ -121,11 +121,18 @@ pub(super) fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Resu
             let after = ui.editor.draft[ui.editor.cursor..].chars().next();
             let prefix = before.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
             let suffix = after.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
-            ui.insert(&format!("{prefix}{text}{suffix}"));
+            format!("{prefix}{text}{suffix}")
         }
-        PreparedPaste::Image(image) => ui.attach_image(image.into()),
-        PreparedPaste::Text(text) => ui.insert(&text),
-    }
+        PreparedPaste::Image(image) => {
+            ui.attach_image(image.into());
+            return Ok(());
+        }
+        PreparedPaste::Text(text) => text,
+    };
+    // This read was started by the composer. A later picker must not capture
+    // the asynchronous result as though it were fresh input to its search box.
+    ui.gestures.invalidate();
+    ui.editor.insert(&text);
     Ok(())
 }
 
