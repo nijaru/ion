@@ -358,7 +358,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     }
                     if ui.question_owns_input() {
                         let action = ui.question_key(key);
-                        apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen).await?;
+                        apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen, &mut interrupt).await?;
                         poll_control = true;
                         continue;
                     }
@@ -409,6 +409,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                 terminal,
                                 screen,
                                 &mut program,
+                                &mut interrupt,
                                 command,
                             )
                             .await?;
@@ -426,7 +427,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .as_mut()
                             .expect("question owns input")
                             .paste(&text);
-                        apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen).await?;
+                        apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen, &mut interrupt).await?;
                         poll_control = true;
                     } else if ui.input_target() != interaction::InputTarget::Details {
                         ui.insert(&text);
@@ -710,23 +711,39 @@ fn last_committed_answer(view: &SessionView) -> Result<String> {
 async fn edit_text_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
+    interrupt: &mut tokio::signal::unix::Signal,
     text: &str,
     max_bytes: usize,
 ) -> Result<Result<String>> {
-    terminal
-        .release_inline(screen)
-        .await
-        .context("release chat surface for editor")?;
-    terminal.suspend().context("suspend terminal for editor")?;
-    let edited = crate::external_editor::edit(text, max_bytes).await;
-    terminal
-        .resume()
-        .await
-        .context("resume terminal after editor")?;
-    *screen = new_inline_screen(terminal)
-        .await
-        .context("restore inline chat after editor")?;
-    Ok(edited)
+    let handoff = async {
+        terminal
+            .release_inline(screen)
+            .await
+            .context("release chat surface for editor")?;
+        terminal.suspend().context("suspend terminal for editor")?;
+        let edited = crate::external_editor::edit(text, max_bytes).await;
+        terminal
+            .resume()
+            .await
+            .context("resume terminal after editor")?;
+        *screen = new_inline_screen(terminal)
+            .await
+            .context("restore inline chat after editor")?;
+        Ok(edited)
+    };
+    tokio::pin!(handoff);
+    loop {
+        tokio::select! {
+            biased;
+            signal = interrupt.recv() => {
+                // The cooked TTY delivers Ctrl-C to both processes. The editor
+                // owns interrupts through terminal restoration; do not replay
+                // its cancellation as an Ion exit or cancel its wait future.
+                anyhow::ensure!(signal.is_some(), "terminal interrupt observer closed");
+            }
+            result = &mut handoff => return result,
+        }
+    }
 }
 
 fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
@@ -1597,6 +1614,7 @@ async fn apply_question_action(
     action: QuestionAction,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
+    interrupt: &mut tokio::signal::unix::Signal,
 ) -> Result<()> {
     match action {
         QuestionAction::None => {}
@@ -1608,8 +1626,14 @@ async fn apply_question_action(
             index,
             text,
         } => {
-            let edited =
-                edit_text_in_terminal(terminal, screen, &text, ion_app::MAX_ANSWER_BYTES).await?;
+            let edited = edit_text_in_terminal(
+                terminal,
+                screen,
+                interrupt,
+                &text,
+                ion_app::MAX_ANSWER_BYTES,
+            )
+            .await?;
             // Core work runs independently. The question may have expired while
             // the native editor owned the terminal; never reuse its old lease.
             ui.sync_question(responder);

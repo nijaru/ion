@@ -7,6 +7,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import signal
 import sqlite3
 import struct
@@ -840,7 +841,20 @@ def exercise_questions():
                     os.setsid()
                     fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-                child = subprocess.Popen([binary, "--cwd", workspace, "chat", "Ask the fixture question"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+                client_env = env
+                if mode == "custom":
+                    helper = workspace / "editor.py"
+                    helper.write_text('''import pathlib, sys, time
+root = pathlib.Path(__file__).parent
+draft = pathlib.Path(sys.argv[1])
+(root / "received").write_text(draft.read_text())
+print("QUESTION_EXTERNAL_EDITOR", flush=True)
+while not (root / "release").exists():
+    time.sleep(0.01)
+draft.write_text("café 🦀\\n")
+''')
+                    client_env = env | {"VISUAL": shlex.join([sys.executable, str(helper)])}
+                child = subprocess.Popen([binary, "--cwd", workspace, "chat", "Ask the fixture question"], env=client_env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
                 os.close(slave)
                 output = bytearray()
                 cursor = CursorReplies()
@@ -896,7 +910,27 @@ def exercise_questions():
                             wait(lambda: b"[x] Alpha" in plain(), "checked before custom")
                         os.write(master, b"\x1b[B\x1b[B\r")
                         wait(lambda: b"Enter answer" in plain(), "custom editor")
-                        os.write(master, "café 🦀\r".encode())
+                        if mode == "custom":
+                            original = "QUESTION_RETAIN_🦀"
+                            os.write(master, original.encode())
+                            wait(lambda: original.encode() in plain(), "original question draft")
+                            os.write(master, b"\x07")
+                            wait(lambda: (workspace / "received").exists() and b"QUESTION_EXTERNAL_EDITOR" in plain(), "native question editor")
+                            assert (workspace / "received").read_text() == original
+                            os.write(master, b"\x03")
+                            wait(lambda: b"original draft retained" in plain(), "editor-only cancellation")
+                            assert child.poll() is None, "cancelling the question editor exited Ion"
+                            assert len(trace.read_text().splitlines()) == 1 and not (workspace / "question-effect.txt").exists(), "editor cancellation answered or continued the question"
+                            (workspace / "received").unlink()
+                            os.write(master, b"\x07")
+                            wait(lambda: (workspace / "received").exists(), "reopened question editor")
+                            assert (workspace / "received").read_text() == original, "editor cancellation lost the question draft"
+                            (workspace / "release").touch()
+                            wait(lambda: b"Draft returned from editor; Enter confirms" in plain(), "returned question draft")
+                            assert len(trace.read_text().splitlines()) == 1 and not (workspace / "question-effect.txt").exists(), "returning an edited draft answered the question"
+                            os.write(master, b"\r")
+                        else:
+                            os.write(master, "café 🦀\r".encode())
                         wait(lambda: b"QUESTION_DONE" in plain(), "custom answer effect")
                     elif mode in ("cancel", "multi-cancel"):
                         if mode == "multi-cancel":
@@ -971,7 +1005,7 @@ def exercise_questions():
                 diagnostics = server.stderr.read()
                 if diagnostics:
                     print(f"question provider {mode} stderr:\n{diagnostics.decode(errors='replace')}", file=sys.stderr)
-    print("Ion typed questions: single/multi, explicit empty, custom Unicode, cancel, Ctrl-C stop, status and independent effects: OK")
+    print("Ion typed questions: single/multi, explicit empty, custom Unicode, external-editor cancellation/confirmation, cancel, Ctrl-C stop, status and independent effects: OK")
 
 
 exercise_questions()

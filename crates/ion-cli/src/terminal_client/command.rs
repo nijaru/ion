@@ -68,6 +68,10 @@ impl CommandInput {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dispatch borrows both application control and native terminal custody"
+)]
 pub(super) async fn dispatch_command(
     runtime: &mut SessionControl<EditorDraft>,
     services: &std::sync::Arc<ion_app::Host>,
@@ -75,6 +79,7 @@ pub(super) async fn dispatch_command(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     program: &mut ProgramStatusState,
+    interrupt: &mut tokio::signal::unix::Signal,
     input: CommandInput,
 ) -> Result<()> {
     let ParsedCommand { kind, args } = input.parsed();
@@ -231,8 +236,14 @@ pub(super) async fn dispatch_command(
         }
         CommandKind::Builtin(Builtin::Editor) if args.is_empty() => {
             ui.editor.completion.clear();
-            match edit_text_in_terminal(terminal, screen, &ui.editor.draft, super::MAX_DRAFT)
-                .await?
+            match edit_text_in_terminal(
+                terminal,
+                screen,
+                interrupt,
+                &ui.editor.draft,
+                super::MAX_DRAFT,
+            )
+            .await?
             {
                 Ok(text) => {
                     ui.replace_draft_atomic(text);
