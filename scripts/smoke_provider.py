@@ -275,5 +275,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-port_file.write_text(str(server.server_port))
+# Readers use existence as readiness: never expose an empty or partial port.
+staged_port = port_file.with_name(f".{port_file.name}.{os.getpid()}.tmp")
+staged_port.write_text(str(server.server_port))
+staged_port.replace(port_file)
 server.serve_forever()

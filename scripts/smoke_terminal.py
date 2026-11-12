@@ -300,11 +300,56 @@ def exercise_file_discovery():
     print("Ion owned file discovery: idle/busy wake, pending input, dismissal and shell cancellation: OK")
 
 
+def exercise_provider_publication():
+    """Existence must mean a complete port, even if startup is descheduled."""
+    with tempfile.TemporaryDirectory(prefix="ion-provider-publication-") as temporary:
+        work = Path(temporary)
+        port_file, trace, opened, release = (work / name for name in ("port", "requests", "opened", "release"))
+        # Hold the actual startup write after open has created its file but
+        # before Path.write_text can write the value. The rename remains real.
+        paused_writer = '''import runpy, sys, time
+from pathlib import Path
+provider, port, trace, opened, release = map(Path, sys.argv[1:])
+original_open = Path.open
+def paused_open(path, mode="r", *args, **kwargs):
+    stream = original_open(path, mode, *args, **kwargs)
+    if mode == "w":
+        original_open(opened, "w").close()
+        while not release.exists():
+            time.sleep(.01)
+    return stream
+Path.open = paused_open
+sys.argv = [str(provider), str(port), str(trace)]
+runpy.run_path(str(provider), run_name="__main__")
+'''
+        server = subprocess.Popen([sys.executable, "-c", paused_writer, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace), str(opened), str(release)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        try:
+            def wait_for(path):
+                deadline = time.monotonic() + 10
+                while not path.exists():
+                    assert server.poll() is None, server.stderr.read().decode(errors="replace")
+                    assert time.monotonic() < deadline, f"provider did not publish {path.name}"
+                    time.sleep(.01)
+            wait_for(opened)
+            assert not port_file.exists(), f"provider published an incomplete port: {port_file.read_text()!r}"
+            release.touch()
+            wait_for(port_file)
+            assert 0 < int(port_file.read_text()) < 65536
+            assert server.poll() is None
+        finally:
+            if server.poll() is None:
+                server.terminate()
+            server.wait(timeout=5)
+            server.stderr.close()
+    print("Ion smoke provider: complete port before readiness publication: OK")
+
+
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 if sys.argv[1:] == ["--file-discovery-only"]:
     exercise_file_discovery()
     raise SystemExit(0)
+exercise_provider_publication()
 deadline = time.monotonic() + 30
 with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     work = Path(temporary)
