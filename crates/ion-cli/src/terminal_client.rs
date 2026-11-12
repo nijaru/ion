@@ -720,12 +720,10 @@ async fn edit_text_in_terminal(
             .release_inline(screen)
             .await
             .context("release chat surface for editor")?;
-        terminal.suspend().context("suspend terminal for editor")?;
-        let edited = crate::external_editor::edit(text, max_bytes).await;
-        terminal
-            .resume()
+        let edited = terminal
+            .with_external(|| crate::external_editor::edit(text, max_bytes))
             .await
-            .context("resume terminal after editor")?;
+            .context("external editor terminal handoff")?;
         *screen = new_inline_screen(terminal)
             .await
             .context("restore inline chat after editor")?;

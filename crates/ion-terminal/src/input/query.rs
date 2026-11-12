@@ -122,6 +122,7 @@ pub(super) struct TerminalReplyFilter {
     pub(super) cursor: Option<(u16, u16)>,
     pub(super) appearance_mode: ModeProbe,
     pub(super) grapheme_mode: ModeProbe,
+    pub(super) surface_mode: ModeProbe,
     pub(super) colors: TerminalColors,
     colors_need_refresh: bool,
     received_colors: u32,
@@ -138,6 +139,7 @@ impl Default for TerminalReplyFilter {
             cursor: None,
             appearance_mode: ModeProbe::default(),
             grapheme_mode: ModeProbe::default(),
+            surface_mode: ModeProbe::default(),
             colors: TerminalColors::default(),
             colors_need_refresh: true,
             received_colors: 0,
@@ -211,6 +213,7 @@ impl TerminalReplyFilter {
         self.invalidate_colors();
         self.appearance_mode.reacquire();
         self.grapheme_mode.reacquire();
+        self.surface_mode.reacquire();
     }
 
     pub(super) fn begin_color_probe(&mut self, query_mode: bool) -> bool {
@@ -230,6 +233,7 @@ impl TerminalReplyFilter {
     pub(super) fn end_mode_capture(&mut self) {
         self.appearance_mode.end();
         self.grapheme_mode.end();
+        self.surface_mode.end();
     }
 
     pub(super) fn finish_color_probe(&mut self) {
@@ -710,7 +714,8 @@ impl TerminalReplyFilter {
         private
             && (bytes.starts_with(b"997;")
                 || bytes.starts_with(b"2031;")
-                || bytes.starts_with(b"2027;"))
+                || bytes.starts_with(b"2027;")
+                || bytes.starts_with(b"1049;"))
     }
 
     fn finish_osc(
@@ -750,18 +755,21 @@ impl TerminalReplyFilter {
         let Some((&last, body)) = bytes.split_last() else {
             return false;
         };
-        if private && (body.starts_with(b"2031;") || body.starts_with(b"2027;")) {
+        if private
+            && let Some(probe) = match body.get(..5) {
+                Some(b"2031;") => Some(&mut self.appearance_mode),
+                Some(b"2027;") => Some(&mut self.grapheme_mode),
+                Some(b"1049;") => Some(&mut self.surface_mode),
+                _ => None,
+            }
+        {
             let mode = (last == b'y')
                 .then(|| body.strip_suffix(b"$"))
                 .flatten()
                 .and_then(|body| std::str::from_utf8(&body[5..]).ok())
                 .and_then(|value| value.parse::<u8>().ok())
                 .filter(|value| *value <= 4);
-            if body.starts_with(b"2031;") {
-                self.appearance_mode.observe(mode);
-            } else {
-                self.grapheme_mode.observe(mode);
-            }
+            probe.observe(mode);
             return true;
         }
         if private && last == b'n' && body.starts_with(b"997;") {

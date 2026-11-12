@@ -294,13 +294,56 @@ async fn grapheme_reports_preserve_typeahead_and_cannot_claim_another_modes_capt
     sender.send(Ok(replies)).await.unwrap();
     assert_eq!(input.color_observations(true).await.unwrap(), Some(1));
     assert_eq!(input.replies.grapheme_mode.value, None);
-    input.reacquire_colors();
+    input.reacquire_observations();
     assert!(
         input.begin_grapheme_probe(),
         "the old reply has been drained"
     );
     sender.send(Ok(b"\x1b[?2027;1$y".to_vec())).await.unwrap();
     assert_eq!(input.grapheme_observation().await.unwrap(), Some(1));
+}
+
+#[tokio::test]
+async fn surface_reports_preserve_typeahead_and_cannot_reuse_pre_handoff_authority() {
+    for report in [0, 1, 2, 3, 4, 9] {
+        let (_sender, chunks) = mpsc::channel(4);
+        let mut input = stream(chunks);
+        assert!(input.begin_surface_probe());
+        input.parse(b"\x1b[?2027;1$y", false);
+        assert_eq!(input.replies.surface_mode.value, None);
+        for byte in format!("a\x1b[?1049;{report}$yb").bytes() {
+            input.parse(&[byte], true);
+        }
+        assert_eq!(
+            input.surface_observation().await.unwrap(),
+            (report <= 4).then_some(report)
+        );
+        assert_eq!(input.next().await.unwrap().unwrap(), key('a'));
+        assert_eq!(input.next().await.unwrap().unwrap(), key('b'));
+    }
+
+    let (sender, chunks) = mpsc::channel(4);
+    let mut input = stream(chunks);
+    assert!(input.begin_surface_probe());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(5), input.surface_observation())
+            .await
+            .is_err()
+    );
+    input.reacquire_observations();
+    assert!(
+        !input.begin_surface_probe(),
+        "the pre-handoff reply is still outstanding"
+    );
+    sender.send(Ok(b"\x1b[?1049;1$ya".to_vec())).await.unwrap();
+    assert_eq!(input.next().await.unwrap().unwrap(), key('a'));
+    assert_eq!(
+        input.replies.surface_mode.value, None,
+        "old alternate-screen report cannot authorize a reset"
+    );
+    assert!(input.begin_surface_probe());
+    sender.send(Ok(b"\x1b[?1049;2$y".to_vec())).await.unwrap();
+    assert_eq!(input.surface_observation().await.unwrap(), Some(2));
 }
 
 #[tokio::test]
@@ -812,7 +855,7 @@ async fn expired_or_cancelled_mode_capture_cannot_authorize_a_new_mode_change() 
         !input.begin_color_probe(true),
         "a fresh completed capture is settled"
     );
-    input.reacquire_colors(); // A new physical acquisition captures again.
+    input.reacquire_observations(); // A new physical acquisition captures again.
     assert!(input.begin_color_probe(true));
     assert!(
         !input.begin_color_probe(true),

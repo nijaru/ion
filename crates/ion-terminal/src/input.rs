@@ -400,7 +400,7 @@ impl InputStream {
         self.replies.colors_need_refresh()
     }
 
-    pub(crate) fn reacquire_colors(&mut self) {
+    pub(crate) fn reacquire_observations(&mut self) {
         self.replies.reacquire();
     }
 
@@ -436,6 +436,21 @@ impl InputStream {
         .await?;
         self.replies.grapheme_mode.end();
         Ok(self.replies.grapheme_mode.value)
+    }
+
+    pub(crate) fn begin_surface_probe(&mut self) -> bool {
+        self.replies.surface_mode.begin()
+    }
+
+    pub(crate) async fn surface_observation(&mut self) -> io::Result<Option<u8>> {
+        self.await_reply(
+            |replies| replies.surface_mode.value,
+            false,
+            Duration::from_millis(100),
+        )
+        .await?;
+        self.replies.surface_mode.end();
+        Ok(self.replies.surface_mode.value)
     }
 
     pub(crate) async fn keyboard_support(&mut self) -> io::Result<Option<bool>> {

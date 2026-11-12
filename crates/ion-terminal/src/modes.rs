@@ -2,7 +2,7 @@ use rustix::termios::{self, OptionalActions, Termios};
 use std::fs::File;
 use std::io::{self, Write};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -64,7 +64,7 @@ enum Lifecycle {
     Failed { restored: bool },
 }
 
-struct RawMode {
+pub(super) struct RawMode {
     terminal: File,
     original: Termios,
 }
@@ -117,6 +117,26 @@ pub(crate) struct TerminalState<W> {
     surface: Surface,
     primary_keyboard: Keyboard,
     alternate_keyboard: Keyboard,
+}
+
+// Cancellation revokes admission but cannot synchronously take the TTY back
+// from a possibly still-running external program. Only completed recovery
+// disarms this guard; all physical restoration remains with TerminalState.
+pub(super) struct ExternalCustody<W: Write> {
+    pub(super) owner: Arc<Mutex<TerminalState<W>>>,
+    pub(super) completed: bool,
+}
+
+impl<W: Write> Drop for ExternalCustody<W> {
+    fn drop(&mut self) {
+        if !self.completed {
+            let mut state = match self.owner.lock() {
+                Ok(state) => state,
+                Err(error) => error.into_inner(),
+            };
+            state.fail();
+        }
+    }
 }
 
 impl<W: Write> TerminalState<W> {
@@ -229,6 +249,68 @@ impl<W: Write> TerminalState<W> {
         result
     }
 
+    fn leave_surface(&mut self) -> io::Result<()> {
+        self.surface = Surface::Indeterminate;
+        execute!(self.output, LeaveAlternateScreen)?;
+        self.surface = Surface::Primary;
+        Ok(())
+    }
+
+    pub(super) fn reconcile_external_surface(&mut self, report: Option<u8>) -> io::Result<()> {
+        self.usable()?;
+        let result = (|| {
+            if self.surface != Surface::Primary
+                || self.primary_keyboard != Keyboard::Unowned
+                || self.alternate_keyboard != Keyboard::Unowned
+            {
+                return Err(io::Error::other(
+                    "external surface recovery requires unowned keyboard stacks",
+                ));
+            }
+            match report {
+                // Leave the positively observed foreign surface, not its
+                // unknown keyboard stack or our newly configured mouse modes.
+                Some(1) => self.leave_surface(),
+                Some(3) => Err(io::Error::other(
+                    "terminal alternate screen is permanently set",
+                )),
+                // Unreporting terminals retain the cooperative-editor contract:
+                // no observation authorizes a blind reset of their saved cursor.
+                None | Some(0 | 2 | 4) => Ok(()),
+                Some(_) => Err(io::Error::other("invalid terminal surface report")),
+            }
+        })();
+        if result.is_err() {
+            self.fail();
+        }
+        result
+    }
+
+    pub(super) fn caller_baseline(&self) -> io::Result<RawMode> {
+        self.usable()?;
+        let raw = self
+            .raw
+            .as_ref()
+            .ok_or_else(|| io::Error::other("terminal has no caller termios baseline"))?;
+        // Suspension releases its raw lease. Retain the original attributes and
+        // the same controlling TTY independently across the external operation.
+        Ok(RawMode {
+            terminal: raw.terminal.try_clone()?,
+            original: raw.original.clone(),
+        })
+    }
+
+    pub(super) fn restore_external_baseline(&mut self, baseline: RawMode) -> io::Result<()> {
+        let result = baseline.restore();
+        if result.is_err() {
+            // The external operation is complete. Keep retry authority for
+            // final cleanup if restoring the known absolute attributes failed.
+            self.raw = Some(baseline);
+            self.lifecycle = Lifecycle::Failed { restored: false };
+        }
+        result
+    }
+
     pub(crate) fn leave_alt_screen(&mut self) -> io::Result<()> {
         self.usable()?;
         if self.surface == Surface::Primary {
@@ -238,10 +320,7 @@ impl<W: Write> TerminalState<W> {
             self.pop_keyboard(true)?;
             execute!(self.output, DisableMouseCapture)?;
             self.mouse = false;
-            self.surface = Surface::Indeterminate;
-            execute!(self.output, LeaveAlternateScreen)?;
-            self.surface = Surface::Primary;
-            Ok(())
+            self.leave_surface()
         })();
         if result.is_err() {
             self.fail();
@@ -363,12 +442,7 @@ impl<W: Write> TerminalState<W> {
         }
         if self.surface != Surface::Primary {
             // Leaving is idempotent; popping on an unknown surface is not.
-            self.surface = Surface::Indeterminate;
-            let result = execute!(self.output, LeaveAlternateScreen);
-            if result.is_ok() {
-                self.surface = Surface::Primary;
-            }
-            record(result);
+            record(self.leave_surface());
         }
         if self.surface == Surface::Primary {
             record(self.pop_keyboard(false));
@@ -433,6 +507,90 @@ mod tests {
         state.capabilities.kitty_keyboard = CapabilitySupport::Supported;
         state.push_keyboard(false).unwrap();
         state
+    }
+
+    #[test]
+    fn external_surface_recovery_leaves_only_a_reported_foreign_alternate() {
+        for report in [None, Some(0), Some(1), Some(2), Some(4)] {
+            let mut state = active();
+            state.pop_keyboard(false).unwrap();
+            state.output.output.clear();
+            state.mouse = true;
+            state.reconcile_external_surface(report).unwrap();
+            assert_eq!(
+                state.output.output,
+                if report == Some(1) {
+                    b"\x1b[?1049l".as_slice()
+                } else {
+                    b""
+                },
+                "{report:?}"
+            );
+            assert!(
+                state.mouse,
+                "foreign recovery must retain configured root mouse input"
+            );
+            state
+                .set_keyboard_support(CapabilitySupport::Supported)
+                .unwrap();
+            state.restore().unwrap();
+            let text = String::from_utf8_lossy(&state.output.output);
+            assert_eq!(
+                text.matches("\x1b[<1u").count(),
+                1,
+                "only our later primary push may be popped"
+            );
+            assert_eq!(
+                text.matches("\x1b[?1049l").count(),
+                usize::from(report == Some(1))
+            );
+        }
+        for owned_keyboard in [false, true] {
+            let mut state = active();
+            if !owned_keyboard {
+                state.pop_keyboard(false).unwrap();
+            }
+            state.output.output.clear();
+            assert!(
+                state
+                    .reconcile_external_surface(if owned_keyboard { Some(1) } else { Some(3) })
+                    .is_err()
+            );
+            assert!(state.output.output.is_empty());
+            assert!(state.usable().is_err());
+        }
+    }
+
+    #[test]
+    fn abandoned_external_custody_revokes_admission_without_reclaiming_a_live_program() {
+        for reacquiring in [false, true] {
+            let mut state = active();
+            if !reacquiring {
+                state.restore().unwrap();
+            }
+            state.output.output.clear();
+            let owner = Arc::new(Mutex::new(state));
+            drop(ExternalCustody {
+                owner: Arc::clone(&owner),
+                completed: false,
+            });
+            let mut state = owner.lock().unwrap();
+            assert!(state.usable().is_err());
+            assert!(state.activate().is_err());
+            assert!(
+                state.output.output.is_empty(),
+                "dropping custody is not permission to write to the external terminal"
+            );
+            state.restore().unwrap();
+            let text = String::from_utf8_lossy(&state.output.output);
+            assert_eq!(text.matches("\x1b[<1u").count(), usize::from(reacquiring));
+            if !reacquiring {
+                assert!(
+                    text.is_empty(),
+                    "the external operation may still be running"
+                );
+            }
+        }
     }
 
     #[test]

@@ -18,7 +18,7 @@ use crate::{CapabilitySupport, PaintReceipt, ProgramStatus, Screen};
 
 #[path = "modes.rs"]
 mod modes;
-use modes::{PrivateMode, TerminalState};
+use modes::{ExternalCustody, PrivateMode, TerminalState};
 
 #[path = "secret.rs"]
 mod secret;
@@ -400,8 +400,44 @@ impl TerminalSession {
         prepared.publish(screen, geometry, &mut self.output()?)
     }
 
-    pub fn suspend(&mut self) -> io::Result<()> {
-        self.restore()
+    /// Yield to an external terminal program, then reacquire before returning
+    /// its result. The caller must release its mutable primary surface first.
+    /// Retains the caller's termios baseline even if the program fails uncleanly.
+    /// Reported foreign alternate screens are left before keyboard negotiation;
+    /// on terminals without DECRQM 1049, the program must restore its own screen.
+    /// Other unobservable foreign VT changes are not reset speculatively.
+    ///
+    /// Completion must mean the external user has relinquished the terminal.
+    /// Cancelling this future leaves the session failed, not resumed; dropping
+    /// it cannot terminate/reap an external process or asynchronously recover.
+    pub async fn with_external<T, F, Fut>(&mut self, operation: F) -> io::Result<T>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let baseline = self.lock().caller_baseline()?;
+        let mut custody = ExternalCustody {
+            owner: Arc::clone(&self.state),
+            completed: false,
+        };
+        self.restore()?;
+        let result = operation().await;
+        // Restore before reader acquisition: even a subsequent resume failure
+        // must not leave the child's raw attributes as the caller's settings.
+        self.lock().restore_external_baseline(baseline)?;
+        self.reacquire_input()?;
+        let report = if self.input.begin_surface_probe() {
+            self.output()?.write_all(b"\x1b[?1049$p")?;
+            self.output()?.flush()?;
+            self.input.surface_observation().await?
+        } else {
+            None
+        };
+        self.lock().reconcile_external_surface(report)?;
+        self.negotiate_keyboard().await?;
+        self.negotiate_graphemes().await?;
+        custody.completed = true;
+        Ok(result)
     }
 
     /// Yield the terminal to the shell and stop the current Unix job group.
@@ -414,7 +450,7 @@ impl TerminalSession {
             output.write_all(crate::program_status::CLEAR_SEQUENCE)?;
             output.flush()?;
         }
-        self.suspend()?;
+        self.restore()?;
         rustix::process::kill_current_process_group(rustix::process::Signal::TSTP)?;
         let terminal = File::open("/dev/tty")?;
         while rustix::io::retry_on_intr(|| rustix::termios::tcgetpgrp(&terminal))?
@@ -425,17 +461,17 @@ impl TerminalSession {
             // when job-control signals were inherited as ignored or are orphaned.
             rustix::process::kill_current_process_group(rustix::process::Signal::STOP)?;
         }
-        self.resume().await
-    }
-
-    pub async fn resume(&mut self) -> io::Result<()> {
-        self.input.resume()?;
-        self.input.reacquire_colors();
-        self.lock().activate()?;
-        // The returning ordinary UI owner explicitly refreshes before drawing.
-        // Resume can also occur during restricted input/output ownership.
+        // The shell may intentionally change stty while this job is stopped.
+        // Unlike an external-program scope, this acquires its fresh baseline.
+        self.reacquire_input()?;
         self.negotiate_keyboard().await?;
         self.negotiate_graphemes().await
+    }
+
+    fn reacquire_input(&mut self) -> io::Result<()> {
+        self.input.resume()?;
+        self.input.reacquire_observations();
+        self.lock().activate()
     }
 
     pub fn restore(&mut self) -> io::Result<()> {

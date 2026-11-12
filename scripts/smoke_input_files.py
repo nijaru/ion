@@ -10,7 +10,7 @@ from pathlib import Path
 
 
 class FileTerminal:
-    def __init__(self, binary, cwd, env, mode):
+    def __init__(self, binary, cwd, env, mode, *, launcher=()):
         # Unix socket paths must stay short even when the typed workspace is long.
         self.ipc = tempfile.TemporaryDirectory(prefix="ion-file-screen-", dir="/tmp")
         self.env = env
@@ -20,9 +20,9 @@ class FileTerminal:
         config.write_text("set -g status off\nset -g remain-on-exit on\nset -g default-shell /bin/sh\n")
         self.turns = 0
         try:
-            # Multiple argv execute Ion directly, without a launcher shell or
-            # pipe-pane consumer. The retained pane owns its real exit status.
-            self.tmux("-f", str(config), "new-session", "-d", "-s", "ion", "-x", "100", "-y", "30", "-c", str(cwd), "--", str(binary), "--cwd", str(cwd), "--tui-mode", mode, "--session", str(self.database), "chat")
+            # Multiple argv execute directly, without a shell or pipe-pane
+            # consumer. A measuring launcher must propagate Ion's exit status.
+            self.tmux("-f", str(config), "new-session", "-d", "-s", "ion", "-x", "100", "-y", "30", "-c", str(cwd), "--", *map(str, launcher), str(binary), "--cwd", str(cwd), "--tui-mode", mode, "--session", str(self.database), "chat")
         except BaseException:
             self.close()
             raise
