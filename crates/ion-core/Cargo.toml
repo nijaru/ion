@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Ion durable coding-turn runtime"
+description = "Ion durable agent and Session runtime"
 
 [dependencies]
 base64 = "0.22.1"

@@ -17,6 +17,8 @@ target/debug/ion models
 
 Or install with `cargo install --locked --path crates/ion-cli`.
 
+For Rust embedding, see the [core API example](crates/ion-core/src/lib.rs). Generate its reference with `cargo doc --locked -p ion-core --no-deps`.
+
 ## Basic usage
 
 ```sh
