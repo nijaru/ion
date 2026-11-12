@@ -713,6 +713,10 @@ async fn edit_text_in_terminal(
     text: &str,
     max_bytes: usize,
 ) -> Result<Result<String>> {
+    terminal
+        .release_inline(screen)
+        .await
+        .context("release chat surface for editor")?;
     terminal.suspend().context("suspend terminal for editor")?;
     let edited = crate::external_editor::edit(text, max_bytes).await;
     terminal

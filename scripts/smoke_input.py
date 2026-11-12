@@ -20,6 +20,7 @@ from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from smoke_input_editor import exercise_external_editor
 from smoke_input_files import exercise_file_input
 from terminal_style import painted_text, program_ready
 
@@ -1580,6 +1581,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.close()
 
             exercise_file_input(binary, work, env, mode, requests, user_text)
+            exercise_external_editor(binary, work, env, mode, requests, user_text)
 
             # Stopping an observed shell withdraws automatic queued dispatch;
             # a normal exit 7 does not. Neither changes the saved native outcome.
