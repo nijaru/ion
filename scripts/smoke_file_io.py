@@ -80,6 +80,26 @@ def scoped_response(body):
         assert step == 2 and (workspace / target).read_text() == "before-edit", (step, results)
         return {"content": "SCOPED_REOPEN_COMPLETE"}, "stop"
 
+    if fixture == "scoped_compact":
+        target = "sub/new/deeper/reopened"
+        edit = call("edit", {"path": target, "base_digest": hashlib.sha256(b"before-edit").hexdigest(), "edits": [{"old_text": "before-edit", "new_text": "after-compaction"}]})
+        if step == 0:
+            # Same target and unchanged rules as before compaction. The archive
+            # is not model delivery, and the deliberately lossy summary has no
+            # scoped observation that could satisfy instruction review.
+            assert not results and "SCOPED_C" not in json.dumps(body), body
+            assert "COMPACTED_FILE_CONTEXT" in json.dumps(body), body
+            assert (workspace / target).read_text() == "before-edit"
+            return invoke(edit)
+        if step == 1:
+            assert (workspace / target).read_text() == "before-edit", "edit proceeded before scoped instructions were delivered again"
+            assert results[-1]["is_error"], results[-1]
+            assert "SCOPED_C" in results[-1]["result"]["project_instructions"]["text"], results[-1]
+            return invoke(edit)
+        assert step == 2 and (workspace / target).read_text() == "after-compaction", (step, results)
+        assert not results[-1]["is_error"], results[-1]
+        return {"content": "SCOPED_COMPACTION_COMPLETE"}, "stop"
+
     assert fixture == "scoped_code", fixture
     target = "sub/guest/deeper/output"
     write_program = "tools.write(" + json.dumps({"path": target, "content": "guest-write"}) + ")"
@@ -127,7 +147,12 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
         results = [message for message in body["messages"] if message["role"] == "tool"]
-        if fixture.startswith("bom_"):
+        if body["messages"][0].get("content", "").startswith("Summarize the conversation's settled prefix."):
+            assert not body.get("tools"), body
+            delta, reason = {"content": "COMPACTED_FILE_CONTEXT"}, "stop"
+        elif fixture == "compact_padding":
+            delta, reason = {"content": "COMPACTION_PADDING_COMPLETE"}, "stop"
+        elif fixture.startswith("bom_"):
             try:
                 delta, reason = bom_response(body)
             except AssertionError as failure:
@@ -254,12 +279,41 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
         assert not failures, failures
         assert result.returncode == 0 and result.stdout.strip() == "SCOPED_REOPEN_COMPLETE", result
 
+        # Make the settled suffix larger than manual compaction's keep budget,
+        # so the unchanged scoped observation is genuinely outside the working
+        # context rather than accidentally protected by a recent raw result.
+        requests.clear()
+        fixture = "compact_padding"
+        result = subprocess.run([binary, "--cwd", workspace, "--continue", "run", "Context padding:\n" + "settled history\n" * 4096], env=env, capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0 and result.stdout.strip() == "COMPACTION_PADDING_COMPLETE", result
+        assert len(requests) == 1, requests
+        before_compaction = json.loads(subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, capture_output=True, text=True, check=True).stdout)
+        requests.clear()
+        result = subprocess.run([binary, "--cwd", workspace, "--continue", "compact"], env=env, capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0 and len(requests) == 1, (result, requests)
+        compacted = json.loads(subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, capture_output=True, text=True, check=True).stdout)
+        assert compacted["entries"][:len(before_compaction["entries"])] == before_compaction["entries"], "compaction rewrote the archive"
+        last_tool_result = max(index + 1 for index, entry in enumerate(before_compaction["entries"]) if entry["kind"] == "tool_result")
+        assert compacted["compacted_through"] >= last_tool_result, "fixture left old instruction observations in the recent suffix"
+        assert compacted["messages"] == before_compaction["messages"], "compaction lost inspectable raw messages"
+        assert (workspace / "sub/new/deeper/reopened").read_text() == "before-edit"
+        requests.clear()
+        fixture = "scoped_compact"
+        result = subprocess.run([binary, "--cwd", workspace, "--continue", "run", "Continue editing the same file after compaction."], env=env, capture_output=True, text=True, timeout=15)
+        assert not failures, failures
+        assert result.returncode == 0 and result.stdout.strip() == "SCOPED_COMPACTION_COMPLETE", result
+        assert len(requests) == 3, requests
+        continued = json.loads(subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, capture_output=True, text=True, check=True).stdout)
+        assert continued["entries"][:len(compacted["entries"])] == compacted["entries"], "continuation changed historical outcomes"
+        outcomes = [entry["data"]["result"]["outcome"]["output"]["is_error"] for entry in continued["entries"][len(compacted["entries"]):] if entry["kind"] == "tool_result"]
+        assert outcomes == [True, False], outcomes
+
         requests.clear()
         fixture = "scoped_code"
         result = subprocess.run([binary, "--cwd", workspace, "--code-mode", "run", "Exercise selected instruction delivery in Code Mode."], env=env, capture_output=True, text=True, timeout=15)
         assert not failures, failures
         assert result.returncode == 0 and result.stdout.strip() == "SCOPED_CODE_COMPLETE", result
-        print("Ion file reads, BOM edit roundtrips, instruction scope, deferred mutations, refresh/reopen and Code Mode delivery: OK")
+        print("Ion file reads, BOM edit roundtrips, instruction scope, deferred mutations, compaction/reopen and Code Mode delivery: OK")
     finally:
         server.shutdown()
         server.server_close()
