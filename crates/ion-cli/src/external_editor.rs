@@ -20,10 +20,18 @@ pub async fn edit(content: &str, max_bytes: usize) -> Result<String> {
                 .filter(|value| !value.trim().is_empty())
         })
         .unwrap_or_else(|| "vi".into());
-    edit_with_command(&command, content, max_bytes).await
+    // Native input is bound to the controlling terminal, not possibly
+    // redirected stdin. The editor must receive the same interactive source.
+    let input = fs::File::open("/dev/tty").context("cannot open terminal input for editor")?;
+    edit_with_command(&command, content, max_bytes, input.into()).await
 }
 
-async fn edit_with_command(command: &str, content: &str, max_bytes: usize) -> Result<String> {
+async fn edit_with_command(
+    command: &str,
+    content: &str,
+    max_bytes: usize,
+    input: Stdio,
+) -> Result<String> {
     let args = shlex::split(command).context("editor command has invalid quoting")?;
     let (program, options) = args.split_first().context("editor command is empty")?;
     let directory = std::env::temp_dir().join(format!("ion-editor-{}", uuid::Uuid::now_v7()));
@@ -39,7 +47,7 @@ async fn edit_with_command(command: &str, content: &str, max_bytes: usize) -> Re
     let status = Command::new(program)
         .args(options)
         .arg(&path)
-        .stdin(Stdio::inherit())
+        .stdin(input)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .status()
@@ -83,15 +91,21 @@ mod tests {
 
     #[tokio::test]
     async fn editor_success_and_failure_keep_draft_contract() {
-        let edited = edit_with_command("/bin/sh -c 'printf changed > \"$0\"'", "original", 64)
-            .await
-            .unwrap();
+        let edited = edit_with_command(
+            "/bin/sh -c 'printf changed > \"$0\"'",
+            "original",
+            64,
+            Stdio::null(),
+        )
+        .await
+        .unwrap();
         assert_eq!(edited, "changed");
         assert_eq!(
             edit_with_command(
                 r#"/bin/sh -c 'printf "\357\273\277abcd\n" > "$0"'"#,
                 "original",
-                4
+                4,
+                Stdio::null()
             )
             .await
             .unwrap(),
@@ -102,18 +116,25 @@ mod tests {
             r#"/bin/sh -c 'printf "\357\273\277abcd\r" > "$0"'"#,
         ] {
             assert_eq!(
-                edit_with_command(command, "original", 4).await.unwrap(),
+                edit_with_command(command, "original", 4, Stdio::null())
+                    .await
+                    .unwrap(),
                 "abcd"
             );
         }
         assert_eq!(
-            edit_with_command(r#"/bin/sh -c 'printf "a\r\nb\r\n" > "$0"'"#, "original", 4)
-                .await
-                .unwrap(),
+            edit_with_command(
+                r#"/bin/sh -c 'printf "a\r\nb\r\n" > "$0"'"#,
+                "original",
+                4,
+                Stdio::null()
+            )
+            .await
+            .unwrap(),
             "a\r\nb"
         );
         assert!(
-            edit_with_command("/bin/sh -c 'exit 7'", "original", 64)
+            edit_with_command("/bin/sh -c 'exit 7'", "original", 64, Stdio::null())
                 .await
                 .is_err()
         );
@@ -121,7 +142,11 @@ mod tests {
             "/bin/sh -c 'printf long-output > \"$0\"'",
             r#"/bin/sh -c 'printf "\377" > "$0"'"#,
         ] {
-            assert!(edit_with_command(command, "original", 4).await.is_err());
+            assert!(
+                edit_with_command(command, "original", 4, Stdio::null())
+                    .await
+                    .is_err()
+            );
         }
     }
 }

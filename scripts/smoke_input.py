@@ -7,6 +7,7 @@ import os
 import pty
 import re
 import select
+import shlex
 import signal
 import sqlite3
 import struct
@@ -179,6 +180,84 @@ class Terminal:
         if self.redirected_master is not None:
             os.close(self.redirected_master)
         self.child.wait(timeout=5)
+
+
+def exercise_editor_tty(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        sandbox = work / f"editor-tty-{mode}"
+        sandbox.mkdir()
+        helper = sandbox / "editor.py"
+        helper.write_text('''import json, os, pathlib, sys, time
+workspace = pathlib.Path.cwd()
+draft = pathlib.Path(sys.argv[1])
+original = draft.read_text()
+(workspace / "ready").touch()
+received = os.read(0, 4096).decode("utf-8")
+result = workspace / "received.json"
+pending = result.with_suffix(".tmp")
+pending.write_text(json.dumps({"original": original, "received": received}))
+pending.replace(result)
+deadline = time.monotonic() + 10
+while not (workspace / "release").exists():
+    assert time.monotonic() < deadline
+    time.sleep(0.005)
+draft.write_text("EDITED_" + received.rstrip("\\r\\n"))
+''')
+        env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"),
+                   VISUAL=shlex.join([sys.executable, str(helper)]))
+        subprocess.run([binary, "use", "smoke", "editor-tty-model", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        database = sandbox / "conversation.sqlite"
+        terminal = Terminal(sandbox, env, mode, ["--cwd", sandbox, "--session", database,
+                            "--tui-mode", mode, "chat"], redirected_tty=True)
+        before = len(requests)
+        original = "ORIGINAL_" + mode
+        typed = "VISIBLE_EDITOR_INPUT_🦀\n"
+        try:
+            terminal.wait_ready(lambda: "›" in terminal.text())
+            terminal.send(original)
+            terminal.wait(lambda: original in terminal.text())
+            # Both sources have complete input; selecting the right endpoint,
+            # not a read timeout, determines which text the editor receives.
+            os.write(terminal.redirected_master, b"UNRELATED_STDIN_INPUT\n")
+            terminal.send("\x07")
+            terminal.wait(lambda: (sandbox / "ready").exists())
+            terminal.send(typed)
+            terminal.wait(lambda: (sandbox / "received.json").exists())
+            result = json.loads((sandbox / "received.json").read_text())
+            assert result == {"original": original, "received": typed}, result
+            (sandbox / "release").touch()
+            terminal.wait_ready(lambda: "Draft returned from editor" in terminal.text())
+            assert termios.tcgetattr(terminal.redirected_master) == terminal.redirected_modes, "editor changed an unrelated stdin TTY"
+            assert len(requests) == before, "editor return submitted a prompt"
+            terminal.send("\r")
+            expected = "EDITED_" + typed.rstrip("\n")
+            terminal.wait_ready(lambda: len(requests) == before + 1 and "DONE_" + expected in terminal.text())
+            assert user_text(requests[-1]) == expected, requests[-1]
+            terminal.finish()
+            with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+                facts = [json.loads(body) for body, in connection.execute("SELECT body FROM entries ORDER BY seq")]
+            starts = [entry["data"]["input"]["content"][0]["Text"] for entry in facts if entry["kind"] == "turn_started"]
+            assert starts == [expected], starts
+            assert [entry["data"]["reason"] for entry in facts if entry["kind"] == "turn_ended"] == ["completed"]
+            print(f"Editor {mode}: controlling-TTY input, untouched redirected TTY, explicit submission and saved prompt: OK", flush=True)
+        finally:
+            try:
+                if terminal.child.poll() is None:
+                    # A failing editor-read assertion leaves cooked input queued.
+                    # Withdraw it before releasing the editor's input custody.
+                    termios.tcflush(terminal.master, termios.TCIFLUSH)
+            finally:
+                (sandbox / "release").touch()
+                try:
+                    if terminal.child.poll() is None:
+                        try:
+                            os.killpg(terminal.child.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                finally:
+                    terminal.close()
 
 
 def exercise_slash_input(work, base_env, endpoint):
@@ -1454,6 +1533,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     try:
         exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
         exercise_slash_input(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_editor_tty(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
