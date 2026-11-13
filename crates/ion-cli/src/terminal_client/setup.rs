@@ -5,6 +5,8 @@ use ion_app::{Host, SavedSelection, Selection, SessionCatalog};
 use ion_terminal::{InputEvent, Screen, TerminalSession};
 use std::path::PathBuf;
 
+use tokio_util::sync::CancellationToken;
+
 use super::{
     Frontend, PickerValue, ProgramStatusState, draw, invalidate_resized_input, login_in_terminal,
     new_inline_screen, release_surface, suspend_terminal,
@@ -17,7 +19,12 @@ pub async fn setup_model(
     choose_default: bool,
     keys: &KeyBindings,
     themes: &crate::themes::Themes,
+    termination: &CancellationToken,
 ) -> Result<Option<Selection>> {
+    anyhow::ensure!(
+        !termination.is_cancelled(),
+        "application startup interrupted"
+    );
     let selected = if let Some(selection) = selected {
         let (selection, missing) = credential_missing(host, selection).await?;
         if !missing {
@@ -27,15 +34,25 @@ pub async fn setup_model(
     } else {
         None
     };
+    anyhow::ensure!(
+        !termination.is_cancelled(),
+        "application startup interrupted"
+    );
     let mut terminal = TerminalSession::enter().await?;
+    let mut ui = Frontend {
+        keys: keys.clone(),
+        themes: themes.clone(),
+        status: "Select a model · type to filter".into(),
+        termination: termination.clone(),
+        ..Frontend::default()
+    };
     let outcome = async {
-        let mut screen = new_inline_screen(&mut terminal).await?;
+        let mut screen = new_inline_screen(&mut terminal, termination).await?;
         let outcome = run(
             host,
             selected,
             choose_default,
-            keys,
-            themes,
+            &mut ui,
             &mut terminal,
             &mut screen,
         )
@@ -43,6 +60,13 @@ pub async fn setup_model(
         finish(outcome, release_surface(&mut terminal, &mut screen).await)
     }
     .await;
+    let outcome = finish(
+        outcome,
+        ui.pickers
+            .shutdown()
+            .await
+            .context("join startup model discovery"),
+    );
     // Secret entry owns its primary prompt/newline and quarantines its suffix.
     finish(
         outcome,
@@ -56,24 +80,33 @@ pub async fn choose_session(
     catalog: SessionCatalog,
     keys: &KeyBindings,
     themes: &crate::themes::Themes,
+    termination: &CancellationToken,
 ) -> Result<Option<PathBuf>> {
+    anyhow::ensure!(
+        !termination.is_cancelled(),
+        "application startup interrupted"
+    );
     let mut terminal = TerminalSession::enter().await?;
     let mut ui = Frontend {
         keys: keys.clone(),
         themes: themes.clone(),
         status: "Choose a Session · type to filter".into(),
+        termination: termination.clone(),
         ..Frontend::default()
     };
     ui.pickers
         .open_sessions(catalog, super::picker::SessionBrowser::Launch);
     let outcome = async {
-        let mut screen = new_inline_screen(&mut terminal).await?;
+        let mut screen = new_inline_screen(&mut terminal, termination).await?;
         let outcome = async {
         let mut program = ProgramStatusState::default();
         loop {
+            anyhow::ensure!(!termination.is_cancelled(), "application startup interrupted");
             program.publish(&mut terminal, false)?;
             let painted = draw(&mut terminal, &mut screen, &mut ui, None, None).await?;
             let event = tokio::select! {
+                biased;
+                _ = termination.cancelled() => anyhow::bail!("application startup interrupted"),
                 _ = tokio::time::sleep(std::time::Duration::from_millis(50)), if !painted => continue,
                 notice = ui.pickers.complete(), if ui.pickers.has_job() => {
                     // Current-scope notices already render in the picker. A
@@ -157,19 +190,16 @@ async fn run(
     host: &std::sync::Arc<Host>,
     mut selected: Option<Selection>,
     choose_default: bool,
-    keys: &KeyBindings,
-    themes: &crate::themes::Themes,
+    ui: &mut Frontend,
     terminal: &mut TerminalSession,
     screen: &mut Screen,
 ) -> Result<Option<Selection>> {
-    let mut ui = Frontend {
-        keys: keys.clone(),
-        themes: themes.clone(),
-        status: "Select a model · type to filter".into(),
-        ..Frontend::default()
-    };
     let mut program = ProgramStatusState::default();
     loop {
+        anyhow::ensure!(
+            !ui.termination.is_cancelled(),
+            "application startup interrupted"
+        );
         if let Some(selection) = selected.take() {
             let (selection, missing) = credential_missing(host, selection).await?;
             let login = if missing {
@@ -179,7 +209,6 @@ async fn run(
                     host.credentials(),
                     &selection.provider,
                     &mut program,
-                    // Pre-Session setup has no application signal scope yet.
                     &ui.termination,
                 )
                 .await?
@@ -188,6 +217,10 @@ async fn run(
             };
             match login {
                 Ok(()) => {
+                    anyhow::ensure!(
+                        !ui.termination.is_cancelled(),
+                        "application startup interrupted"
+                    );
                     let host = host.clone();
                     let selection = tokio::task::spawn_blocking(move || -> Result<_> {
                         selection.require_access(host.credentials())?;
@@ -236,21 +269,23 @@ async fn run(
             );
         }
         program.publish(terminal, false)?;
-        let painted = draw(terminal, screen, &mut ui, None, None).await?;
+        let painted = draw(terminal, screen, ui, None, None).await?;
         let event = tokio::select! {
+            biased;
+            _ = ui.termination.cancelled() => anyhow::bail!("application startup interrupted"),
             _ = tokio::time::sleep(std::time::Duration::from_millis(50)), if !painted => continue,
             event = terminal.next_input() => event.context("model setup input ended")??,
         };
         terminal
             .check_active()
             .context("model setup terminal failed")?;
-        invalidate_resized_input(terminal, screen, &mut ui)?;
+        invalidate_resized_input(terminal, screen, ui)?;
         match event {
-            InputEvent::Key(key) if keys.matches(KeyAction::Suspend, key) => {
-                suspend_terminal(terminal, screen, &mut ui, &mut program).await?;
+            InputEvent::Key(key) if ui.keys.matches(KeyAction::Suspend, key) => {
+                suspend_terminal(terminal, screen, ui, &mut program).await?;
             }
             InputEvent::Key(key) => {
-                if let Some(PickerValue::Model(model)) = ui.pickers.key(key, keys) {
+                if let Some(PickerValue::Model(model)) = ui.pickers.key(key, &ui.keys) {
                     let host = host.clone();
                     selected = Some(
                         tokio::task::spawn_blocking(move || host.models().resolve_identity(&model))

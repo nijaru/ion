@@ -271,6 +271,36 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 if writer_probe is not None:
                     os.close(writer_probe)
                 cleanup(child, workspace)
+        # Plain passive inspection never acquired a startup terminal and must
+        # retain default TERM handling, even with its output pipe left unread.
+        workspace = work / f"text-{signal.SIGTERM}"
+        database = session_database(work / "ion", workspace)
+        snapshot = entries(database)
+        child = subprocess.Popen([binary, "--session", database, "inspect"], env=env,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            if hasattr(fcntl, "F_SETPIPE_SZ"):
+                fcntl.fcntl(child.stdout.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+            deadline = time.monotonic() + 5
+            previous, unchanged_since = -1, time.monotonic()
+            while time.monotonic() < deadline:
+                assert child.poll() is None, "inspection exited before owned output pressure"
+                count = available(child.stdout)
+                if count != previous:
+                    previous, unchanged_since = count, time.monotonic()
+                if count >= 4096 and time.monotonic() - unchanged_since >= 0.2:
+                    break
+                time.sleep(0.01)
+            else:
+                raise AssertionError("passive inspection did not establish output pressure")
+            child.send_signal(signal.SIGTERM)
+            stdout, stderr = child.communicate(timeout=5)
+            assert child.returncode == -signal.SIGTERM, (child.returncode, stdout, stderr)
+            assert entries(database) == snapshot, "passive termination changed recorded work"
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.communicate(timeout=5)
         for json_output in (True, False):
             workspace = work / ("broken-json" if json_output else "broken-text")
             workspace.mkdir()

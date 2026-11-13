@@ -214,7 +214,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             .await
             .context("interactive chat requires a terminal")?);
         let terminal = terminal_owner.as_mut().expect("entered terminal");
-        screen_owner = Some(new_inline_screen(terminal).await?);
+        screen_owner = Some(new_inline_screen(terminal, &ui.termination).await?);
         let screen = screen_owner.as_mut().expect("initialized screen");
         ui.cwd = runtime.session().cwd().context("terminal coding requires a working directory")?.to_owned();
         ui.session_label = format!("Session {}", &runtime.session().id().to_string()[..8]);
@@ -592,22 +592,26 @@ async fn suspend_terminal(
     program.published = None;
     // The shell may have written anywhere while we were stopped. Its current
     // cursor, not the old live footprint, establishes our new ownership boundary.
-    *screen = new_inline_screen(terminal)
+    *screen = new_inline_screen(terminal, &ui.termination)
         .await
         .context("restore terminal after job suspension")?;
     Ok(())
 }
 
-async fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
+async fn new_inline_screen(
+    terminal: &mut TerminalSession,
+    termination: &CancellationToken,
+) -> Result<Screen> {
     if terminal.is_alt_screen()? {
         terminal.leave_alt_screen()?;
     }
     loop {
-        if let Some(((width, height), (cursor_column, cursor_row))) = terminal
-            .primary_geometry()
-            .await
-            .context("read primary terminal geometry")?
-        {
+        let geometry = tokio::select! {
+            biased;
+            _ = termination.cancelled() => anyhow::bail!("terminal interrupted"),
+            geometry = terminal.primary_geometry() => geometry.context("read primary terminal geometry")?,
+        };
+        if let Some(((width, height), (cursor_column, cursor_row))) = geometry {
             anyhow::ensure!(
                 cursor_column < width && cursor_row < height,
                 "primary cursor reply is outside terminal geometry"
@@ -653,7 +657,7 @@ async fn login_in_terminal(
         }
         Err(error) => Err(error),
     };
-    let restored = new_inline_screen(terminal).await;
+    let restored = new_inline_screen(terminal, termination).await;
     program.blocked_auth = false;
     program.publish(terminal, false)?;
     *screen = restored.context("restore inline chat after login")?;
@@ -733,7 +737,7 @@ async fn edit_text_in_terminal(
             .with_external(|| crate::external_editor::edit(text, max_bytes, termination))
             .await
             .context("external editor terminal handoff")?;
-        *screen = new_inline_screen(terminal)
+        *screen = new_inline_screen(terminal, termination)
             .await
             .context("restore inline chat after editor")?;
         Ok(edited)

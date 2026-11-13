@@ -168,26 +168,43 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 io::stdin().is_terminal() && io::stdout().is_terminal(),
                 "API-key login requires a terminal; use an environment variable in headless mode"
             );
-            let mut terminal = ion_terminal::TerminalSession::with_requirements(
-                ion_terminal::TerminalRequirements {
-                    keyboard_enhancement: false,
-                    ..Default::default()
-                },
-            )
-            .await?;
-            // Keep input validation intact: unsafe provider text is rejected
-            // by the secret reader, not transformed into a different prompt.
-            let key = terminal
-                .read_secret(&format!("{provider} API key: "))
+            let termination =
+                termination::Termination::listen(tokio_util::sync::CancellationToken::new(), None)?;
+            let terminated = termination.token();
+            let result = async {
+                ensure!(!terminated.is_cancelled(), "login interrupted");
+                let mut terminal = ion_terminal::TerminalSession::with_requirements(
+                    ion_terminal::TerminalRequirements {
+                        keyboard_enhancement: false,
+                        ..Default::default()
+                    },
+                )
                 .await?;
-            terminal.restore()?;
-            let key = key?;
-            credentials.save_api_key(&provider, &key)?;
-            print_stdout(format_args!(
-                "Saved {} credential.",
-                metadata_field(&provider)
-            ))?;
-            Ok(())
+                // Keep input validation intact: unsafe provider text is rejected
+                // by the secret reader, not transformed into a different prompt.
+                let prompt = format!("{provider} API key: ");
+                let entry = tokio::select! {
+                    biased;
+                    _ = terminated.cancelled() => Ok(Err(ion_terminal::SecretRejection::Cancelled)),
+                    entry = terminal.read_secret(&prompt) => entry,
+                };
+                let key = match (entry, terminal.restore()) {
+                    (entry, Ok(())) => entry?,
+                    (Ok(_), Err(error)) => return Err(error.into()),
+                    (Err(error), Err(cleanup)) => {
+                        return Err(anyhow::Error::new(error)
+                            .context(format!("login terminal cleanup also failed: {cleanup}")));
+                    }
+                }?;
+                credentials.save_api_key(&provider, &key)?;
+                print_stdout(format_args!(
+                    "Saved {} credential.",
+                    metadata_field(&provider)
+                ))?;
+                Ok(())
+            }
+            .await;
+            termination.finish(result).await
         }
         Action::Logout { provider } => {
             credentials.remove(&provider)?;
@@ -325,6 +342,40 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             mcp_cli::run(action, &config)
         }
         action => {
+            // Pure owners precede startup UI; the same owner later admits all
+            // coding work. Passive commands without a picker keep OS defaults.
+            let application = matches!(
+                action,
+                Action::Run { .. } | Action::Chat { .. } | Action::Compact { .. } | Action::Rpc
+            )
+            .then(|| {
+                let application = ion_app::CodingApplication::new(host.clone(), None)
+                    .with_code_mode(cli.code_mode);
+                if cli.read_only {
+                    application.with_read_only_tools()
+                } else {
+                    application.with_tool_selection(tool_selection)
+                }
+            });
+            let application_owner = application
+                .as_ref()
+                .and_then(ion_app::CodingApplication::owner);
+            let stop = tokio_util::sync::CancellationToken::new();
+            let termination = if application.is_some() || cli.resume_session {
+                Some(termination::Termination::listen(
+                    stop.clone(),
+                    application_owner.clone(),
+                )?)
+            } else {
+                None
+            };
+            let terminated = termination
+                .as_ref()
+                .map(termination::Termination::token)
+                .unwrap_or_default();
+            let result = async move {
+            let credentials = host.credentials();
+            let models = host.models();
             let keys = if cli.resume_session
                 || (matches!(action, Action::Chat { .. })
                     && io::stdin().is_terminal()
@@ -349,7 +400,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             let catalog = host.sessions(Some(cwd.clone()));
             let path = if cli.resume_session {
                 let Some(path) =
-                    terminal_client::choose_session(catalog.clone(), &keys, &themes).await?
+                    terminal_client::choose_session(catalog.clone(), &keys, &themes, &terminated).await?
                 else {
                     return Ok(());
                 };
@@ -374,6 +425,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             } else {
                 catalog.new_path()?
             };
+            ensure!(!stop.is_cancelled(), "application startup interrupted");
             let existing = if cli.resume_session || cli.continue_session || path.is_file() {
                 Some(Session::inspect_metadata(&path)?)
             } else {
@@ -500,7 +552,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 };
                 let choose_default = existing.is_none() && selected.is_none();
                 let Some(selected) =
-                    terminal_client::setup_model(&host, selected, choose_default, &keys, &themes)
+                    terminal_client::setup_model(&host, selected, choose_default, &keys, &themes, &terminated)
                         .await?
                 else {
                     return Ok(());
@@ -509,6 +561,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             } else {
                 selection?
             };
+            ensure!(!stop.is_cancelled(), "application startup interrupted");
             selected.require_access(credentials)?;
             let sources = cli
                 .image
@@ -529,7 +582,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 selected.image_input,
                 sources,
                 ion_core::AgentLimits::default().max_request_bytes,
-                tokio_util::sync::CancellationToken::new(),
+                stop.child_token(),
             )
             .await?;
             let paths = match &action {
@@ -558,7 +611,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 selected.identity(),
                 selected.image_input,
                 ion_core::AgentLimits::default().max_request_bytes,
-                tokio_util::sync::CancellationToken::new(),
+                stop.child_token(),
             )
             .await?;
             images.extend(prepared.images);
@@ -641,6 +694,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             if let Client::Headless(headless::Request::Compact(Some(instructions)), _) = &client {
                 validate_launch_size(&ion_ai::Message::user_input(instructions.clone(), []))?;
             }
+            ensure!(!stop.is_cancelled(), "application startup interrupted");
             let session = Arc::new(if existing.is_some() {
                 Session::open(&path)?
             } else {
@@ -652,23 +706,17 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     "saved Session identity or working directory changed during startup; reopen it explicitly"
                 );
             }
-            // Native effects need interruption custody before MCP helpers start.
-            // Hand this same stream to the client: Tokio's installed SIGINT
-            // handler outlives a dropped listener, so a temporary one is unsafe.
-            let mut interrupt =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-            let stop = tokio_util::sync::CancellationToken::new();
-            let mut application =
-                ion_app::CodingApplication::new(host.clone(), None).with_code_mode(cli.code_mode);
-            if cli.read_only {
-                application = application.with_read_only_tools();
-            } else {
-                application = application.with_tool_selection(tool_selection);
-            }
-            let application_owner = application.owner();
-            let termination =
-                termination::Termination::listen(stop.clone(), application_owner.clone())?;
-            let terminated = termination.token();
+            // Preserve preflight's default SIGINT disposition, then keep this
+            // single stream through MCP startup and the client. Registration
+            // failure still owns and must close the opened Session.
+            let mut interrupt = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
+                Ok(interrupt) => interrupt,
+                Err(error) => return match session.shutdown().await {
+                    Ok(()) => Err(error.into()),
+                    Err(cleanup) => Err(anyhow::Error::new(error).context(format!("Session shutdown also failed: {cleanup}"))),
+                },
+            };
+            let mut application = application.expect("non-coding commands returned before runtime setup");
             let mut interrupted = false;
             let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
                 ion_app::McpStartup::default()
@@ -833,26 +881,18 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Some(tools) => tools.shutdown().await,
                 None => Ok(()),
             };
-            let result = match (result, cleanup) {
+            match (result, cleanup) {
                 (result, Ok(())) => result,
                 (Ok(()), Err(error)) => Err(error),
                 (Err(error), Err(cleanup)) => {
                     Err(error.context(format!("MCP cleanup also failed: {cleanup:#}")))
                 }
-            };
-            let result = match (result, termination.finish().await) {
-                (result, Ok(())) => result,
-                (Ok(()), Err(error)) => {
-                    Err(anyhow::Error::new(error).context("join termination listener"))
-                }
-                (Err(error), Err(cleanup)) => Err(error.context(format!(
-                    "termination listener cleanup also failed: {cleanup}"
-                ))),
-            };
-            if terminated.is_cancelled() && result.is_ok() {
-                anyhow::bail!("application termination requested");
             }
-            result
+            }.await;
+            match termination {
+                Some(termination) => termination.finish(result).await,
+                None => result,
+            }
         }
     }
 }

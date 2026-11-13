@@ -1,6 +1,7 @@
 //! Application termination is independent of the client's input/publication pump.
 use std::{io, sync::Arc};
 
+use anyhow::Context;
 use ion_app::ApplicationOwner;
 use tokio::{
     signal::unix::{Signal, SignalKind, signal},
@@ -51,12 +52,22 @@ impl Termination {
         self.requested.clone()
     }
 
-    pub(crate) async fn finish(mut self) -> Result<(), tokio::task::JoinError> {
+    pub(crate) async fn finish(mut self, result: anyhow::Result<()>) -> anyhow::Result<()> {
         // The listener owns only notification/shutdown capabilities, never a
         // child, terminal lease or durable write. Client/resource joins stay put.
         // Give an already-ready signal priority over normal listener closure.
         self.closing.cancel();
-        (&mut self.listener).await
+        let result = match (result, (&mut self.listener).await) {
+            (result, Ok(())) => result,
+            (Ok(()), Err(error)) => Err(error).context("join termination listener"),
+            (Err(error), Err(cleanup)) => Err(error.context(format!(
+                "termination listener cleanup also failed: {cleanup}"
+            ))),
+        };
+        if self.requested.is_cancelled() && result.is_ok() {
+            anyhow::bail!("application termination requested");
+        }
+        result
     }
 }
 

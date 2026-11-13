@@ -84,7 +84,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Terminal:
-    def __init__(self, cwd, env, mode, args=None, redirected_tty=False):
+    def __init__(self, cwd, env, mode, args=None, redirected_tty=False, reply_cursor=True):
+        self.reply_cursor = reply_cursor
         self.master, slave = pty.openpty()
         os.set_blocking(self.master, False)
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
@@ -132,7 +133,7 @@ class Terminal:
                 data = b""
             self.output.extend(data)
             self.lifecycle_output.extend(data)
-            if b"\x1b[6n" in data:
+            if self.reply_cursor and b"\x1b[6n" in data:
                 self.send(b"\x1b[2;1R")
 
     def resize(self, rows, columns, settle=True):
@@ -166,12 +167,12 @@ class Terminal:
         self.send(b"\x04\x04")
         self.wait_exit()
 
-    def wait_exit(self):
+    def wait_exit(self, expected=0):
         end = time.monotonic() + 10
         while self.child.poll() is None:
             assert time.monotonic() < end, self.output[-2500:]
             self.pump()
-        assert self.child.returncode == 0, self.output[-2500:]
+        assert self.child.returncode == expected, (self.child.returncode, self.output[-2500:])
 
     def close(self):
         if self.child.poll() is None:
@@ -1150,6 +1151,17 @@ def exercise_resume(work, base_env, endpoint):
             assert not marker.exists() and len(requests) == before_requests
         finally:
             terminal.close()
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            terminal = Terminal(empty, env, mode, ["--resume", "--tui-mode", mode])
+            try:
+                terminal.wait(lambda: "No saved Sessions for this working directory" in terminal.text())
+                os.kill(terminal.child.pid, signum)
+                terminal.wait_exit(1)
+                assert termios.tcgetattr(terminal.master) == terminal.original_modes
+                assert not list(home.rglob("*.sqlite")) and not (home / "models.json").exists()
+                assert not marker.exists() and len(requests) == before_requests
+            finally:
+                terminal.close()
         mcp.unlink()
         subprocess.run([binary, "use", "resume-saved", "saved-model", "--endpoint", endpoint,
                         "--wire", "chat-completions"], env=env, capture_output=True, check=True)
@@ -1157,6 +1169,23 @@ def exercise_resume(work, base_env, endpoint):
             subprocess.run([binary, "--cwd", cwd, "-p", prompt], env=env, capture_output=True, check=True)
         paths = set(home.rglob("*.sqlite"))
         assert len(paths) == 2
+        # Passive inspection with a startup browser has no coding owner, but it
+        # still owns the terminal and must join discovery before returning it.
+        snapshots = {path: path.read_bytes() for path in paths}
+        defaults = (home / "models.json").read_bytes()
+        browse_requests = len(requests)
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            terminal = Terminal(a, env, mode, ["--resume", "inspect"])
+            try:
+                terminal.wait(lambda: "1 match(es)" in terminal.text())
+                os.kill(terminal.child.pid, signum)
+                terminal.wait_exit(1)
+                assert termios.tcgetattr(terminal.master) == terminal.original_modes
+            finally:
+                terminal.close()
+            assert {path: path.read_bytes() for path in home.rglob("*.sqlite")} == snapshots
+            assert (home / "models.json").read_bytes() == defaults
+            assert len(requests) == browse_requests
         by_cwd = {}
         for path in paths:
             with closing(sqlite3.connect(path)) as connection:
@@ -1411,6 +1440,35 @@ def exercise_onboarding(work, base_env, endpoint):
             "command": sys.executable,
             "args": ["-c", f"from pathlib import Path; Path({str(marker)!r}).touch()"],
         }}}))
+        # TERM/HUP during first-use selection or masked entry must release the
+        # caller's TTY without admitting pending prompts, MCP or a saved default.
+        for stage in ("geometry", "model", "secret", "login"):
+            for signum in (signal.SIGTERM, signal.SIGHUP):
+                args = ["login", "startup-only"] if stage == "login" else ["--tui-mode", mode, "NEVER_ADMIT_TERMINATED_SETUP"]
+                terminal = Terminal(cwd, env, mode, args, reply_cursor=stage != "geometry")
+                try:
+                    if stage == "geometry":
+                        terminal.wait(lambda: b"\x1b[6n" in terminal.output)
+                    elif stage == "login":
+                        terminal.wait(lambda: "startup-only API key:" in terminal.text())
+                        terminal.send("SIGNAL_SECRET_DISPOSABLE")
+                    else:
+                        terminal.wait(lambda: "Choose default model" in terminal.text())
+                        if stage == "secret":
+                            terminal.send("openai/gpt-5.4-mini")
+                            terminal.paint()
+                            terminal.send(b"\r")
+                            terminal.wait(lambda: "openai API key:" in terminal.text())
+                            terminal.send("SIGNAL_SECRET_DISPOSABLE")
+                    os.kill(terminal.child.pid, signum)
+                    terminal.wait_exit(1)
+                    assert termios.tcgetattr(terminal.master) == terminal.original_modes
+                    assert "SIGNAL_SECRET_DISPOSABLE" not in terminal.text()
+                    assert not list(home.rglob("*.sqlite")) and not (home / "models.json").exists()
+                    assert not list((home / "credentials").glob("*.key"))
+                    assert not marker.exists() and not requests and not unexpected_connections
+                finally:
+                    terminal.close()
         # No credentials, model calls or Session are needed to reach setup.
         result = subprocess.run([binary, "-p", "NEVER_SEND"], env=env, capture_output=True)
         assert result.returncode == 1 and b"no model selected" in result.stderr
