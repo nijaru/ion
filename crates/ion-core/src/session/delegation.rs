@@ -107,24 +107,7 @@ impl State {
                 }
             }
             SessionEntry::DelegationSettled { run, outcome } => {
-                if let DelegationOutcome::Joined {
-                    execution_timed_out,
-                    receipt,
-                    error,
-                    answer,
-                    partial_output,
-                    ..
-                } = outcome
-                    && ((partial_output.as_ref().is_some_and(|output| {
-                        !output.valid() || error.is_none() || answer.is_some()
-                    })) || (*execution_timed_out && error.is_none())
-                        || (answer.is_some()
-                            && (*execution_timed_out
-                                || error.is_some()
-                                || receipt.as_ref().is_none_or(|receipt| {
-                                    receipt.end != Some(TurnEndReason::Completed)
-                                }))))
-                {
+                if !outcome.valid_for_run(*run) {
                     return Err(SessionError::InvalidHistory);
                 }
                 let link = if let Some(link) = self.backgrounds.remove(run) {
@@ -142,9 +125,7 @@ impl State {
                     receipt: Some(receipt),
                     ..
                 } = outcome
-                    && (receipt.session != link.child
-                        || receipt.turn == 0
-                        || receipt.key != crate::delegation::request_key(*run))
+                    && receipt.session != link.child
                 {
                     return Err(SessionError::InvalidHistory);
                 }

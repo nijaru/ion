@@ -302,6 +302,34 @@ os.write(2, b'MERGED_STDERR\\n')
                         else:
                             assert "MANAGED_OUTPUT" in json.dumps(result), result
                         delta = {"content":"PROCESS_SCOPE_OK"}
+                elif user == "RECOVER_BACKGROUND":
+                    assert tools == {"history", "subagent"}, tools
+                    if fresh:
+                        managed["recovery_step"] = 0
+                        delta = call("subagent", {"action":"status", "id":managed["recovery_run"]})
+                    else:
+                        envelope = json.loads(body["messages"][-1]["content"])
+                        step = managed["recovery_step"]
+                        if step == 0:
+                            assert envelope["is_error"] and "not owned here" in json.dumps(envelope), envelope
+                            delta = call("history", {"action":"search", "query":managed["recovery_run"]})
+                        elif step == 1:
+                            assert not envelope["is_error"], envelope
+                            saved = next(hit for hit in envelope["result"]["entries"] if hit["kind"] == "delegation_settled")
+                            delta = call("history", {"action":"read", "entry":saved["entry"]})
+                        else:
+                            assert step == 2 and not envelope["is_error"], envelope
+                            page = envelope["result"]["entry"]
+                            assert page["next_offset"] is None, page
+                            document = json.loads(page["content"])
+                            assert document["run"] == managed["recovery_run"]
+                            assert document["outcome"]["kind"] == "joined"
+                            assert document["outcome"]["end"] == "completed"
+                            assert document["outcome"]["answer"] == "CHILD_ANSWER_CHILD_BG_DRAIN"
+                            assert set(document) == {"run", "outcome", "notice"}, document
+                            assert set(document["outcome"]) == {"kind", "end", "execution_timed_out", "elapsed_ms", "answer", "error", "partial_output"}, document
+                            delta = {"content":"RECOVERED_BACKGROUND_RESULT"}
+                        managed["recovery_step"] += 1
                 elif user == "PARENT_DEFAULT":
                     assert "subagent" in tools
                     delta = {"content": "DEFAULT_OK"}
@@ -365,7 +393,8 @@ os.write(2, b'MERGED_STDERR\\n')
                             delta = call("exec", {"command":"printf '%s' $$ > CHILD_CANCEL.pid; touch CHILD_CANCEL.ready; exec sleep 30", "timeout_ms":120000})
                         elif user.startswith("CHILD_BG_"):
                             release = "parent.work" if user == "CHILD_BG_WAIT" else user + ".release"
-                            native = "printf '%s' $$ > " + user + ".pid; touch " + user + ".ready; while [ ! -f " + release + " ]; do sleep 0.01; done; printf CHILD_EFFECT > " + user + ".effect"
+                            redirect = ">>" if user == "CHILD_BG_DRAIN" else ">"
+                            native = "printf '%s' $$ > " + user + ".pid; touch " + user + ".ready; while [ ! -f " + release + " ]; do sleep 0.01; done; printf CHILD_EFFECT " + redirect + " " + user + ".effect"
                             delta = call("exec", {"command":native,"timeout_ms":120000})
                         else:
                             marker = next(name for name in tools if name.startswith("mcp__") and name.endswith("marker"))
@@ -581,7 +610,9 @@ os.write(2, b'MERGED_STDERR\\n')
         joined = rpc.request("get_background")["data"]["background"]["runs"][0]
         assert joined["joined"] and joined["receipt"]["outcome"]["answer"] == "CHILD_ANSWER_CHILD_BG_IDLE"
         assert joined["progress"]["elapsed_ms"] == joined["receipt"]["outcome"]["elapsed_ms"]
+        before_acknowledgement = facts(parent_path)[1]
         acknowledged = rpc.request("acknowledge_background", run=child_id)
+        assert facts(parent_path)[1] == before_acknowledgement, "acknowledgement changed committed evidence"
         assert acknowledged["success"] and acknowledged["data"]["progress"] == joined["progress"]
         assert rpc.request("get_background")["data"]["background"]["runs"] == []
         assert not rpc.request("cancel_background", run=child_id)["success"]
@@ -631,6 +662,28 @@ os.write(2, b'MERGED_STDERR\\n')
             outcome = next(entry["data"]["outcome"] for entry in entries if entry["kind"] == "delegation_settled")
             assert (outcome["answer"] is None) == interrupt
             assert outcome["kind"] == "joined"
+            if not interrupt:
+                admitted = next(entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted")
+                settled = next(i for i, entry in enumerate(entries) if entry["kind"] == "delegation_settled")
+                ended = max(i for i, entry in enumerate(entries) if entry["kind"] == "turn_ended")
+                assert ended < settled, "fixture did not settle after parent completion"
+                managed["recovery_run"] = admitted["run"]
+                child_path = Path(admitted["path"])
+                child_before = facts(child_path)
+                effect = workspace / "CHILD_BG_DRAIN.effect"
+                assert effect.read_text() == "CHILD_EFFECT"
+                files_before = {path for path, _header, _entries in histories()}
+                request_count = len(requests)
+                recovered = command(env, workspace, "--session", str(parent_path), "--tools", "history,subagent", "run", "RECOVER_BACKGROUND")
+                assert recovered.stdout.strip() == "RECOVERED_BACKGROUND_RESULT", recovered.stderr
+                after = facts(parent_path)[1]
+                assert after[:len(entries)] == entries, "historical retrieval rewrote facts"
+                assert len([entry for entry in after if entry["kind"] == "delegation_admitted"]) == 1
+                assert facts(child_path) == child_before, "retrieval changed the child Session"
+                assert effect.read_text() == "CHILD_EFFECT", "child effect repeated"
+                assert {path for path, _header, _entries in histories()} == files_before
+                assert len(requests) == request_count + 4
+                assert all(next(message["content"] for message in reversed(body["messages"]) if message["role"] == "user").startswith("RECOVER_BACKGROUND") for body in requests[request_count:]), "retrieval issued a child request"
 
         # EOF cleanup precedes blocked recovery publication. This pipe is not
         # read until the actual background PID has stopped; inspect is >128 KiB.

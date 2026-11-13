@@ -51,4 +51,8 @@ A fresh child starts without copied conversation history. An explicit fork copie
 
 Transferred work survives parent cancellation and Session navigation within the live application. Quitting or interrupting the application requests stop and joins owned work. Retained handles belong to that application owner; reopening a saved conversation does not resurrect background jobs or their controls.
 
-Saved child Sessions and committed relationship/outcome facts survive removing a finished task. Uncommitted guidance is not a saved Session fact. After an interruption, inspect unknown effects before requesting another mutation; a saved handle is not permission to replay them.
+Saved child Sessions and committed relationship/outcome facts survive removing a finished task.
+
+To retrieve a recorded outcome after removal or reopening, ask the model to use `history` with `{"action":"search","query":"UUID"}`, then `{"action":"read","entry":N}` for the `delegation_settled` hit. Unfiltered `list` also includes settlements; the `tool` filter selects only top-level tool results. Reads return the recorded answer, error, timeout and any provisional output, not admission policy or child internals. Joined does not necessarily mean successful; inspect the recorded Turn end and outcome. Copied settlements remain historical evidence, not live task handles.
+
+Uncommitted guidance is not a saved Session fact. After an interruption, inspect unknown effects before requesting another mutation; a saved handle is not permission to replay them.

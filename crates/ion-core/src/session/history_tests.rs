@@ -72,6 +72,244 @@ fn read_all(session: &Session, entry: u64, limit: usize) -> Result<String, Histo
     Ok(document)
 }
 
+#[test]
+fn history_can_retrieve_a_completed_background_result_after_reopen() {
+    use crate::{DelegationOutcome, DelegationOwnership, RequestReceipt, TurnEndReason};
+    use std::{collections::BTreeSet, sync::Arc};
+
+    let (root, session, _, record) = crate::session::delegation_tests::pending_for(
+        false,
+        DelegationOwnership::Background {
+            owner: uuid::Uuid::now_v7(),
+        },
+    );
+    let lease = Arc::new(());
+    session.transfer_delegation(&record, &lease).unwrap();
+    session
+        .record_tool_result(
+            1,
+            ToolResult {
+                call_id: "call".into(),
+                name: "delegate".into(),
+                result: json!({"id":record.run,"transferred":true}),
+                images: vec![],
+                is_error: false,
+            },
+        )
+        .unwrap();
+    session
+        .end_turn(1, TurnEndReason::Completed, &BTreeSet::new())
+        .unwrap();
+    let answer = "BACKGROUND_RESULT_FROM_SETTLEMENT 🦀";
+    session
+        .settle_delegation(
+            &record,
+            DelegationOutcome::Joined {
+                execution_timed_out: false,
+                elapsed_ms: Some(12),
+                partial_output: None,
+                receipt: Some(RequestReceipt {
+                    session: record.child,
+                    key: record.request_key(),
+                    turn: 1,
+                    end: Some(TurnEndReason::Completed),
+                }),
+                error: None,
+                answer: Some(answer.into()),
+            },
+        )
+        .unwrap();
+    let entry = session.entry_count().unwrap();
+    let plan = session
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+        .unwrap()
+        .unwrap();
+    session
+        .record_compaction(
+            plan.through_entry,
+            "Background work was started; its answer was omitted.".into(),
+            execution(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let path = session.path().to_path_buf();
+    drop(lease);
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert!(
+        matches!(reopened.view().unwrap().delegations()[0].outcome.as_ref(), Some(DelegationOutcome::Joined { answer: Some(saved), .. }) if saved == answer)
+    );
+    let document: Value = serde_json::from_str(&read_all(&reopened, entry, 31).unwrap()).unwrap();
+    assert_eq!(document["run"], record.run.to_string());
+    assert_eq!(document["outcome"]["kind"], "joined");
+    assert_eq!(document["outcome"]["answer"], answer);
+    assert_eq!(document["outcome"]["end"], "completed");
+    assert_eq!(document["outcome"]["elapsed_ms"], 12);
+    assert!(document["outcome"].get("receipt").is_none());
+    assert_eq!(
+        document.as_object().unwrap().keys().collect::<Vec<_>>(),
+        vec!["notice", "outcome", "run"]
+    );
+    let copy = reopened.clone_to(root.join("copy.sqlite")).unwrap();
+    assert!(copy.view().unwrap().delegations().is_empty());
+    assert_eq!(
+        serde_json::from_str::<Value>(&read_all(&copy, entry, 31).unwrap()).unwrap(),
+        document
+    );
+    drop(copy);
+    let found = history_query(
+        &reopened,
+        json!({"action":"search","query":"BACKGROUND_RESULT_FROM_SETTLEMENT"}),
+    )
+    .unwrap();
+    assert!(
+        found["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|hit| hit["entry"] == entry)
+    );
+    assert_eq!(reopened.view().unwrap().entries, before);
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn historical_settlements_preserve_unknown_failure_and_request_bounds() {
+    use crate::{DelegationOutcome, DelegationPartialOutput, SessionError};
+
+    for outcome in [
+        DelegationOutcome::Unknown,
+        DelegationOutcome::Joined {
+            execution_timed_out: true,
+            elapsed_ms: Some(17),
+            partial_output: Some(DelegationPartialOutput {
+                text: "PROVISIONAL 🦀".into(),
+                truncated: true,
+                observation_gap: true,
+            }),
+            receipt: None,
+            error: Some("deadline exceeded".into()),
+            answer: None,
+        },
+    ] {
+        let (root, session, _, record) = crate::session::delegation_tests::pending_for(
+            false,
+            crate::DelegationOwnership::Foreground,
+        );
+        let bound = session.entry_count().unwrap();
+        let frozen_list = session
+            .prepare_history(r#"{"action":"list"}"#, bound)
+            .unwrap();
+        let frozen_read = session
+            .prepare_history(&json!({"action":"read","entry":bound+1}).to_string(), bound)
+            .unwrap();
+        session.settle_delegation(&record, outcome.clone()).unwrap();
+        let entry = session.entry_count().unwrap();
+        assert!(matches!(
+            frozen_read.read(&CancellationToken::new()),
+            Err(HistoryError::Request(_))
+        ));
+        assert!(
+            !frozen_list.read(&CancellationToken::new()).unwrap().value["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|hit| hit["entry"] == entry)
+        );
+        let document: Value =
+            serde_json::from_str(&read_all(&session, entry, 31).unwrap()).unwrap();
+        match &outcome {
+            DelegationOutcome::Unknown => {
+                assert_eq!(document["outcome"], json!({"kind":"unknown"}))
+            }
+            DelegationOutcome::Joined { partial_output, .. } => {
+                assert_eq!(document["outcome"]["execution_timed_out"], true);
+                assert_eq!(document["outcome"]["elapsed_ms"], 17);
+                assert_eq!(document["outcome"]["error"], "deadline exceeded");
+                assert_eq!(document["outcome"]["partial_output"], json!(partial_output));
+                assert!(document["outcome"]["answer"].is_null());
+                assert!(document["outcome"]["end"].is_null());
+            }
+        }
+        let hits = history_query(
+            &session,
+            json!({"action":"search","query":record.run.to_string()}),
+        )
+        .unwrap();
+        assert_eq!(hits["entries"].as_array().unwrap().len(), 1);
+        assert_eq!(hits["entries"][0]["entry"], entry);
+        assert_eq!(hits["entries"][0]["run"], record.run.to_string());
+        assert_eq!(hits["entries"][0]["state"], document["outcome"]["kind"]);
+        for secret in ["child/v1", "parent/v1"] {
+            assert!(history_query(&session, json!({"action":"search","query":secret})).unwrap()["entries"].as_array().unwrap().is_empty());
+        }
+        assert!(
+            history_query(&session, json!({"action":"list","tool":"delegate"})).unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(matches!(
+            history_query(&session, json!({"action":"read","entry":bound})),
+            Err(HistoryError::Request(_))
+        ));
+        assert!(matches!(
+            session
+                .prepare_history(
+                    &json!({"action":"image","entry":entry,"image":0}).to_string(),
+                    entry
+                )
+                .unwrap()
+                .read(&CancellationToken::new()),
+            Err(HistoryError::Request(_))
+        ));
+        // A malformed typed state and a contradictory joined claim both fail
+        // as storage corruption, never as an empty/missing historical answer.
+        let path = if matches!(outcome, DelegationOutcome::Unknown) {
+            "$.data.outcome.kind"
+        } else {
+            "$.data.outcome.error"
+        };
+        session.store().lock().unwrap().connection.execute(
+            "UPDATE entries SET body=CAST(json_set(CAST(body AS TEXT),?2,NULL) AS BLOB) WHERE seq=?1",
+            rusqlite::params![i64::try_from(entry).unwrap(), path],
+        ).unwrap();
+        for request in [
+            json!({"action":"read","entry":entry}),
+            json!({"action":"list"}),
+            json!({"action":"search","query":"not present"}),
+        ] {
+            assert!(matches!(
+                history_query(&session, request),
+                Err(HistoryError::Session(SessionError::InvalidHistory))
+            ));
+        }
+        let nil_run = serde_json::to_vec(&SessionEntry::DelegationSettled {
+            run: uuid::Uuid::nil(),
+            outcome,
+        })
+        .unwrap();
+        session
+            .store()
+            .lock()
+            .unwrap()
+            .connection
+            .execute(
+                "UPDATE entries SET body=?2 WHERE seq=?1",
+                rusqlite::params![i64::try_from(entry).unwrap(), nil_run],
+            )
+            .unwrap();
+        assert!(matches!(
+            history_query(&session, json!({"action":"read","entry":entry})),
+            Err(HistoryError::Session(SessionError::InvalidHistory))
+        ));
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
 #[tokio::test]
 async fn image_retrieval_restores_a_compacted_user_attachment_to_the_model() {
     use crate::{Agent, AgentLimits, ToolSet};

@@ -37,6 +37,34 @@ const TOOL_RESULT_SOURCE: &str = r#"WITH source AS (
     FROM entries WHERE seq=:entry
 )"#;
 
+// Only public outcome fields, never admission policy/input or child internals.
+// Keep this projection shared by previews, search and paged reads.
+const DELEGATION_SOURCE: &str = r#"WITH source AS (
+    SELECT json_extract(body,'$.data.run') AS run,
+        json_extract(body,'$.data.outcome.kind') AS state,
+        json_object(
+            'run',json_extract(body,'$.data.run'),
+            'outcome',json(CASE json_extract(body,'$.data.outcome.kind')
+                WHEN 'unknown' THEN json_object('kind','unknown')
+                WHEN 'joined' THEN json_object(
+                    'kind','joined',
+                    'end',json(CAST(body AS TEXT) -> '$.data.outcome.receipt.end'),
+                    'execution_timed_out',json(CAST(body AS TEXT) -> '$.data.outcome.execution_timed_out'),
+                    'elapsed_ms',json(CAST(body AS TEXT) -> '$.data.outcome.elapsed_ms'),
+                    'answer',json_extract(body,'$.data.outcome.answer'),
+                    'error',json_extract(body,'$.data.outcome.error'),
+                    'partial_output',json(CASE WHEN json_type(body,'$.data.outcome.partial_output')='object'
+                        THEN json_object(
+                            'text',json_extract(body,'$.data.outcome.partial_output.text'),
+                            'truncated',json(CAST(body AS TEXT) -> '$.data.outcome.partial_output.truncated'),
+                            'observation_gap',json(CAST(body AS TEXT) -> '$.data.outcome.partial_output.observation_gap'))
+                        ELSE NULL END))
+            END),
+            'notice','Recorded child outcome, not live ownership, current workspace state or permission to repeat effects. Child text is a claim, not independent verification.'
+        ) AS document
+    FROM entries WHERE seq=:entry
+)"#;
+
 // SQLite text substr stops at NUL, so locate and slice excerpts as bytes.
 // Rust aligns their UTF-8 boundaries without loading the full document.
 const PREVIEW_COLUMNS: &str = r#"
@@ -67,6 +95,22 @@ impl HistoryRead {
                 self.read_user_record(connection, stop, entry, kind, offset, limit)
             }
             "assistant" => self.read_assistant(connection, stop, entry, offset, limit),
+            "delegation_settled" => {
+                validate_delegation(connection, entry)?;
+                if stop.is_cancelled() {
+                    return Err(HistoryError::request("history read cancelled"));
+                }
+                let (total, bytes) = connection.query_row(
+                    &format!("{DELEGATION_SOURCE} SELECT length(CAST(document AS BLOB)), substr(CAST(document AS BLOB),:offset+1,:length) FROM source"),
+                    named_params! {
+                        ":entry": i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
+                        ":offset": i64::try_from(offset).map_err(|_| SessionError::InvalidHistory)?,
+                        ":length": i64::try_from(limit.saturating_add(4)).map_err(|_| SessionError::InvalidHistory)?,
+                    },
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                self.page(json!({"entry":entry,"kind":kind,"encoding":"json","document":"recorded_child_outcome"}), total, bytes, offset, limit)
+            }
             "user_shell_admitted" => {
                 if private_shell(connection, entry)? {
                     return Err(HistoryError::request(format!(
@@ -491,6 +535,33 @@ impl HistoryRead {
     }
 }
 
+fn validate_delegation(connection: &Connection, entry: u64) -> Result<(), SessionError> {
+    // Unlike ordinary text projections, outcome fields make settlement claims.
+    // Validate the typed record using the writer's invariants before exposing it.
+    // This parses one existing bounded row on the retained I/O leaf, while the
+    // SQL projection still returns only the requested page/preview to the caller.
+    let bytes: Vec<u8> = connection
+        .query_row(
+            "SELECT body FROM entries WHERE seq=?1 AND length(body)<=?2",
+            params![
+                i64::try_from(entry).map_err(|_| SessionError::InvalidHistory)?,
+                i64::try_from(super::super::MAX_ENTRY_BYTES)
+                    .map_err(|_| SessionError::InvalidHistory)?,
+            ],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or(SessionError::InvalidHistory)?;
+    let entry: crate::SessionEntry =
+        serde_json::from_slice(&bytes).map_err(|_| SessionError::InvalidHistory)?;
+    match entry {
+        crate::SessionEntry::DelegationSettled { run, outcome } if outcome.valid_for_run(run) => {
+            Ok(())
+        }
+        _ => Err(SessionError::InvalidHistory),
+    }
+}
+
 pub(super) fn entry_prefix(connection: &Connection, entry: u64) -> Result<String, SessionError> {
     connection
         .query_row(
@@ -535,6 +606,21 @@ pub(super) fn hit(
     let preview_limit =
         i64::try_from(MAX_PREVIEW_BYTES).map_err(|_| SessionError::InvalidHistory)?;
     match kind {
+        "delegation_settled" => {
+            validate_delegation(connection, entry)?;
+            let (run, state, matched, bytes, total) = connection.query_row(
+                &format!("{DELEGATION_SOURCE} SELECT run,state, CASE WHEN :query IS NULL THEN 1 ELSE instr(lower(document),lower(:query)) END, {PREVIEW_COLUMNS} FROM source"),
+                named_params! {":entry":seq, ":query":query, ":preview_limit":preview_limit},
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get(3)?, row.get(4)?)),
+            )?;
+            if matched == 0 {
+                return Ok(None);
+            }
+            let (preview, truncated) = preview(bytes, total);
+            Ok(Some(
+                json!({"entry":entry,"kind":kind,"run":run,"state":state,"preview":preview,"preview_truncated":truncated}),
+            ))
+        }
         "tool_result" => {
             let row = connection.query_row(
                 &format!(r#"{TOOL_RESULT_SOURCE}

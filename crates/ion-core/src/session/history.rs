@@ -138,6 +138,7 @@ pub(crate) fn definition() -> ToolDefinition {
                 "Search uses literal ASCII case-insensitive text; list returns recent entries. Both are newest first. ",
                 "To find original exec outputs, use {action:'search',query:'Ran',tool:'exec'}, then {action:'read',entry:N}. ",
                 "The optional tool filter selects top-level tool_result records by exact tool name; Code Mode child outputs use inspectSaved. ",
+                "Managed child settlements are readable even after reopening or acknowledging a task: use unfiltered list/search (by run UUID or answer text), then read its delegation_settled entry. Only public outcome fields are returned, not admission policy or child internals. Joined is not necessarily successful; inspect end, error, timeout and answer. These are recorded claims, not live ownership or permission to replay. ",
                 "Search previews show matching context where available; read by stable one-based entry, not call ID (IDs may repeat). ",
                 "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
                 "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",

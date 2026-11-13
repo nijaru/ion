@@ -179,6 +179,41 @@ pub enum DelegationOutcome {
     },
 }
 
+impl DelegationOutcome {
+    pub(crate) fn valid_for_run(&self, run: uuid::Uuid) -> bool {
+        if run.is_nil() {
+            return false;
+        }
+        match self {
+            Self::Unknown => true,
+            Self::Joined {
+                execution_timed_out,
+                partial_output,
+                receipt,
+                error,
+                answer,
+                ..
+            } => {
+                partial_output
+                    .as_ref()
+                    .is_none_or(|output| output.valid() && error.is_some() && answer.is_none())
+                    && (!execution_timed_out || error.is_some())
+                    && (answer.is_none()
+                        || (!execution_timed_out
+                            && error.is_none()
+                            && receipt.as_ref().is_some_and(|receipt| {
+                                receipt.end == Some(crate::TurnEndReason::Completed)
+                            })))
+                    && receipt.as_ref().is_none_or(|receipt| {
+                        !receipt.session.is_nil()
+                            && receipt.turn > 0
+                            && receipt.key == request_key(run)
+                    })
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DelegationReceipt {
     pub record: DelegationRecord,
