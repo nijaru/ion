@@ -11,6 +11,44 @@ fn image_prompt() -> UserInput {
         }],
     }
 }
+
+// Returned inputs own prepared text; the source path is not a recovery locator.
+const FILE_SNAPSHOT: &str = "const note = \"keep 🦀\";\r\n/next literal $ARGUMENTS\n";
+
+async fn file_image_prompt(root: &std::path::Path) -> UserInput {
+    let path = root.join("snapshot.ts");
+    fs::write(&path, FILE_SNAPSHOT).unwrap();
+    let prepared = crate::prompt_files::prepare_files(
+        vec![path.clone()],
+        ion_ai::ModelRef {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        true,
+        1024 * 1024,
+        CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    fs::remove_file(path).unwrap();
+    let mut input = image_prompt();
+    let UserInput::Prompt { files, .. } = &mut input else {
+        unreachable!()
+    };
+    *files = prepared.text;
+    input
+}
+
+fn assert_file_snapshot(input: &UserInput, root: &std::path::Path) {
+    let UserInput::Prompt { files, .. } = input else {
+        panic!("prompt snapshot")
+    };
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].name, root.join("snapshot.ts").to_str().unwrap());
+    assert_eq!(files[0].text, FILE_SNAPSHOT);
+    assert!(!root.join("snapshot.ts").exists());
+}
+
 fn runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -277,11 +315,13 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         fixture.control.submit(Delivery::Start, prompt("root"), meta("root")).unwrap();
         model.wait_calls(1).await;
         let target = fixture.control.current_operation().unwrap();
-        let steer = fixture.control.submit(Delivery::Steer(target), image_prompt(), meta("  literal 🦀\n")).unwrap();
+        let original = file_image_prompt(&fixture.root).await;
+        let steer = fixture.control.submit(Delivery::Steer(target), original, meta("  literal 🦀\n")).unwrap();
         let release = hold_preparation(&mut fixture.control).await;
         let snapshot = fixture.control.snapshot(|_| ()).await.unwrap();
         let input = snapshot.inputs.iter().find(|input| input.id == steer).unwrap();
         assert_eq!(input.phase, InputCustodyPhase::PendingPreparation);
+        assert_file_snapshot(input.original.as_ref().unwrap(), &fixture.root);
         assert!(matches!(&input.original, Some(UserInput::Prompt { text, images, .. })
             if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { data, .. }] if data == PNG)));
         fixture.control.submit(Delivery::FollowUp, prompt("explicit next"), meta("followup")).unwrap();
@@ -310,8 +350,9 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         assert_eq!(returned.delivery, Delivery::Steer(target));
         assert_eq!(returned.metadata.literal, "  literal 🦀\n");
         assert!(matches!(returned.reason, ReturnReason::TurnEnded));
+        assert_file_snapshot(&returned.input, &fixture.root);
         assert!(matches!(returned.input, UserInput::Prompt { text, images, .. } if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { mime_type, data }] if mime_type == "image/png" && data == PNG)));
-        assert!(model.requests.lock().unwrap().iter().flat_map(|request| &request.messages).flat_map(|message| &message.content).all(|part| !matches!(part, Content::Image(_))));
+        assert!(model.requests.lock().unwrap().iter().flat_map(|request| &request.messages).flat_map(|message| &message.content).all(|part| !matches!(part, Content::Image(_)) && !matches!(part, Content::Text(text) if text.contains("/next literal $ARGUMENTS"))));
         assert_eq!(model.calls.load(Ordering::SeqCst), 2);
     });
 }
@@ -381,9 +422,10 @@ fn joining_preparation_preserves_the_first_withdrawal_cause() {
                 .submit(Delivery::Start, prompt("root"), meta("root"))
                 .unwrap();
             model.wait_calls(1).await;
+            let original = file_image_prompt(&fixture.root).await;
             let queued = fixture
                 .control
-                .submit(Delivery::FollowUp, image_prompt(), meta("original draft"))
+                .submit(Delivery::FollowUp, original, meta("original draft"))
                 .unwrap();
             let release = hold_preparation(&mut fixture.control).await;
             match cause {
@@ -430,6 +472,7 @@ fn joining_preparation_preserves_the_first_withdrawal_cause() {
             let input = &returned[0];
             assert_eq!(input.id, queued);
             assert_eq!(input.metadata.literal, "original draft");
+            assert_file_snapshot(&input.input, &fixture.root);
             assert!(
                 matches!(&input.input, UserInput::Prompt { text, images, .. }
                 if text == "  original image\n" && images.len() == 1)
