@@ -156,6 +156,27 @@ sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)
             terminal.wait_turn()
             assert len(requests) == before + 1 and user_text(requests[-1]) == expected, requests[-1]
             last_answer = "DONE_" + expected.splitlines()[0]
+        # A typed command vacates only its literal text slot. Unlike Ctrl-G,
+        # failure must return that command source, not claim an empty draft survived.
+        source = "  /editor  "
+        (cwd / "config.json").write_text(json.dumps({"fail": True, "marker": "EDITOR_COMMAND_FAILURE", "edited": "FAILED_EDITOR_CHANGE", "outcome": "failure"}))
+        for name in ("received", "release"):
+            (cwd / name).unlink(missing_ok=True)
+        before = len(requests)
+        terminal.send(source)
+        terminal.send(b"\x1b[D" * (len(source) - 2))
+        terminal.wait(lambda: terminal.editor_matches(source, 2, False))
+        terminal.send(b"\r")
+        terminal.wait(lambda: (cwd / "received").exists() and "EDITOR_COMMAND_FAILURE" in "\n".join(terminal.snapshot()[0]))
+        assert (cwd / "received").read_text() == "", "the command itself is not editable draft content"
+        (cwd / "release").touch()
+        terminal.wait(lambda: "original draft retained" in "\n".join(terminal.snapshot()[0]))
+        assert terminal.editor_matches(source, 2, False), ("failed /editor discarded its exact source", terminal.snapshot())
+        assert len(requests) == before, "failed /editor submitted input"
+        # Clear only this fixture's restored command; do not retry it or send it
+        # to the model merely to satisfy the terminal's empty-input exit gesture.
+        terminal.send(b"\x05\x15")
+        terminal.wait(lambda: terminal.editor_matches("", 0, False))
         terminal.finish()
         modes = json.loads(modes_file.read_text())
         assert modes["restored"], ("editor raw modes became Ion's exit baseline", mode, modes)
@@ -167,7 +188,7 @@ sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)
         ended = [entry["data"]["reason"] for entry in view["entries"] if entry["kind"] == "turn_ended"]
         assert ended == ["completed"] * (len(outcomes) + 1), ended
         assert not report_errors, report_errors
-        print(f"External editor {mode} ({reporting} surface reports): {', '.join(outcomes)}, draft/caret, viewport, caller TTY, exact prompts and native history: OK", flush=True)
+        print(f"External editor {mode} ({reporting} surface reports): {', '.join(outcomes)}, failed command source, draft/caret, viewport, caller TTY, exact prompts and native history: OK", flush=True)
     finally:
         # Unblock a helper even if a screen assertion failed while it owned input.
         (cwd / "release").touch()

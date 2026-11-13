@@ -250,7 +250,10 @@ pub(super) async fn dispatch_command(
                     ui.status = "Draft returned from editor".into();
                 }
                 Err(error) => {
-                    ui.status = format!("Editor failed: {error:#}; original draft retained")
+                    if let Some(source) = input.into_editor() {
+                        ui.restore_editor(source);
+                    }
+                    ui.status = format!("Editor failed: {error:#}; original draft retained");
                 }
             }
         }

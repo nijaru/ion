@@ -171,6 +171,7 @@ fn command_actions_own_exact_editor_sources() {
             "  /command:check 'two ",
         ),
         (" /quit argument ", " /quit ar"),
+        ("  /editor  ", "  /e"),
     ] {
         let cursor = prefix.len();
         let mut ui = Frontend {
