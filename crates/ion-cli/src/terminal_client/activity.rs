@@ -231,7 +231,8 @@ pub(super) fn apply(
             let UserInput::Prompt { images, files, .. } = returned.input else {
                 unreachable!("terminal submits only raw prompts")
             };
-            if matches!(returned.reason, ReturnReason::Cleared) {
+            let withdrawn = matches!(returned.reason, ReturnReason::Cleared);
+            if withdrawn {
                 ui.show_draft(super::RecoveredDraft {
                     source: returned.metadata,
                     images,
@@ -240,7 +241,13 @@ pub(super) fn apply(
             } else {
                 ui.return_draft(returned.metadata, images, files);
             }
-            ui.status = "Draft returned".into();
+            let retention = if !withdrawn && ui.clipboard_pending() {
+                ui.status = "Returned draft retained separately".into();
+                "Draft retained separately while clipboard acquisition is pending"
+            } else {
+                ui.status = "Draft returned".into();
+                "Draft retained"
+            };
             let fault = returned
                 .preparation_error
                 .map(|error| format!("; preparation also failed: {error:#}"))
@@ -260,7 +267,7 @@ pub(super) fn apply(
                 }
                 ReturnReason::Preparation(error) => format!("preparation failed: {error:#}"),
             };
-            ui.note(format!("{kind} returned: {reason}{fault}. Draft retained; {} additional draft(s) · {} cycles without resubmitting", ui.editor.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
+            ui.note(format!("{kind} returned: {reason}{fault}. {retention}; {} additional draft(s) · {} cycles without resubmitting", ui.editor.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
         }
         ControlUpdate::Unresolved(input) => {
             ui.status = "Input commit unresolved; inspect Session before retrying".into();

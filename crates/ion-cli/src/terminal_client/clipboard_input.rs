@@ -21,6 +21,10 @@ pub(super) struct ClipboardJob {
 }
 
 impl Frontend {
+    pub(super) fn clipboard_pending(&self) -> bool {
+        self.clipboard_job.is_some()
+    }
+
     pub(super) fn clipboard_cancel_target(&self) -> Option<tokio::task::Id> {
         self.clipboard_job
             .as_ref()

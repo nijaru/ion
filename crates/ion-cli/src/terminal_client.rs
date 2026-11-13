@@ -1031,7 +1031,7 @@ impl Frontend {
         }
         self.editor.prepare_edit_key(key, &self.keys);
         // Preparing clipboard attachments never acknowledges a future prompt.
-        if self.clipboard_job.is_some()
+        if self.clipboard_pending()
             && matches!(input, Some(KeyAction::Submit | KeyAction::FollowUp))
             && Builtin::parse(self.editor.draft.split_whitespace().next().unwrap_or("")).is_none()
         {

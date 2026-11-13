@@ -231,7 +231,7 @@ pub(super) async fn apply_picker(
         ui.status = "Context unchanged; workspace files unchanged".into();
         return Ok(());
     }
-    if ui.clipboard_job.is_some() {
+    if ui.clipboard_pending() {
         ui.status = format!(
             "Wait for clipboard paste or cancel it with {}",
             ui.keys.hint(crate::keybindings::KeyAction::Interrupt)

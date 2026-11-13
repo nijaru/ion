@@ -32,7 +32,13 @@ impl Frontend {
         files: Vec<ion_app::prompt_files::TextFile>,
     ) {
         self.gestures.invalidate();
-        if self.editor.return_draft(source, images, files) {
+        // Acquisition reserves the composer before its bytes arrive. Automatic
+        // returns must not become the prefix or attachment owner of that paste.
+        let replace_empty = !self.clipboard_pending();
+        if self
+            .editor
+            .return_draft(source, images, files, replace_empty)
+        {
             self.pickers.close();
         }
     }

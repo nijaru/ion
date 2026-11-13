@@ -782,6 +782,175 @@ async fn clipboard_cancellation_keeps_worker_failures_observable() {
 }
 
 #[tokio::test]
+async fn returned_input_cannot_claim_a_composer_with_pending_clipboard_input() {
+    for join_first in [false, true] {
+        for (paste, expected, image_count) in [
+            (
+                PreparedPaste::Text("new input 🦀".into()),
+                "new input 🦀",
+                0,
+            ),
+            (
+                PreparedPaste::Files(vec![PathBuf::from("/tmp/new file.rs")]),
+                "/tmp/new file.rs",
+                0,
+            ),
+            (
+                PreparedPaste::Image(ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255]).unwrap()),
+                "",
+                1,
+            ),
+        ] {
+            let pasted_image = match &paste {
+                PreparedPaste::Image(image) => Some(image.content.clone()),
+                _ => None,
+            };
+            let (release, held) = tokio::sync::oneshot::channel();
+            let mut ui = Frontend {
+                clipboard_job: Some(ClipboardJob {
+                    stop: CancellationToken::new(),
+                    task: tokio::spawn(async move { Ok(Some(held.await.unwrap())) }),
+                }),
+                ..Frontend::default()
+            };
+            let return_input = |ui: &mut Frontend| {
+                ui.return_draft(
+                    EditorDraft {
+                        literal: "  queued 雪\n".into(),
+                        cursor: 2,
+                    },
+                    vec![ImageSource::Path("queued.png".into())],
+                    vec![ion_app::prompt_files::TextFile {
+                        name: "queued.rs".into(),
+                        text: "queued context".into(),
+                    }],
+                );
+            };
+            if join_first {
+                release
+                    .send(paste)
+                    .unwrap_or_else(|_| panic!("clipboard worker is retained"));
+                finish_clipboard_paste(&mut ui).await.unwrap();
+                return_input(&mut ui);
+            } else {
+                return_input(&mut ui);
+                assert!(
+                    ui.editor.draft.is_empty(),
+                    "a pending paste already occupies the composer"
+                );
+                assert!(ui.editor.images.is_empty());
+                assert!(ui.editor.files.is_empty());
+                assert_eq!(ui.editor.recovered.len(), 1);
+                release
+                    .send(paste)
+                    .unwrap_or_else(|_| panic!("clipboard worker is retained"));
+                finish_clipboard_paste(&mut ui).await.unwrap();
+            }
+            assert_eq!(ui.editor.draft, expected);
+            assert_eq!(ui.editor.images.len(), image_count);
+            assert!(ui.editor.files.is_empty());
+            ui.recover_draft();
+            assert_eq!(
+                (ui.editor.draft.as_str(), ui.editor.cursor),
+                ("  queued 雪\n", 2)
+            );
+            assert!(
+                matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("queued.png"))
+            );
+            assert_eq!(ui.editor.files[0].name, "queued.rs");
+            assert_eq!(ui.editor.files[0].text, "queued context");
+            ui.recover_draft();
+            assert_eq!(ui.editor.draft, expected);
+            assert_eq!(ui.editor.cursor, expected.len());
+            assert_eq!(ui.editor.images.len(), image_count);
+            if let Some(expected) = pasted_image {
+                let [ImageSource::Normalized { content, .. }] = &ui.editor.images[..] else {
+                    panic!("new image must retain its own typed content");
+                };
+                assert_eq!(content, &expected);
+            }
+            assert!(ui.editor.files.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn clipboard_completion_without_input_does_not_promote_a_returned_draft() {
+    for (cancel, completion) in [
+        (false, Ok(None)),
+        (
+            true,
+            Ok(Some(PreparedPaste::Text("cancelled input".into()))),
+        ),
+        (false, Err(anyhow::anyhow!("clipboard fixture failure"))),
+    ] {
+        let failed = completion.is_err();
+        let stop = CancellationToken::new();
+        if cancel {
+            stop.cancel();
+        }
+        let mut ui = Frontend {
+            clipboard_job: Some(ClipboardJob {
+                stop,
+                task: tokio::spawn(async move { completion }),
+            }),
+            ..Frontend::default()
+        };
+        // Even a finished worker retains custody until its publication is handled.
+        let joined = (&mut ui.clipboard_job.as_mut().unwrap().task).await;
+        ui.return_draft(
+            EditorDraft::at_end("returned".into()),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(ui.editor.draft.is_empty());
+        assert_eq!(ui.editor.recovered.len(), 1);
+        let result = clipboard_input::finish_joined_clipboard_paste(&mut ui, joined);
+        assert_eq!(result.is_err(), failed);
+        if let Err(error) = result {
+            assert_eq!(error.to_string(), "clipboard fixture failure");
+        }
+        assert!(!ui.clipboard_pending());
+        assert!(ui.editor.draft.is_empty());
+        assert!(ui.editor.images.is_empty());
+        ui.recover_draft();
+        assert_eq!(ui.editor.draft, "returned");
+    }
+}
+
+#[tokio::test]
+async fn returned_input_does_not_move_a_pending_paste_out_of_browsed_history() {
+    let (release, held) = tokio::sync::oneshot::channel();
+    let mut ui = Frontend {
+        editor: Editor {
+            prompt_history: vec!["history target".into()],
+            ..Editor::default()
+        },
+        clipboard_job: Some(ClipboardJob {
+            stop: CancellationToken::new(),
+            task: tokio::spawn(async move { Ok(Some(held.await.unwrap())) }),
+        }),
+        ..Frontend::default()
+    };
+    ui.editor.history_previous();
+    ui.return_draft(
+        EditorDraft::at_end("returned".into()),
+        Vec::new(),
+        Vec::new(),
+    );
+    assert_eq!(ui.editor.draft, "history target");
+    release
+        .send(PreparedPaste::Text(" + paste".into()))
+        .unwrap_or_else(|_| panic!("clipboard worker is retained"));
+    finish_clipboard_paste(&mut ui).await.unwrap();
+    assert_eq!(ui.editor.draft, "history target + paste");
+    ui.recover_draft();
+    assert_eq!(ui.editor.draft, "returned");
+    ui.recover_draft();
+    assert_eq!(ui.editor.draft, "history target + paste");
+}
+
+#[tokio::test]
 async fn completed_file_paste_clears_reader_status() {
     let mut ui = Frontend {
         status: "Reading clipboard…".into(),

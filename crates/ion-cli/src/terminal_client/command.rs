@@ -95,7 +95,7 @@ pub(super) async fn dispatch_command(
         );
         return Ok(());
     };
-    if ui.clipboard_job.is_some()
+    if ui.clipboard_pending()
         && !matches!(
             kind,
             CommandKind::Builtin(

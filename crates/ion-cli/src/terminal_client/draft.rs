@@ -94,9 +94,11 @@ impl Editor {
         source: EditorDraft,
         images: Vec<ImageSource>,
         files: Vec<ion_app::prompt_files::TextFile>,
+        replace_empty: bool,
     ) -> bool {
-        let restored = self.restore_browsed_draft();
-        if self.draft.is_empty() && self.images.is_empty() && self.files.is_empty() {
+        let restored = replace_empty && self.restore_browsed_draft();
+        if replace_empty && self.draft.is_empty() && self.images.is_empty() && self.files.is_empty()
+        {
             self.restore_editor(source);
             self.images = images;
             self.files = files;
