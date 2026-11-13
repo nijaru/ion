@@ -1,4 +1,4 @@
-"""Headless SIGINT must settle Core while stdout or stderr is backpressured."""
+"""Headless stop signals must settle Core despite stdout/stderr pressure."""
 
 import array
 import fcntl
@@ -15,6 +15,7 @@ import time
 from contextlib import closing
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from itertools import product
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
@@ -190,8 +191,8 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 assert reopened["entries"] == facts, "read-only reopen changed the timeout outcome"
             finally:
                 cleanup(child, workspace)
-        for json_output in (True, False):
-            workspace = work / ("json" if json_output else "text")
+        for json_output, stop_signal in product((True, False), (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
+            workspace = work / (("json" if json_output else "text") + f"-{stop_signal}")
             workspace.mkdir()
             command = [binary, "--cwd", workspace]
             if json_output:
@@ -232,11 +233,11 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 if not json_output:
                     # A prior cancelled Session must not become this test's
                     # oracle because a checkpoint/touch changed its file mtime.
-                    previous = session_database(work / "ion", work / "json")
+                    previous = session_database(work / "ion", work / f"json-{stop_signal}")
                     stamp = time.time_ns() + 10_000_000_000
                     os.utime(previous, ns=(stamp, stamp))
                 database = session_database(work / "ion", workspace)
-                child.send_signal(signal.SIGINT)
+                child.send_signal(stop_signal)
                 deadline = time.monotonic() + 4
                 facts = []
                 while time.monotonic() < deadline:
@@ -254,7 +255,7 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                     os.close(writer_probe)
                     writer_probe = None
                 stdout, stderr = child.communicate(timeout=8)
-                assert child.returncode != 0, (stdout, stderr)
+                assert child.returncode == 1, (stdout, stderr)
                 if json_output:
                     records = [json.loads(line) for line in stdout.splitlines()]
                     assert records[0]["type"] == "session", records

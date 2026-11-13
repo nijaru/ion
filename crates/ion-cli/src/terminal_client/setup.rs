@@ -179,6 +179,8 @@ async fn run(
                     host.credentials(),
                     &selection.provider,
                     &mut program,
+                    // Pre-Session setup has no application signal scope yet.
+                    &ui.termination,
                 )
                 .await?
             } else {

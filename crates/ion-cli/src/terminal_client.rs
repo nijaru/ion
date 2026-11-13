@@ -24,7 +24,6 @@ use ion_terminal::{
 };
 use ratatui::text::Line;
 use tokio::time::Duration;
-#[cfg(test)]
 use tokio_util::sync::CancellationToken;
 mod activity;
 mod attach;
@@ -162,6 +161,7 @@ struct Frontend {
     pickers: Pickers,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
+    termination: CancellationToken,
     question: Option<QuestionModal>,
     cwd: PathBuf,
     session_label: String,
@@ -178,6 +178,7 @@ pub struct ChatInit {
     pub(crate) keys: KeyBindings,
     pub(crate) themes: crate::themes::Themes,
     pub(crate) interrupt: tokio::signal::unix::Signal,
+    pub(crate) termination: CancellationToken,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
@@ -195,6 +196,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             files: init.files,
             ..Editor::default()
         },
+        termination: init.termination,
         mode: init.tui_mode,
         keys: init.keys,
         themes: init.themes,
@@ -246,7 +248,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             // Host custody owns all subsequent Turns, rejection and Stop.
             tokio::select! {
                 biased;
-                _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
+                _ = crate::termination::requested(&mut interrupt, &ui.termination) => anyhow::bail!("terminal interrupted"),
                 () = std::future::ready(()) => {}
             }
             if !ui.session_io.blocks_input() && let Some(prompts) = initial_prompts.take() {
@@ -262,7 +264,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     ui.gestures.expire(tokio::time::Instant::now());
                     continue;
                 },
-                _ = interrupt.recv() => anyhow::bail!("terminal interrupted"),
+                _ = crate::termination::requested(&mut interrupt, &ui.termination) => anyhow::bail!("terminal interrupted"),
                 _ = readiness.changed(completion_revision) => {
                     completion_revision = readiness.revision();
                     if let Some(owner) = &background { tasks::refresh(&mut ui, owner); }
@@ -316,7 +318,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             let access = if runtime.is_busy() {
                                 Err(anyhow::anyhow!("This action is available after the operation"))
                             } else if missing {
-                                login_in_terminal(terminal, screen, init.services.credentials(), &selection.provider, &mut program).await?
+                                login_in_terminal(terminal, screen, init.services.credentials(), &selection.provider, &mut program, &ui.termination).await?
                             } else { Ok(()) };
                             let result = access.and_then(|()| configuration::model_access_ready(&runtime, &mut ui, init.services.clone(), selection));
                             match result {
@@ -622,16 +624,22 @@ async fn login_in_terminal(
     credentials: &CredentialStore,
     provider: &str,
     program: &mut ProgramStatusState,
+    termination: &CancellationToken,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
     terminal.release_inline(screen).await?;
     // Command admission allows credential entry only while foreground control is idle.
     program.blocked_auth = true;
     program.publish(terminal, false)?;
-    let entry = terminal
-        .read_secret(&format!("{provider} API key: "))
-        .await
-        .context("read login credential")?;
+    let prompt = format!("{provider} API key: ");
+    // Secret entry is cancellation-safe and quarantines type-ahead on drop.
+    // Once a key is submitted, the existing save below must still be joined.
+    let entry = tokio::select! {
+        biased;
+        _ = termination.cancelled() => Ok(Err(ion_terminal::SecretRejection::Cancelled)),
+        entry = terminal.read_secret(&prompt) => entry,
+    }
+    .context("read login credential")?;
     let result = match entry
         .map_err(anyhow::Error::new)
         .context("read login credential")
@@ -712,6 +720,7 @@ async fn edit_text_in_terminal(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     interrupt: &mut tokio::signal::unix::Signal,
+    termination: &CancellationToken,
     text: &str,
     max_bytes: usize,
 ) -> Result<Result<String>> {
@@ -721,7 +730,7 @@ async fn edit_text_in_terminal(
             .await
             .context("release chat surface for editor")?;
         let edited = terminal
-            .with_external(|| crate::external_editor::edit(text, max_bytes))
+            .with_external(|| crate::external_editor::edit(text, max_bytes, termination))
             .await
             .context("external editor terminal handoff")?;
         *screen = new_inline_screen(terminal)
@@ -1628,6 +1637,7 @@ async fn apply_question_action(
                 terminal,
                 screen,
                 interrupt,
+                &ui.termination,
                 &text,
                 ion_app::MAX_ANSWER_BYTES,
             )

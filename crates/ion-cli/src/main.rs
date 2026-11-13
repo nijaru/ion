@@ -33,6 +33,7 @@ mod terminal_client;
 mod terminal_commands;
 mod terminal_completion;
 mod terminal_input;
+mod termination;
 mod themes;
 mod tool_output;
 mod transcript;
@@ -657,6 +658,17 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             let mut interrupt =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
             let stop = tokio_util::sync::CancellationToken::new();
+            let mut application =
+                ion_app::CodingApplication::new(host.clone(), None).with_code_mode(cli.code_mode);
+            if cli.read_only {
+                application = application.with_read_only_tools();
+            } else {
+                application = application.with_tool_selection(tool_selection);
+            }
+            let application_owner = application.owner();
+            let termination =
+                termination::Termination::listen(stop.clone(), application_owner.clone())?;
+            let terminated = termination.token();
             let mut interrupted = false;
             let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
                 ion_app::McpStartup::default()
@@ -670,7 +682,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 tokio::pin!(preparation);
                 tokio::select! {
                     biased;
-                    _ = interrupt.recv() => {
+                    _ = termination::requested(&mut interrupt, &terminated) => {
                         interrupted = true;
                         stop.cancel();
                         // Never drop startup while it owns helpers/transports.
@@ -679,6 +691,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     startup = &mut preparation => startup,
                 }
             };
+            interrupted |= stop.is_cancelled();
             let external_mcp = startup.tools;
             let mut preflight_session = Some(session);
             // Terminal and bidirectional RPC own a live question responder.
@@ -686,17 +699,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // channel and therefore no declared question tool.
             let questions = matches!(&client, Client::Terminal { .. } | Client::Rpc)
                 .then(ion_app::QuestionCustody::new);
-            let mut application =
-                ion_app::CodingApplication::new(host.clone(), None).with_code_mode(cli.code_mode);
             if let Some(tools) = &external_mcp {
                 application = application.with_mcp_tools(tools.clone());
             }
-            if cli.read_only {
-                application = application.with_read_only_tools();
-            } else {
-                application = application.with_tool_selection(tool_selection);
-            }
-            let application_owner = application.owner();
             let retirements = application
                 .session_retirements()
                 .expect("coding resource scope");
@@ -720,7 +725,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 );
                 let prepared = tokio::select! {
                     biased;
-                    _ = interrupt.recv() => {
+                    _ = termination::requested(&mut interrupt, &terminated) => {
                         interrupted = true;
                         preparation.request_stop();
                         preparation.join().await
@@ -765,9 +770,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 let setup = setup.with_completion_delivery(cli.completion_delivery);
                 match client {
                     Client::Headless(request, json) => {
-                        headless::run(setup, request, json, interrupt).await
+                        headless::run(setup, request, json, interrupt, terminated.clone()).await
                     }
-                    Client::Rpc => rpc::run(setup, host, interrupt).await,
+                    Client::Rpc => rpc::run(setup, host, interrupt, terminated.clone()).await,
                     Client::Terminal {
                         prompts,
                         images,
@@ -784,6 +789,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                             keys,
                             themes,
                             interrupt,
+                            termination: terminated.clone(),
                         })
                         .await
                     }
@@ -827,13 +833,26 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Some(tools) => tools.shutdown().await,
                 None => Ok(()),
             };
-            match (result, cleanup) {
+            let result = match (result, cleanup) {
                 (result, Ok(())) => result,
                 (Ok(()), Err(error)) => Err(error),
                 (Err(error), Err(cleanup)) => {
                     Err(error.context(format!("MCP cleanup also failed: {cleanup:#}")))
                 }
+            };
+            let result = match (result, termination.finish().await) {
+                (result, Ok(())) => result,
+                (Ok(()), Err(error)) => {
+                    Err(anyhow::Error::new(error).context("join termination listener"))
+                }
+                (Err(error), Err(cleanup)) => Err(error.context(format!(
+                    "termination listener cleanup also failed: {cleanup}"
+                ))),
+            };
+            if terminated.is_cancelled() && result.is_ok() {
+                anyhow::bail!("application termination requested");
             }
+            result
         }
     }
 }

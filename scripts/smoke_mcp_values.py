@@ -9,6 +9,7 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from itertools import product
 
 binary = Path(os.environ.get("ION_SMOKE_BIN", Path(__file__).resolve().parent.parent / "target/debug/ion"))
 provider_packets = []
@@ -182,8 +183,8 @@ for line in sys.stdin:
         project.unlink()
         sleeper = workspace / "interrupt-helper.py"
         sleeper.write_text("import os,sys,time\nfrom pathlib import Path\npath=Path(sys.argv[1]);tmp=path.with_suffix('.tmp')\ntmp.write_text(str(os.getpid()));tmp.replace(path)\ntime.sleep(60)\n")
-        for client in [["run", "Never admitted."], ["rpc"], ["chat"]]:
-            marker = workspace / ("pid-" + client[0])
+        for client, stop_signal in product([["run", "Never admitted."], ["rpc"], ["chat"]], (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
+            marker = workspace / ("pid-" + client[0] + f"-{stop_signal}")
             save({"interrupted": {"command": sys.executable, "args": [str(source)], "env": {
                 "TOKEN": {"command": sys.executable, "args": [str(sleeper), str(marker)]}
             }}})
@@ -198,7 +199,7 @@ for line in sys.stdin:
                     time.sleep(.01)
                 assert marker.exists(), f"startup helper was not admitted: {client}, Ion status {child.poll()}"
                 pid = int(marker.read_text())
-                os.killpg(child.pid, signal.SIGINT)
+                child.send_signal(stop_signal)
                 stdout, stderr = child.communicate(timeout=5)
                 assert child.returncode == 1, (client, child.returncode, stdout, stderr)
                 assert b"MCP startup interrupted" in stderr, stderr
@@ -208,7 +209,7 @@ for line in sys.stdin:
                 except ProcessLookupError:
                     pass
                 else:
-                    raise AssertionError("SIGINT returned before reaping the helper")
+                    raise AssertionError(f"{stop_signal} returned before reaping the helper")
             finally:
                 if child.poll() is None:
                     child.kill()
@@ -220,7 +221,7 @@ for line in sys.stdin:
                     if observed.returncode == 0 and str(sleeper) in observed.stdout:
                         assert int(observed.stdout.split()[0]) == pid, observed.stdout
                         os.killpg(pid, signal.SIGKILL)
-        print("Ion MCP argv helpers: startup SIGINT joins preparation before headless/RPC/terminal admission: OK")
+        print("Ion MCP argv helpers: startup SIGINT/TERM/HUP join preparation before headless/RPC/terminal admission: OK")
         print("Ion MCP argv helpers: literal data, captured headers/env, offline readers, trust, secret-safe failure and zero replay: OK")
     finally:
         for server in [provider, remote]:

@@ -328,6 +328,7 @@ pub async fn run(
     setup: SessionSetup,
     services: Arc<ion_app::Host>,
     mut interrupt: tokio::signal::unix::Signal,
+    termination: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let mut control = Control::new(setup, services);
     let opened = stdio::Stdio::open(
@@ -349,7 +350,7 @@ pub async fn run(
         CommandReader::new(BufReader::new(input)),
         output,
         async move {
-            interrupt.recv().await;
+            crate::termination::requested(&mut interrupt, &termination).await;
         },
     )
     .await

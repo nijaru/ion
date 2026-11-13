@@ -23,10 +23,18 @@ pub(super) async fn run(
     request: Request,
     json_output: bool,
     mut signal: tokio::signal::unix::Signal,
+    termination: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let mut control = setup.into_control::<()>();
     let application_owner = control.owner();
-    let result = foreground(&mut control, request, json_output, &mut signal).await;
+    let result = foreground(
+        &mut control,
+        request,
+        json_output,
+        &mut signal,
+        &termination,
+    )
+    .await;
     if let Some(owner) = &application_owner {
         owner.request_shutdown();
     }
@@ -59,6 +67,7 @@ async fn foreground(
     request: Request,
     json_output: bool,
     signal: &mut tokio::signal::unix::Signal,
+    termination: &tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     // Capture both streams before changing flags: `2>&1` can alias them.
     let (stdout, stderr) = Stdio::open(
@@ -82,7 +91,7 @@ async fn foreground(
     // A signal received during binding must not admit the launch batch.
     tokio::select! {
         biased;
-        _ = signal.recv() => return Err(AgentError::Cancelled.into()),
+        _ = crate::termination::requested(signal, termination) => return Err(AgentError::Cancelled.into()),
         () = std::future::ready(()) => {}
     }
     match request {
@@ -143,7 +152,7 @@ async fn foreground(
                 completion_revision = readiness.revision();
                 poll_control = true;
             }
-            _ = signal.recv(), if listening => {
+            _ = crate::termination::requested(signal, termination), if listening => {
                 listening = false;
                 control.request_stop();
                 request_shutdown();

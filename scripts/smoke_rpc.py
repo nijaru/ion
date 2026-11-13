@@ -9,6 +9,7 @@ import os
 import select
 import socket
 import sqlite3
+import signal
 import struct
 import subprocess
 import tempfile
@@ -816,8 +817,10 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         # Fill physical stdout with a large state response, then request abort
         # or EOF without reading it. Cancellation must settle the native process
         # before publication resumes; later output must remain valid JSONL.
-        for abort in (False, True):
-            pressure_workspace = work / ("pressure-abort" if abort else "pressure-eof")
+        for stop_mode in ("eof", "abort", "terminate", "hangup"):
+            abort = stop_mode == "abort"
+            stop_signal = {"terminate":signal.SIGTERM, "hangup":signal.SIGHUP}.get(stop_mode)
+            pressure_workspace = work / ("pressure-" + stop_mode)
             pressure_workspace.mkdir()
             pressure = subprocess.Popen([binary, "--cwd", pressure_workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
             pressure_pid = None
@@ -843,7 +846,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                     time.sleep(0.01)
                 assert unread[0] >= 4096, "stdout did not acquire the large response"
                 # No reads here. The response is larger than the pipe capacity.
-                if abort:
+                if stop_signal is not None:
+                    pressure.send_signal(stop_signal)
+                elif abort:
                     # Exhaust normal reply admission without consuming stdout.
                     # Refusals must not grow a deferred reply queue, and the
                     # dedicated control lane must still convey abort.
@@ -863,6 +868,15 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                         break
                     time.sleep(0.01)
                 assert pressure_pid is None, "stdout backpressure prevented native cancellation/settlement"
+                if stop_signal is not None:
+                    # Like external SIGINT, termination skips recovery publication;
+                    # it must exit without waiting for this unread peer to drain.
+                    assert pressure.wait(timeout=5) == 1
+                    view = json.loads(subprocess.run([binary, "--cwd", pressure_workspace, "--session", pressure_session, "inspect"], env=env, check=True, capture_output=True).stdout)
+                    assert view["unfinished_turn"] is None, view
+                    shell = next(entry["data"]["outcome"] for entry in view["entries"] if entry["kind"] == "user_shell_settled")
+                    assert shell["kind"] == "observed" and shell["output"]["value"]["cancelled"], shell
+                    continue
                 if pressure.stdin is not None:
                     pressure.stdin.close()
                     pressure.stdin = None
