@@ -217,10 +217,10 @@ where
             () = stop.cancelled() => return (Err(AgentError::Cancelled), output_observed),
         };
         match event {
-            Some(Ok(ModelStreamEvent::TextDelta(text))) if !text.is_empty() => {
+            Some(Ok(ModelStreamEvent::TextDelta { block, text })) if !text.is_empty() => {
                 output_observed = true;
                 text_observed = true;
-                observe(AgentEvent::TextDelta(text));
+                observe(AgentEvent::TextDelta { block, text });
             }
             Some(Ok(ModelStreamEvent::ThinkingDelta { block, text })) if !text.is_empty() => {
                 output_observed = true;
@@ -237,7 +237,9 @@ where
             Some(Ok(ModelStreamEvent::Usage(snapshot))) => {
                 ObservedUsage::update(usage, &route, snapshot);
             }
-            Some(Ok(ModelStreamEvent::TextDelta(_) | ModelStreamEvent::ThinkingDelta { .. })) => {}
+            Some(Ok(
+                ModelStreamEvent::TextDelta { .. } | ModelStreamEvent::ThinkingDelta { .. },
+            )) => {}
             Some(Ok(ModelStreamEvent::ProviderReplayNotice {
                 action,
                 reason,
@@ -267,21 +269,20 @@ where
                 // Completion-only services still supplied provisional visible
                 // text, including on incomplete responses that cannot commit.
                 if !text_observed && response.message.role == ion_ai::Role::Assistant {
-                    let text = response
+                    for (block, text) in response
                         .message
                         .content
                         .iter()
-                        .filter_map(|part| {
-                            if let Content::Text(text) = part {
-                                Some(text.as_str())
-                            } else {
-                                None
-                            }
+                        .filter_map(|part| match part {
+                            Content::Text(text) if !text.is_empty() => Some(text),
+                            _ => None,
                         })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if !text.is_empty() {
-                        observe(AgentEvent::TextDelta(text));
+                        .enumerate()
+                    {
+                        observe(AgentEvent::TextDelta {
+                            block,
+                            text: text.clone(),
+                        });
                     }
                 }
                 return (Ok(response), output_observed);

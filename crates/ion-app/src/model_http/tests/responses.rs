@@ -32,6 +32,95 @@ fn completed(events: Vec<ModelStreamEvent>) -> ModelResponse {
 }
 
 #[test]
+fn text_and_refusal_blocks_retain_identity_across_items_snapshots_and_interleaving() {
+    let r = request();
+    let mut state = ResponsesState::default();
+    let mut first = text_item("");
+    first["content"] = json!([]);
+    let reasoning = json!({"type":"reasoning","id":"rs_1","summary":[]});
+    let second = json!({"type":"message","id":"msg_2","role":"assistant","status":"completed","phase":"final_answer","content":[]});
+    for (index, item) in [first, reasoning, second].into_iter().enumerate() {
+        state.accept(&added(index, item), &r).unwrap();
+    }
+    let mut observed = Vec::new();
+    for (kind, output_index, item_id, part_index, delta) in [
+        ("response.output_text.delta", 0, "msg_1", 1, "A"),
+        ("response.reasoning_summary_text.delta", 1, "rs_1", 0, "T"),
+        ("response.refusal.delta", 2, "msg_2", 0, "B"),
+        ("response.output_text.delta", 0, "msg_1", 1, "a"),
+    ] {
+        let mut frame =
+            json!({"type":kind,"output_index":output_index,"item_id":item_id,"delta":delta});
+        frame[if output_index == 1 {
+            "summary_index"
+        } else {
+            "content_index"
+        }] = json!(part_index);
+        observed.extend(state.accept(&frame, &r).unwrap());
+    }
+    assert_eq!(
+        observed,
+        vec![
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "A".into()
+            },
+            ModelStreamEvent::ThinkingDelta {
+                block: 0,
+                text: "T".into()
+            },
+            ModelStreamEvent::TextDelta {
+                block: 1,
+                text: "B".into()
+            },
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "a".into()
+            },
+        ]
+    );
+    let mut first = text_item("");
+    first["content"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"type":"output_text","text":"Aa","annotations":[]}));
+    let reasoning = json!({"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"T"}],"encrypted_content":"PRIVATE_CIPHER"});
+    let second = json!({"type":"message","id":"msg_2","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"refusal","refusal":"B"}]});
+    for (index, item) in [first.clone(), reasoning.clone(), second.clone()]
+        .into_iter()
+        .enumerate()
+    {
+        assert!(
+            state
+                .accept(
+                    &json!({"type":"response.output_item.done","output_index":index,"item":item}),
+                    &r
+                )
+                .unwrap()
+                .iter()
+                .all(|event| !matches!(
+                    event,
+                    ModelStreamEvent::TextDelta { .. } | ModelStreamEvent::ThinkingDelta { .. }
+                ))
+        );
+    }
+    let response = completed(
+        state
+            .accept(&terminal(vec![first, reasoning, second]), &r)
+            .unwrap(),
+    );
+    assert_eq!(
+        response.message.content,
+        vec![
+            Content::Text("".into()),
+            Content::Text("Aa".into()),
+            Content::Thinking("T".into()),
+            Content::Text("B".into()),
+        ]
+    );
+}
+
+#[test]
 fn plain_chat_history_migrates_but_native_chat_replay_is_rejected() {
     let mut r = request();
     r.route = ModelRoute::direct(

@@ -861,7 +861,10 @@ async fn passive_overflow_retains_question_invalidation_without_stopping_core() 
             .update(
                 ControlUpdate::Activity(ion_app::Observation::Event {
                     operation,
-                    event: Arc::new(ion_core::AgentEvent::TextDelta(text.into())),
+                    event: Arc::new(ion_core::AgentEvent::TextDelta {
+                        block: 0,
+                        text: text.into(),
+                    }),
                 }),
                 &mut output,
             )

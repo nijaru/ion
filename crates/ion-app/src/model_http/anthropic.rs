@@ -2,7 +2,10 @@
 use super::*;
 
 enum AnthropicBlock {
-    Text(String),
+    Text {
+        text: String,
+        human_block: Option<usize>,
+    },
     Thinking {
         text: String,
         signature: String,
@@ -25,6 +28,7 @@ pub(super) struct AnthropicState {
     model: Option<String>,
     prefix_digest: String,
     blocks: Vec<AnthropicBlock>,
+    text_blocks: usize,
     thinking_blocks: usize,
     /// The matching response blocks, retained verbatim apart from applying
     /// streamed field deltas. Indices follow `blocks` throughout a message.
@@ -80,6 +84,7 @@ impl AnthropicState {
             budget: ResponseBudget::default(),
             model: None,
             blocks: Vec::new(),
+            text_blocks: 0,
             thinking_blocks: 0,
             wire_blocks: Vec::new(),
             ids: BTreeSet::new(),
@@ -241,12 +246,21 @@ impl AnthropicState {
                         let text = block["text"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid text block"))?;
-                        self.blocks.push(AnthropicBlock::Text(text.into()));
-                        if text.is_empty() {
+                        let human_block = if text.is_empty() {
                             None
                         } else {
-                            Some(ModelStreamEvent::TextDelta(text.into()))
-                        }
+                            let block = self.text_blocks;
+                            self.text_blocks += 1;
+                            Some(block)
+                        };
+                        self.blocks.push(AnthropicBlock::Text {
+                            text: text.into(),
+                            human_block,
+                        });
+                        human_block.map(|block| ModelStreamEvent::TextDelta {
+                            block,
+                            text: text.into(),
+                        })
                     }
                     Some("thinking") => {
                         let text = block["thinking"]
@@ -334,7 +348,7 @@ impl AnthropicState {
                     .get_mut(index)
                     .ok_or_else(|| invalid("delta for unknown block"))?;
                 match (block, value["delta"]["type"].as_str()) {
-                    (AnthropicBlock::Text(text), Some("text_delta")) => {
+                    (AnthropicBlock::Text { text, human_block }, Some("text_delta")) => {
                         let part = value["delta"]["text"]
                             .as_str()
                             .ok_or_else(|| invalid("invalid text delta"))?;
@@ -343,7 +357,15 @@ impl AnthropicState {
                         Ok(if part.is_empty() {
                             Vec::new()
                         } else {
-                            vec![ModelStreamEvent::TextDelta(part.into())]
+                            let block = *human_block.get_or_insert_with(|| {
+                                let block = self.text_blocks;
+                                self.text_blocks += 1;
+                                block
+                            });
+                            vec![ModelStreamEvent::TextDelta {
+                                block,
+                                text: part.into(),
+                            }]
                         })
                     }
                     (
@@ -417,7 +439,7 @@ impl AnthropicState {
                     .get_mut(index)
                     .ok_or_else(|| invalid("missing Anthropic replay block"))?;
                 let content = match block {
-                    AnthropicBlock::Text(text) => {
+                    AnthropicBlock::Text { text, .. } => {
                         let text = std::mem::take(text);
                         wire["text"] = json!(&text);
                         Some(Content::Text(text))

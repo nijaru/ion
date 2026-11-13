@@ -185,7 +185,7 @@ impl ion_ai::ModelService for ProgressModel {
         Box::pin(async move {
             let stream: ion_ai::ModelStream = Box::pin(async_stream::stream! {
                 for count in 1.. {
-                    yield Ok(ModelStreamEvent::TextDelta("still working".into()));
+                    yield Ok(ModelStreamEvent::TextDelta { block: 0, text: "still working".into() });
                     progress.send_replace(count);
                     tokio::time::sleep(Duration::from_secs(10)).await;
                 }

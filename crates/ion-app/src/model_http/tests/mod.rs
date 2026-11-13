@@ -1,6 +1,7 @@
 mod context_capacity;
 mod responses;
 mod stream_limits;
+mod text_blocks;
 mod tool_ids;
 
 use super::*;
@@ -1350,7 +1351,10 @@ fn late_structured_thinking_keeps_summaries_without_duplicate_streams() {
         events,
         vec![
             ModelStreamEvent::OutputObserved,
-            ModelStreamEvent::TextDelta("answer".into())
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "answer".into()
+            }
         ]
     );
     assert_eq!(
@@ -1919,7 +1923,7 @@ async fn chat_stream_accepts_cr_and_mixed_sse_line_endings() {
     let mut stream = model.stream(request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
-        ModelStreamEvent::TextDelta(text) if text == "hi"
+        ModelStreamEvent::TextDelta { text, .. } if text == "hi"
     ));
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
@@ -1973,7 +1977,7 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     let mut stream = model.stream(request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
-        ModelStreamEvent::TextDelta(_)
+        ModelStreamEvent::TextDelta { .. }
     ));
     assert_eq!(
         stream.next().await.unwrap().unwrap_err().kind,
@@ -1991,7 +1995,7 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     let mut stream = model.stream(request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
-        ModelStreamEvent::TextDelta(_)
+        ModelStreamEvent::TextDelta { .. }
     ));
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
@@ -2016,7 +2020,7 @@ async fn initial_sse_bom_preserves_the_first_delta_across_chunks() {
         let mut completed = None;
         while let Some(event) = stream.next().await {
             match event.unwrap() {
-                ModelStreamEvent::TextDelta(text) => deltas.push_str(&text),
+                ModelStreamEvent::TextDelta { text, .. } => deltas.push_str(&text),
                 ModelStreamEvent::Completed(response) => completed = Some(response),
                 _ => {}
             }
@@ -2168,7 +2172,7 @@ async fn chat_stream_error_preserves_bounded_reason_and_never_completes() {
     let mut stream = model.stream(request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
-        ModelStreamEvent::TextDelta(_)
+        ModelStreamEvent::TextDelta { .. }
     ));
     let error = stream.next().await.unwrap().unwrap_err();
     assert_eq!(error.kind, ProviderErrorKind::Server);

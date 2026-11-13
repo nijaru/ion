@@ -461,6 +461,67 @@ fn activity_reading_uses_occurrences_and_children_through_fold_and_reflow() {
 }
 
 #[tokio::test]
+async fn interleaved_text_blocks_render_on_distinct_rows() {
+    use ion_core::AgentEvent;
+    let mut fixture = crate::terminal_client::tests::Fixture::new();
+    let operation = fixture
+        .control
+        .compact(
+            None,
+            crate::terminal_client::EditorDraft::at_end(String::new()),
+        )
+        .unwrap();
+    let mut document = fixtures::document(TranscriptProjection::default());
+    document.observe(
+        operation,
+        &AgentEvent::TurnAccepted {
+            entry: 1,
+            turn: 1,
+            input: ion_ai::Message::user_input("request".into(), []),
+        },
+    );
+    for (block, text) in [(0, "FIRST"), (1, "SECOND"), (0, "_TAIL")] {
+        document.observe(
+            operation,
+            &AgentEvent::TextDelta {
+                block,
+                text: text.into(),
+            },
+        );
+    }
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    let options = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    let mut presenter = BlockPresenter::default();
+    let rows = presenter
+        .window(
+            &document,
+            &mut ConversationView::default(),
+            (80, 40),
+            false,
+            false,
+            &options,
+        )
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let first = rows
+        .iter()
+        .position(|row| row.contains("FIRST_TAIL"))
+        .unwrap();
+    let second = rows.iter().position(|row| row.contains("SECOND")).unwrap();
+    assert!(first < second);
+    assert!(!rows.iter().any(|row| row.contains("FIRSTSECOND")));
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn growing_uncommitted_text_keeps_its_original_byte_location() {
     use ion_core::AgentEvent;
     let mut fixture = crate::terminal_client::tests::Fixture::new();
@@ -483,7 +544,13 @@ async fn growing_uncommitted_text_keeps_its_original_byte_location() {
     let text = (0..100)
         .map(|line| format!("MARK{line:03} **alpha** beta gamma\n\n"))
         .collect::<String>();
-    assert!(!document.observe(operation, &AgentEvent::TextDelta(text.clone())));
+    assert!(!document.observe(
+        operation,
+        &AgentEvent::TextDelta {
+            block: 0,
+            text: text.clone()
+        }
+    ));
     let keys = crate::keybindings::KeyBindings::default();
     let theme = Theme::default();
     let options = RenderOptions::new(
@@ -514,7 +581,10 @@ async fn growing_uncommitted_text_keeps_its_original_byte_location() {
     for width in [22, 120, 80] {
         assert!(!document.observe(
             operation,
-            &AgentEvent::TextDelta("more streamed content\n\n".into())
+            &AgentEvent::TextDelta {
+                block: 0,
+                text: "more streamed content\n\n".into()
+            }
         ));
         let rows = presenter.window(&document, &mut view, (width, 8), false, false, &options);
         assert!(rows[0].to_string().contains("MARK090"));

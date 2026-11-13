@@ -63,7 +63,13 @@ impl ModelService for Model {
                 .expect("fixture gate stays open")
                 .forget();
             let text = "x".repeat(300);
-            let mut events = vec![ModelStreamEvent::TextDelta("x".into()); 300];
+            let mut events = vec![
+                ModelStreamEvent::TextDelta {
+                    block: 0,
+                    text: "x".into()
+                };
+                300
+            ];
             events.push(ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,

@@ -117,7 +117,10 @@ mod tests {
         assert_eq!(report.output().unwrap().text, "committed\nsecond block");
         event(
             &mut report,
-            AgentEvent::TextDelta("discarded attempt".into()),
+            AgentEvent::TextDelta {
+                block: 0,
+                text: "discarded attempt".into(),
+            },
         );
         event(&mut report, AgentEvent::ResponseRestarted);
         assert_eq!(report.output().unwrap().text, "committed\nsecond block");
@@ -128,14 +131,32 @@ mod tests {
                 text: "never disclose".into(),
             },
         );
-        event(&mut report, AgentEvent::TextDelta("fresh 🚀".into()));
+        event(
+            &mut report,
+            AgentEvent::TextDelta {
+                block: 0,
+                text: "fresh 🚀".into(),
+            },
+        );
         assert_eq!(report.output().unwrap().text, "fresh 🚀");
         report.observe(ControlUpdate::Activity(Observation::Gap { skipped: 3 }));
-        event(&mut report, AgentEvent::TextDelta("orphan suffix".into()));
+        event(
+            &mut report,
+            AgentEvent::TextDelta {
+                block: 0,
+                text: "orphan suffix".into(),
+            },
+        );
         let gap = report.output().unwrap();
         assert!(gap.text.is_empty() && gap.observation_gap);
         event(&mut report, AgentEvent::ResponseRestarted);
-        event(&mut report, AgentEvent::TextDelta("new full prefix".into()));
+        event(
+            &mut report,
+            AgentEvent::TextDelta {
+                block: 0,
+                text: "new full prefix".into(),
+            },
+        );
         assert_eq!(report.output().unwrap().text, "new full prefix");
         assert!(!report.output().unwrap().observation_gap);
         event(

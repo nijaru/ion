@@ -138,7 +138,7 @@ impl ChildProgress {
             | AgentEvent::ContextCompacted { .. }
             | AgentEvent::ProviderReplayRebased => Some(ChildActivity::Model),
             AgentEvent::ThinkingDelta { .. } => Some(ChildActivity::Thinking),
-            AgentEvent::TextDelta(_) => Some(ChildActivity::Text),
+            AgentEvent::TextDelta { .. } => Some(ChildActivity::Text),
             AgentEvent::ToolStarted { .. }
             | AgentEvent::ChildToolStarted { .. }
             | AgentEvent::ChildToolFinished { .. } => Some(ChildActivity::Tool),
@@ -211,10 +211,49 @@ fn elapsed(started: Instant) -> u64 {
 #[derive(Default)]
 struct VisibleResponse {
     committed: Option<DelegationPartialOutput>,
-    streaming: Option<DelegationPartialOutput>,
+    streaming: Option<StreamingText>,
     suppress: bool,
     gap: bool,
 }
+// Only retained prefix blocks need offsets. After truncation, new block IDs
+// are counted without allocating; earlier blocks can still displace the suffix.
+// The 50 KiB cap is text, not bookkeeping: each additional retained block costs
+// a separator and a nonempty delta, bounding the number of offsets as well.
+#[derive(Default)]
+struct StreamingText {
+    output: DelegationPartialOutput,
+    ends: Vec<usize>,
+    observed_blocks: usize,
+}
+
+impl StreamingText {
+    fn push(&mut self, block: usize, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        assert!(
+            block <= self.observed_blocks,
+            "text block indices are consecutive"
+        );
+        if block == self.observed_blocks {
+            self.observed_blocks += 1;
+            if self.output.truncated {
+                return;
+            }
+            if !self.ends.is_empty() {
+                self.output.push_text("\n");
+            }
+            self.ends.push(self.output.text.len());
+        }
+        if let Some(&position) = self.ends.get(block) {
+            let inserted = self.output.insert_text(position, text);
+            for end in &mut self.ends[block..] {
+                *end = (*end + inserted).min(self.output.text.len());
+            }
+        }
+    }
+}
+
 impl VisibleResponse {
     fn commit(&mut self, text: &str) {
         let mut output = DelegationPartialOutput::default();
@@ -227,9 +266,9 @@ impl VisibleResponse {
 
     fn observe(&mut self, event: &AgentEvent) {
         match event {
-            AgentEvent::TextDelta(text) if !self.suppress => {
+            AgentEvent::TextDelta { block, text } if !self.suppress && !text.is_empty() => {
                 self.gap = false;
-                self.streaming.get_or_insert_default().push_text(text);
+                self.streaming.get_or_insert_default().push(*block, text);
             }
             AgentEvent::AssistantCommitted { content, .. } => {
                 let mut output = DelegationPartialOutput::default();
@@ -262,6 +301,7 @@ impl VisibleResponse {
     fn output(&self) -> Option<DelegationPartialOutput> {
         self.streaming
             .as_ref()
+            .map(|streaming| &streaming.output)
             .filter(|output| !output.text.is_empty())
             .or(self.committed.as_ref())
             .cloned()
@@ -279,6 +319,49 @@ impl VisibleResponse {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn visible_text_keeps_block_order_and_bounds_interleaved_utf8_prefixes() {
+        let mut visible = VisibleResponse::default();
+        let mut blocks = [String::new(), String::new(), String::new()];
+        let limit = ion_core::MAX_DELEGATION_PARTIAL_BYTES;
+        let mut observed = 0;
+        for (block, text) in [
+            (0, "A".into()),
+            (1, "🦀".repeat(limit)),
+            (2, "dropped".into()),
+            (0, "x".into()),
+            (0, "yz".into()),
+            (1, "late suffix".into()),
+            (0, "🚀".repeat(limit)),
+            (0, "more".into()),
+        ] {
+            blocks[block].push_str(&text);
+            visible.observe(&AgentEvent::TextDelta { block, text });
+            observed = observed.max(block + 1);
+            let full = blocks[..observed].join("\n");
+            let output = visible.output().unwrap();
+            let end = full.floor_char_boundary(limit.min(full.len()));
+            assert_eq!(output.text, full[..end]);
+            assert_eq!(output.truncated, full.len() > limit);
+            assert!(!output.observation_gap);
+        }
+        visible.observe(&AgentEvent::ResponseRestarted);
+        for (block, text) in [(0, "first"), (1, "second"), (0, " tail")] {
+            visible.observe(&AgentEvent::TextDelta {
+                block,
+                text: text.into(),
+            });
+        }
+        assert_eq!(visible.output().unwrap().text, "first tail\nsecond");
+        visible.commit("authoritative");
+        assert_eq!(visible.output().unwrap().text, "authoritative");
+        visible.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "new response".into(),
+        });
+        assert_eq!(visible.output().unwrap().text, "new response");
+    }
 
     #[tokio::test(start_paused = true)]
     async fn activity_is_observed_not_polled_and_runtime_freezes_before_cleanup() {

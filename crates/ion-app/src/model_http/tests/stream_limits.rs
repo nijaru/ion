@@ -36,7 +36,7 @@ async fn framing_overhead_does_not_consume_the_decoded_output_allowance() {
         let mut completed = None;
         while let Some(event) = stream.next().await {
             match event? {
-                ModelStreamEvent::TextDelta(part) => text += part.len(),
+                ModelStreamEvent::TextDelta { text: part, .. } => text += part.len(),
                 ModelStreamEvent::Completed(response) => completed = Some(response),
                 _ => {}
             }

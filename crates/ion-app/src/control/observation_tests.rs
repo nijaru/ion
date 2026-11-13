@@ -25,7 +25,10 @@ impl Wake for ReentrantObserver {
             return;
         }
         if !self.queued.swap(true, Ordering::SeqCst) {
-            gate.observer()(AgentEvent::TextDelta("reentrant suffix".into()));
+            gate.observer()(AgentEvent::TextDelta {
+                block: 0,
+                text: "reentrant suffix".into(),
+            });
         }
     }
 }
@@ -34,8 +37,14 @@ fn admission_prefix_publication_allows_reentrant_wakes_without_overtaking() {
     let (sender, mut receiver) = broadcast::channel(OBSERVATION_CAPACITY);
     let gate = AdmissionObservations::new(sender, OperationId(7));
     let mut observer = gate.observer();
-    observer(AgentEvent::TextDelta("first".into()));
-    observer(AgentEvent::TextDelta("second".into()));
+    observer(AgentEvent::TextDelta {
+        block: 0,
+        text: "first".into(),
+    });
+    observer(AgentEvent::TextDelta {
+        block: 0,
+        text: "second".into(),
+    });
     let probe = Arc::new(ReentrantObserver {
         gate: Arc::downgrade(&gate),
         locked: AtomicBool::new(false),
@@ -64,7 +73,7 @@ fn admission_prefix_publication_allows_reentrant_wakes_without_overtaking() {
         let Observation::Event { event, .. } = receiver.try_recv().unwrap() else {
             panic!("event")
         };
-        assert!(matches!(&*event, AgentEvent::TextDelta(value) if value == text));
+        assert!(matches!(&*event, AgentEvent::TextDelta { text: value, .. } if value == text));
     }
     assert!(receiver.try_recv().is_err());
 }
@@ -75,7 +84,10 @@ fn admission_prefix_retains_gap_and_bounded_ordered_suffix() {
     let gate = AdmissionObservations::new(sender, OperationId(7));
     let mut observer = gate.observer();
     for index in 0..80 {
-        observer(AgentEvent::TextDelta(index.to_string()));
+        observer(AgentEvent::TextDelta {
+            block: 0,
+            text: index.to_string(),
+        });
     }
     gate.publish();
     assert!(matches!(
@@ -86,7 +98,9 @@ fn admission_prefix_retains_gap_and_bounded_ordered_suffix() {
         let Observation::Event { event, .. } = receiver.try_recv().unwrap() else {
             panic!("event")
         };
-        assert!(matches!(&*event, AgentEvent::TextDelta(value) if value == &index.to_string()));
+        assert!(
+            matches!(&*event, AgentEvent::TextDelta { text: value, .. } if value == &index.to_string())
+        );
     }
     assert!(receiver.try_recv().is_err());
 }

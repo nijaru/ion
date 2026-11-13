@@ -841,9 +841,61 @@ mod tests {
     }
 
     #[test]
+    fn second_live_text_block_retains_its_reading_position_after_commit() {
+        let mut live = LiveTranscript::default();
+        live.observe(&AgentEvent::TurnAccepted {
+            entry: 1,
+            turn: 1,
+            input: Message::user_input("request".into(), []),
+        });
+        let second = (0..40)
+            .map(|line| format!("SECOND_{line:03}\n\n"))
+            .collect::<String>();
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "FIRST".into(),
+        });
+        live.observe(&AgentEvent::TextDelta {
+            block: 1,
+            text: second.clone(),
+        });
+        let mut view = DetailView::default();
+        view.prepare(live.projection().items.iter(), &[], live.revision(), 80);
+        read_marker(&mut view, "SECOND_010");
+        assert_eq!(
+            view.anchor.as_ref().unwrap().point.unwrap().root,
+            ContentRoot::Part(1)
+        );
+        let event = AgentEvent::AssistantCommitted {
+            entry: 2,
+            turn: 1,
+            content: vec![
+                Content::Text(" ".into()),
+                Content::Text("FIRST".into()),
+                Content::Text(second),
+            ],
+            tool_activities: vec![],
+            termination: ResponseTermination::Completed,
+        };
+        view.commit_response(&live, &event);
+        live.observe(&event);
+        view.prepare(live.projection().items.iter(), &[], live.revision(), 20);
+        assert!(view.window(8)[0].contains("SECOND_010"));
+        let anchor = view.anchor.as_ref().unwrap();
+        assert_eq!(
+            anchor.entry,
+            EntryKey::Fact(TranscriptSource { entry: 2, part: 2 })
+        );
+        assert_eq!(anchor.point.unwrap().root, ContentRoot::Part(0));
+    }
+
+    #[test]
     fn tail_follows_growth_and_explicit_return_releases_reading_position() {
         let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TextDelta("old\n".repeat(100)));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "old\n".repeat(100),
+        });
         let mut view = DetailView::default();
         view.prepare(live.projection().items.iter(), &[], live.revision(), 80);
         view.window(8);
@@ -851,7 +903,10 @@ mod tests {
         assert!(view.anchor.is_some());
         view.scroll_by(isize::MAX);
         assert!(view.anchor.is_none());
-        live.observe(&AgentEvent::TextDelta("LATEST_MARKER".into()));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "LATEST_MARKER".into(),
+        });
         view.invalidate();
         view.prepare(live.projection().items.iter(), &[], live.revision(), 12);
         assert!(view.window(8).join("").contains("LATEST_MARKER"));
@@ -943,7 +998,10 @@ mod tests {
     fn inspector_keeps_source_position_when_live_refresh_invalidates_layout() {
         let history = numbered_history();
         let mut live = LiveTranscript::default();
-        live.observe(&AgentEvent::TextDelta("live\n".repeat(20)));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "live\n".repeat(20),
+        });
         let mut view = DetailView::default();
         view.prepare(
             history.items.iter().chain(live.projection().items.iter()),
@@ -954,7 +1012,10 @@ mod tests {
         view.window(8);
         view.scroll_by(-48);
         let first = view.window(8)[0].clone();
-        live.observe(&AgentEvent::TextDelta("more live\n".repeat(20)));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "more live\n".repeat(20),
+        });
         view.invalidate();
         view.prepare(
             history.items.iter().chain(live.projection().items.iter()),
@@ -1061,7 +1122,10 @@ mod tests {
                 },
             },
         });
-        live.observe(&AgentEvent::TextDelta("PROVISIONAL_TEXT".into()));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "PROVISIONAL_TEXT".into(),
+        });
         view.prepare(
             history.items.iter().chain(live.projection().items.iter()),
             live.notices(),

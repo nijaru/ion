@@ -634,7 +634,14 @@ impl LiveTranscript {
             .enumerate()
             .filter_map(|(index, content)| visible_part(content, true).map(|part| (index, part)));
         let mut source = None;
-        for streamed in &message.parts[..=part] {
+        for (index, streamed) in message.parts[..=part].iter().enumerate() {
+            // Canonical assistant projection omits whitespace-only text blocks.
+            if matches!(streamed, TranscriptPart::Text(text) if text.trim().is_empty()) {
+                if index == part {
+                    return None;
+                }
+                continue;
+            }
             let (part, _) = committed.by_ref().find(|(_, value)| value == streamed)?;
             source = Some(TranscriptSource {
                 entry: *entry,
@@ -676,7 +683,7 @@ impl LiveTranscript {
                 self.note("Interrupted Turn continued; reconcile committed history".into());
             }
             AgentEvent::ModelOutputObserved => {}
-            AgentEvent::TextDelta(text) => self.push_text(text),
+            AgentEvent::TextDelta { block, text } => self.push_text(*block, text),
             AgentEvent::ThinkingDelta { block, text } => self.push_thinking(*block, text),
             AgentEvent::AssistantCommitted {
                 turn,
@@ -780,19 +787,26 @@ impl LiveTranscript {
         message
     }
 
-    fn push_text(&mut self, text: &str) {
+    fn push_text(&mut self, block: usize, text: &str) {
         if text.is_empty() {
             return;
         }
         let message = self.partial_response();
-        if let Some(TranscriptPart::Text(current)) = message
+        let count = message
+            .parts
+            .iter()
+            .filter(|part| matches!(part, TranscriptPart::Text(_)))
+            .count();
+        assert!(block <= count, "text block indices are consecutive");
+        if block == count {
+            message.parts.push(TranscriptPart::Text(text.to_owned()));
+        } else if let Some(TranscriptPart::Text(current)) = message
             .parts
             .iter_mut()
-            .find(|part| matches!(part, TranscriptPart::Text(_)))
+            .filter(|part| matches!(part, TranscriptPart::Text(_)))
+            .nth(block)
         {
             current.push_str(text);
-        } else {
-            message.parts.push(TranscriptPart::Text(text.to_owned()));
         }
     }
 
@@ -1323,7 +1337,10 @@ mod tests {
         let source = live.projection().items[1].source();
         assert_eq!(source, Some(TranscriptSource { entry: 21, part: 0 }));
         assert_eq!(live.projection().sealed_prefix(), 1);
-        live.observe(&AgentEvent::TextDelta("discard me".into()));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "discard me".into(),
+        });
         assert!(!live.projection().items[1].is_sealed());
         assert!(!live.projection().items[2].is_sealed());
         assert_eq!(live.projection().items[2].source(), None);
@@ -1362,6 +1379,78 @@ mod tests {
     }
 
     #[test]
+    fn text_blocks_preserve_interleaved_updates_and_committed_sources() {
+        let mut live = LiveTranscript::default();
+        live.observe(&AgentEvent::TurnAccepted {
+            turn: 1,
+            entry: 1,
+            input: Message::user_input("request".into(), []),
+        });
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: " \n".into(),
+        });
+        live.observe(&AgentEvent::TextDelta {
+            block: 1,
+            text: "A".into(),
+        });
+        live.observe(&AgentEvent::ThinkingDelta {
+            block: 0,
+            text: "thinking".into(),
+        });
+        live.observe(&AgentEvent::TextDelta {
+            block: 2,
+            text: "B".into(),
+        });
+        live.observe(&AgentEvent::TextDelta {
+            block: 1,
+            text: "a".into(),
+        });
+        let event = committed(
+            4,
+            1,
+            vec![
+                Content::Text(" \n".into()),
+                Content::Text("Aa".into()),
+                Content::Thinking("thinking".into()),
+                Content::Text("B".into()),
+            ],
+        );
+        assert_eq!(live.committed_part_source(&event, 0), None);
+        for part in 1..=3 {
+            assert_eq!(
+                live.committed_part_source(&event, part),
+                Some(TranscriptSource { entry: 4, part })
+            );
+        }
+        // A different canonical order must not invent an anchor.
+        assert_eq!(
+            live.committed_part_source(
+                &committed(
+                    4,
+                    1,
+                    vec![
+                        Content::Thinking("thinking".into()),
+                        Content::Text("Aa".into()),
+                        Content::Text("B".into())
+                    ]
+                ),
+                2
+            ),
+            None
+        );
+        live.observe(&AgentEvent::ResponseRestarted);
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "fresh".into(),
+        });
+        let TranscriptItem::Assistant(message) = live.projection().items.last().unwrap() else {
+            panic!()
+        };
+        assert_eq!(message.parts, vec![TranscriptPart::Text("fresh".into())]);
+    }
+
+    #[test]
     fn streamed_parts_resolve_ordered_duplicates_to_actual_committed_coordinates() {
         let mut live = LiveTranscript::default();
         live.observe(&AgentEvent::TurnAccepted {
@@ -1375,7 +1464,12 @@ mod tests {
                 text: "same".into(),
             });
         }
-        live.observe(&AgentEvent::TextDelta("same".into()));
+        for block in 0..2 {
+            live.observe(&AgentEvent::TextDelta {
+                block,
+                text: "same".into(),
+            });
+        }
         let event = committed(
             4,
             1,
@@ -1385,15 +1479,16 @@ mod tests {
                 call("read", "read", serde_json::json!({})),
                 Content::Thinking("same".into()),
                 Content::Text("same".into()),
+                Content::Text("same".into()),
             ],
         );
-        for (streamed, part) in [1, 3, 4].into_iter().enumerate() {
+        for (streamed, part) in [1, 3, 4, 5].into_iter().enumerate() {
             assert_eq!(
                 live.committed_part_source(&event, streamed),
                 Some(TranscriptSource { entry: 4, part })
             );
         }
-        assert_eq!(live.committed_part_source(&event, 3), None);
+        assert_eq!(live.committed_part_source(&event, 4), None);
         assert_eq!(
             live.committed_part_source(&committed(4, 2, vec![Content::Text("same".into())]), 0),
             None
@@ -1421,7 +1516,10 @@ mod tests {
                 text: text.into(),
             });
         }
-        live.observe(&AgentEvent::TextDelta("provisional".into()));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "provisional".into(),
+        });
         let index = live.provisional_item_index().unwrap();
         let TranscriptItem::Assistant(message) = &live.projection().items[index] else {
             panic!()
@@ -1490,7 +1588,10 @@ mod tests {
                 },
             },
         });
-        live.observe(&AgentEvent::TextDelta("provisional".into()));
+        live.observe(&AgentEvent::TextDelta {
+            block: 0,
+            text: "provisional".into(),
+        });
         live.observe(&committed(
             13,
             3,

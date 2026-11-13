@@ -159,7 +159,10 @@ impl ChatState {
         if let Some(part) = optional_string(delta, "content")?.filter(|s| !s.is_empty()) {
             self.budget.retain(part.len())?;
             self.text.push_str(part);
-            events.push(ModelStreamEvent::TextDelta(part.into()));
+            events.push(ModelStreamEvent::TextDelta {
+                block: 0,
+                text: part.into(),
+            });
         }
         if let Some(fragments) = delta.get("tool_calls").filter(|value| !value.is_null()) {
             let fragments = fragments

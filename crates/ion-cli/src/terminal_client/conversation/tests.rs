@@ -78,7 +78,10 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
 
     conversation.observe(
         operation,
-        &AgentEvent::TextDelta("not yet committed".into()),
+        &AgentEvent::TextDelta {
+            block: 0,
+            text: "not yet committed".into(),
+        },
     );
     assert!(
         sources(&conversation, true).is_empty(),

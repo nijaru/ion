@@ -905,7 +905,10 @@ async fn transient_provider_error_retries_only_before_stream_output() {
     assert_eq!(service.requests().len(), 2);
 
     let service = Arc::new(ScriptedModelService::new([
-        Script::Stream(vec![ModelStreamEvent::TextDelta("partial".into())]),
+        Script::Stream(vec![ModelStreamEvent::TextDelta {
+            block: 0,
+            text: "partial".into(),
+        }]),
         response(vec![Content::Text("should not be used".into())]),
     ]));
     let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
@@ -915,7 +918,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
         &request,
         &CancellationToken::new(),
         &mut |event| {
-            if let AgentEvent::TextDelta(text) = event {
+            if let AgentEvent::TextDelta { text, .. } = event {
                 visible.push_str(&text);
             }
         },
@@ -2238,7 +2241,10 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
         };
         let scripts = Arc::new(ScriptedModelService::new([
             Script::Stream(vec![
-                ModelStreamEvent::TextDelta("first".into()),
+                ModelStreamEvent::TextDelta {
+                    block: 0,
+                    text: "first".into(),
+                },
                 ModelStreamEvent::Completed(first),
             ]),
             response(vec![Content::Text("handled".into())]),
@@ -2266,7 +2272,7 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
                 CancellationToken::new(),
                 inbox.clone(),
                 move |event| {
-                    if matches!(event, AgentEvent::TextDelta(_)) {
+                    if matches!(event, AgentEvent::TextDelta { .. }) {
                         offer.offer(data.clone());
                     }
                 },
@@ -2454,7 +2460,10 @@ async fn assistant_and_steering_commit_together_or_remain_unpublished() {
     let path = root.join("session.sqlite");
     let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
     let scripts = Arc::new(ScriptedModelService::new([Script::Stream(vec![
-        ModelStreamEvent::TextDelta("done".into()),
+        ModelStreamEvent::TextDelta {
+            block: 0,
+            text: "done".into(),
+        },
         ModelStreamEvent::Completed(ModelResponse {
             message: Message {
                 role: Role::Assistant,
@@ -2494,7 +2503,7 @@ async fn assistant_and_steering_commit_together_or_remain_unpublished() {
                 ) {
                     *observed_published.lock().unwrap() += 1;
                 }
-                if matches!(event, AgentEvent::TextDelta(_)) {
+                if matches!(event, AgentEvent::TextDelta { .. }) {
                     observed_steering.push(observed_prompt.clone()).unwrap();
                 }
             },
@@ -2608,7 +2617,10 @@ async fn final_text_and_queued_steering_continue_the_same_turn() {
     };
     let scripts = Arc::new(ScriptedModelService::new([
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("first".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "first".into(),
+            },
             ModelStreamEvent::Completed(first),
         ]),
         response(vec![Content::Text("second".into())]),
@@ -2627,7 +2639,7 @@ async fn final_text_and_queued_steering_continue_the_same_turn() {
             CancellationToken::new(),
             steering.clone(),
             move |event| {
-                if matches!(event, AgentEvent::TextDelta(text) if text == "first") {
+                if matches!(event, AgentEvent::TextDelta { text, .. } if text == "first") {
                     observed_steering.push("also answer this".into()).unwrap();
                 }
             },
@@ -2694,7 +2706,10 @@ async fn committed_sources_cover_reused_calls_and_atomic_steering_readiness() {
         ]),
         response(vec![call()]),
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("first answer".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "first answer".into(),
+            },
             ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -2742,7 +2757,7 @@ async fn committed_sources_cover_reused_calls_and_atomic_steering_readiness() {
             CancellationToken::new(),
             inbox,
             move |event| {
-                if matches!(&event, AgentEvent::TextDelta(text) if text == "first answer") {
+                if matches!(&event, AgentEvent::TextDelta { text, .. } if text == "first answer") {
                     intake.push("first steering".into()).unwrap();
                     intake.push("second steering".into()).unwrap();
                     permit.offer(notice.clone());
@@ -2909,7 +2924,10 @@ async fn committed_transcript_survives_steering_and_response_restart() {
     let scripts = Arc::new(ScriptedModelService::new([
         response(vec![Content::Text("earlier work".into())]),
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("first".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "first".into(),
+            },
             ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -2922,7 +2940,10 @@ async fn committed_transcript_survives_steering_and_response_restart() {
             }),
         ]),
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("discard this attempt".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "discard this attempt".into(),
+            },
             ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -2970,7 +2991,7 @@ async fn committed_transcript_survives_steering_and_response_restart() {
             CancellationToken::new(),
             steering.clone(),
             move |event| {
-                if matches!(&event, AgentEvent::TextDelta(text) if text == "first") {
+                if matches!(&event, AgentEvent::TextDelta { text, .. } if text == "first") {
                     observed_steering
                         .push("after the first answer".into())
                         .unwrap();
@@ -3092,7 +3113,10 @@ async fn image_steering_is_durable_and_replayed_in_the_next_model_step() {
     };
     let scripts = Arc::new(ScriptedModelService::new([
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("first".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "first".into(),
+            },
             ModelStreamEvent::Completed(first),
         ]),
         response(vec![Content::Text("second".into())]),
@@ -3116,7 +3140,7 @@ async fn image_steering_is_durable_and_replayed_in_the_next_model_step() {
             CancellationToken::new(),
             steering.clone(),
             move |event| {
-                if matches!(event, AgentEvent::TextDelta(text) if text == "first") {
+                if matches!(event, AgentEvent::TextDelta { text, .. } if text == "first") {
                     observed_steering
                         .push_message(
                             Message {
@@ -3963,7 +3987,10 @@ async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call
     let scripts = Arc::new(ScriptedModelService::new([
         response(vec![Content::Text("earlier work".into())]),
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("partial answer".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "partial answer".into(),
+            },
             ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -5671,7 +5698,10 @@ async fn visible_partial_output_is_not_silently_replayed_after_overflow() {
     let scripts = Arc::new(ScriptedModelService::new([
         response(vec![Content::Text("first result".into())]),
         Script::Stream(vec![
-            ModelStreamEvent::TextDelta("partial".into()),
+            ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "partial".into(),
+            },
             ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,

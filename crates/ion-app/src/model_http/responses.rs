@@ -15,7 +15,13 @@ enum Channel {
 struct Accumulation {
     text: String,
     done: bool,
-    thinking_block: Option<usize>,
+    block: Option<usize>,
+}
+
+#[derive(Default)]
+struct BlockCounts {
+    text: usize,
+    thinking: usize,
 }
 
 struct Item {
@@ -30,7 +36,7 @@ pub(super) struct ResponsesState {
     id: Option<String>,
     model: Option<String>,
     items: BTreeMap<usize, Item>,
-    thinking_blocks: usize,
+    blocks: BlockCounts,
     usage: Usage,
     pub(super) pending_error: Option<ProviderError>,
 }
@@ -42,7 +48,7 @@ impl Default for ResponsesState {
             id: None,
             model: None,
             items: BTreeMap::new(),
-            thinking_blocks: 0,
+            blocks: BlockCounts::default(),
             usage: Usage::unknown(),
             pending_error: None,
         }
@@ -299,7 +305,7 @@ impl ResponsesState {
                         text,
                         Update::Snapshot,
                         &mut self.budget,
-                        &mut self.thinking_blocks,
+                        &mut self.blocks,
                         &mut events,
                     )?;
                 }
@@ -357,7 +363,7 @@ impl ResponsesState {
                     text,
                     if done { Update::Final } else { Update::Delta },
                     &mut self.budget,
-                    &mut self.thinking_blocks,
+                    &mut self.blocks,
                     &mut events,
                 )?;
             }
@@ -392,7 +398,7 @@ impl ResponsesState {
                     text,
                     Update::Snapshot,
                     &mut self.budget,
-                    &mut self.thinking_blocks,
+                    &mut self.blocks,
                     &mut events,
                 )?;
                 item.parts.insert(channel, (part.clone(), false));
@@ -431,7 +437,7 @@ impl ResponsesState {
                     text,
                     Update::Final,
                     &mut self.budget,
-                    &mut self.thinking_blocks,
+                    &mut self.blocks,
                     &mut events,
                 )?;
                 self.budget.retain_value(part)?;
@@ -567,7 +573,7 @@ fn update(
     text: &str,
     update: Update,
     budget: &mut ResponseBudget,
-    blocks: &mut usize,
+    blocks: &mut BlockCounts,
     events: &mut Vec<ModelStreamEvent>,
 ) -> Result<(), ProviderError> {
     let expected = match channel {
@@ -606,12 +612,20 @@ fn update(
     if !appended.is_empty() {
         match channel {
             Channel::Text(_) | Channel::Refusal(_) => {
-                events.push(ModelStreamEvent::TextDelta(appended.to_owned()))
+                let block = *accumulation.block.get_or_insert_with(|| {
+                    let block = blocks.text;
+                    blocks.text += 1;
+                    block
+                });
+                events.push(ModelStreamEvent::TextDelta {
+                    block,
+                    text: appended.to_owned(),
+                });
             }
             Channel::Summary(_) | Channel::Reasoning(_) => {
-                let block = *accumulation.thinking_block.get_or_insert_with(|| {
-                    let block = *blocks;
-                    *blocks += 1;
+                let block = *accumulation.block.get_or_insert_with(|| {
+                    let block = blocks.thinking;
+                    blocks.thinking += 1;
                     block
                 });
                 events.push(ModelStreamEvent::ThinkingDelta {

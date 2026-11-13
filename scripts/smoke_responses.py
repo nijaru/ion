@@ -67,6 +67,20 @@ class Handler(BaseHTTPRequestHandler):
             step = len(history)
             if self.path == "/v1/responses":
                 payload = self.main_response(body, step)
+            elif self.path == "/blocks/v1/responses":
+                items = [message("msg_a", "Aa", phase="commentary"), message("msg_b", "B")]
+                if step == 1:
+                    payload = b""
+                    for index, item in enumerate(items):
+                        initial = {**item, "status": "in_progress", "content": []}
+                        payload += event("response.output_item.added", output_index=index, item=initial)
+                    for index, delta in [(0, "A"), (1, "B"), (0, "a")]:
+                        payload += event("response.output_text.delta", output_index=index, item_id=items[index]["id"], content_index=0, delta=delta)
+                    payload += finish(items)
+                else:
+                    assert step == 2
+                    assert [item for item in body["input"] if item.get("id") in ("msg_a", "msg_b")] == items
+                    payload = finish([message("msg_blocks_reopen", "BLOCKS_REOPENED")])
             elif self.path == "/retry/v1/responses":
                 if step == 1:
                     prefix = event("response.created", response=dict(id="resp_1", usage=dict(input_tokens=11, output_tokens=2, input_tokens_details=dict(cached_tokens=0))))
@@ -192,6 +206,21 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         assert replay["data"]["output"][0]["encrypted_content"] == "TERMINAL_CIPHER"
         assert not any("TERMINAL_CIPHER" in item.get("text", "") for item in first), "ciphertext entered human progress"
 
+        select("/blocks")
+        blocks = submit("blocks", "Keep interleaved text blocks distinct")
+        assert [item for item in blocks if item["type"] == "text_delta"] == [
+            dict(type="text_delta", block=0, text="A"),
+            dict(type="text_delta", block=1, text="B"),
+            dict(type="text_delta", block=0, text="a"),
+        ], blocks
+        entries = inspect("blocks")
+        messages = [entry["data"]["message"]["content"] for entry in entries if entry["kind"] == "assistant"]
+        assert messages == [[dict(Text="Aa"), dict(Text="B")]], messages
+        assert inspect("blocks") == entries
+        reopened_blocks = submit("blocks", "Continue with the original native messages")
+        assert [item for item in reopened_blocks if item["type"] == "text_delta"] == [dict(type="text_delta", block=0, text="BLOCKS_REOPENED")]
+        assert len(requests["/blocks/v1/responses"]) == 2
+
         select("/retry")
         retried = submit("retry", "Retry before output")
         assert sum(item["type"] == "provider_retry" for item in retried) == 1, retried
@@ -237,4 +266,4 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         thread.join(timeout=2)
         assert not thread.is_alive()
 
-print("Responses stateless replay, native images, real write, reopen, failed-attempt usage and failed/truncated effect fences: ok")
+print("Responses stateless replay, indexed interleaved text, native images, real write, reopen, failed-attempt usage and failed/truncated effect fences: ok")

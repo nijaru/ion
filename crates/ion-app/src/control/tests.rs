@@ -172,7 +172,13 @@ impl ModelService for Model {
             self.permits.acquire().await.unwrap().forget();
             assert!(!self.panic, "injected operation task panic");
             let text = "x".repeat(self.burst.max(1));
-            let mut events = vec![ModelStreamEvent::TextDelta("x".into()); self.burst.max(1)];
+            let mut events = vec![
+                ModelStreamEvent::TextDelta {
+                    block: 0,
+                    text: "x".into()
+                };
+                self.burst.max(1)
+            ];
             events.push(ModelStreamEvent::Completed(ModelResponse {
                 message: Message {
                     role: Role::Assistant,
@@ -663,7 +669,7 @@ async fn joined_operations_deliver_ready_activity_before_settlement() {
                     visible.clear();
                 }
                 ControlUpdate::Activity(Observation::Event { event, .. }) => match event.as_ref() {
-                    AgentEvent::TextDelta(text) => {
+                    AgentEvent::TextDelta { text, .. } => {
                         assert!(!recovering, "orphaned suffix survived a real gap");
                         visible.push_str(text);
                     }

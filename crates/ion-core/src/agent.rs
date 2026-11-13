@@ -583,7 +583,12 @@ pub enum AgentEvent {
     /// Generated content without a human delta. Not call admission or an effect.
     ModelOutputObserved,
     /// Provisional text for the current response only.
-    TextDelta(String),
+    /// Consecutive text block identity within the current response, independent
+    /// of thinking blocks. Deltas can update an earlier block.
+    TextDelta {
+        block: usize,
+        text: String,
+    },
     /// Provisional human thinking, sharing the current response's custody.
     ThinkingDelta {
         block: usize,

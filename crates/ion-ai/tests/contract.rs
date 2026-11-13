@@ -83,7 +83,10 @@ async fn scripted_service_streams_provider_neutral_events() {
         ResponseTermination::Completed,
     );
     let expected = vec![
-        ModelStreamEvent::TextDelta("I will inspect it.".to_owned()),
+        ModelStreamEvent::TextDelta {
+            block: 0,
+            text: "I will inspect it.".to_owned(),
+        },
         ModelStreamEvent::ToolCall(tool_call),
         ModelStreamEvent::Usage(usage),
         ModelStreamEvent::Completed(response.clone()),
@@ -130,7 +133,10 @@ async fn incomplete_termination_is_not_a_complete_answer() {
     );
 
     let service = ScriptedModelService::new([Script::Stream(vec![
-        ModelStreamEvent::TextDelta("partial".to_owned()),
+        ModelStreamEvent::TextDelta {
+            block: 0,
+            text: "partial".to_owned(),
+        },
         ModelStreamEvent::Completed(response),
     ])]);
     let stream = service.stream(request()).await.expect("open stream");

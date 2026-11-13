@@ -19,7 +19,9 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
             json!({"type":"turn_ended","turn":turn,"reason":reason})
         }
         AgentEvent::ModelOutputObserved => json!({"type":"model_output_observed"}),
-        AgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
+        AgentEvent::TextDelta { block, text } => {
+            json!({"type":"text_delta","block":block,"text":text})
+        }
         AgentEvent::ThinkingDelta { block, text } => {
             json!({"type":"thinking_delta","block":block,"text":text})
         }
@@ -172,7 +174,7 @@ pub(super) fn diagnostic(event: &AgentEvent) -> Option<String> {
         AgentEvent::TurnAccepted { .. }
         | AgentEvent::TurnEnded { .. }
         | AgentEvent::ModelOutputObserved
-        | AgentEvent::TextDelta(_)
+        | AgentEvent::TextDelta { .. }
         | AgentEvent::ThinkingDelta { .. }
         | AgentEvent::AssistantCommitted { .. }
         | AgentEvent::SteeringCommitted { .. }

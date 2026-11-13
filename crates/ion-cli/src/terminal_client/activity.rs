@@ -491,7 +491,10 @@ mod tests {
                 block: 0,
                 text: "thinking\n".repeat(40),
             },
-            AgentEvent::TextDelta(body.clone()),
+            AgentEvent::TextDelta {
+                block: 0,
+                text: body.clone(),
+            },
         ] {
             apply(&mut ui, &fixture.control, event(value)).unwrap();
         }
@@ -529,7 +532,10 @@ mod tests {
         apply(
             &mut ui,
             &fixture.control,
-            event(AgentEvent::TextDelta("RETRY_BODY\n".repeat(100))),
+            event(AgentEvent::TextDelta {
+                block: 0,
+                text: "RETRY_BODY\n".repeat(100),
+            }),
         )
         .unwrap();
         super::super::modal_rows(&mut ui, None, 80, 12);
@@ -554,7 +560,10 @@ mod tests {
         apply(
             &mut ui,
             &fixture.control,
-            event(AgentEvent::TextDelta("NEW_RESPONSE\n".repeat(100))),
+            event(AgentEvent::TextDelta {
+                block: 0,
+                text: "NEW_RESPONSE\n".repeat(100),
+            }),
         )
         .unwrap();
         let retired = super::super::modal_rows(&mut ui, None, 80, 12).0;
@@ -704,7 +713,10 @@ mod tests {
         apply(
             &mut ui,
             &fixture.control,
-            event(Arc::new(AgentEvent::TextDelta("lost prefix".into()))),
+            event(Arc::new(AgentEvent::TextDelta {
+                block: 0,
+                text: "lost prefix".into(),
+            })),
         )
         .unwrap();
         assert!(ui.conversation.live().is_some());
@@ -718,7 +730,10 @@ mod tests {
         .unwrap();
         for value in [
             AgentEvent::ResponseRestarted,
-            AgentEvent::TextDelta("surviving tail".into()),
+            AgentEvent::TextDelta {
+                block: 0,
+                text: "surviving tail".into(),
+            },
         ] {
             apply(&mut ui, &fixture.control, event(Arc::new(value))).unwrap();
         }

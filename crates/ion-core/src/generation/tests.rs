@@ -155,7 +155,10 @@ async fn streamed_usage_survives_retry_or_failure_without_becoming_context() {
             }),
         ];
         if partial_output {
-            prefix.push(ModelStreamEvent::TextDelta("partial".into()));
+            prefix.push(ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "partial".into(),
+            });
         }
         let service = Arc::new(InterruptedStream {
             prefix: Mutex::new(Some(prefix)),
@@ -317,7 +320,7 @@ async fn boundary_input_rejection_retains_response_usage_and_original_input() {
             CancellationToken::new(),
             inbox.clone(),
             move |event| {
-                if matches!(event, AgentEvent::TextDelta(_)) {
+                if matches!(event, AgentEvent::TextDelta { .. }) {
                     pending.push(queued.clone()).unwrap();
                 }
             },
@@ -392,7 +395,10 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
             reason: "input transformation".into(),
             count: 1,
         },
-        ModelStreamEvent::TextDelta(String::new()),
+        ModelStreamEvent::TextDelta {
+            block: 0,
+            text: String::new(),
+        },
         ModelStreamEvent::ThinkingDelta {
             block: 0,
             text: String::new(),
@@ -400,7 +406,13 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
     ];
     for (prefix, retry) in [
         (metadata, true),
-        (vec![ModelStreamEvent::TextDelta("partial".into())], false),
+        (
+            vec![ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "partial".into(),
+            }],
+            false,
+        ),
         (
             vec![ModelStreamEvent::ThinkingDelta {
                 block: 0,
@@ -437,7 +449,7 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
                     assert!(!output, "must not retry after output was published");
                     retries += 1;
                 }
-                AgentEvent::TextDelta(_)
+                AgentEvent::TextDelta { .. }
                 | AgentEvent::ThinkingDelta { .. }
                 | AgentEvent::ModelOutputObserved => output = true,
                 AgentEvent::ProviderReplayNotice { .. } => notices += 1,
@@ -467,6 +479,48 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
             assert_eq!(service.requests.load(Ordering::SeqCst), 1);
         }
     }
+}
+
+#[tokio::test]
+async fn completion_only_text_keeps_distinct_live_blocks() {
+    let model: Arc<dyn ModelService> =
+        Arc::new(ion_ai::ScriptedModelService::new([ion_ai::Script::Stream(
+            vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![
+                        Content::Text(String::new()),
+                        Content::Text("First paragraph.".into()),
+                        Content::Text(String::new()),
+                        Content::Text("Second paragraph.".into()),
+                    ],
+                    provider_replay: None,
+                },
+                usage: Usage::unknown(),
+                termination: ion_ai::ResponseTermination::Completed,
+                returned_model: None,
+            })],
+        )]));
+    let mut live = crate::LiveTranscript::default();
+    let attempt = generate_with_retry(
+        &model,
+        &request(),
+        &CancellationToken::new(),
+        &mut |event| live.observe(&event),
+        |_| std::future::ready(Ok(())),
+    )
+    .await;
+    assert!(attempt.outcome.is_ok());
+    let crate::TranscriptItem::Assistant(message) = &live.projection().items[0] else {
+        panic!("expected provisional assistant output");
+    };
+    assert_eq!(
+        message.parts,
+        vec![
+            crate::TranscriptPart::Text("First paragraph.".into()),
+            crate::TranscriptPart::Text("Second paragraph.".into()),
+        ]
+    );
 }
 
 #[tokio::test]
