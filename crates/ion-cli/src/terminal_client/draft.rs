@@ -89,6 +89,22 @@ impl Editor {
         self.error = None;
     }
 
+    /// Direct-command metadata owns the vacated text slot, never attachments.
+    pub(super) fn return_text(&mut self, source: EditorDraft, replace_empty: bool) -> bool {
+        let restored = replace_empty && self.restore_browsed_draft();
+        if replace_empty && self.draft.is_empty() {
+            self.restore_editor(source);
+            true
+        } else {
+            self.recovered.push_back(RecoveredDraft {
+                source,
+                images: Vec::new(),
+                files: Vec::new(),
+            });
+            restored
+        }
+    }
+
     pub(super) fn return_draft(
         &mut self,
         source: EditorDraft,

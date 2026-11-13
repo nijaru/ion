@@ -25,6 +25,19 @@ impl Frontend {
         self.editor.replace_draft_atomic(text);
     }
 
+    pub(super) fn return_command_source(&mut self, source: EditorDraft) {
+        self.gestures.invalidate();
+        let replace_empty = !self.clipboard_pending();
+        if self.editor.return_text(source, replace_empty) {
+            self.pickers.close();
+        }
+        self.note(format!(
+            "Command text retained; {} additional draft(s) · {} cycles without resubmitting",
+            self.editor.recovered.len(),
+            self.keys.hint(crate::keybindings::KeyAction::Dequeue)
+        ));
+    }
+
     pub(super) fn return_draft(
         &mut self,
         source: EditorDraft,

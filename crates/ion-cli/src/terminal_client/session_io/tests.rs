@@ -427,6 +427,140 @@ async fn stale_history_cut_does_not_erase_newer_publication() {
 }
 
 #[tokio::test]
+async fn failed_inspection_keeps_new_input_and_retains_its_command_separately() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.insert("  /session 🦀\n");
+    ui.editor.cursor = 3;
+    let source = ui.editor.take_literal();
+    let release = hold_read(&fixture.control, &mut ui, |_| {
+        ReadOutput::Notice("inspection completed".into())
+    })
+    .await;
+    ui.session_io.retain_source(Some(source));
+    ui.insert("new unsent 雪");
+    ui.editor.cursor = "new ".len();
+    ui.attach_image(ion_app::image_input::ImageSource::Path(
+        fixture.root.join("new.png"),
+    ));
+    release.send(()).unwrap();
+    let mut finished = ui.session_io.complete().await;
+    // Exercise the real terminal's asynchronous error boundary, not an
+    // invented Session journal failure or a model/effect executor.
+    finished.result = Err(anyhow::anyhow!("inspection fixture failure"));
+    assert!(
+        apply(&mut fixture.control, &mut ui, finished)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("new unsent 雪", "new ".len())
+    );
+    assert!(
+        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+    );
+    assert!(
+        ui.pending_history_rows(100)
+            .iter()
+            .any(|line| line.to_string().contains("Command text retained"))
+    );
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("  /session 🦀\n", 3)
+    );
+    assert!(ui.editor.images.is_empty());
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("new unsent 雪", "new ".len())
+    );
+    assert!(
+        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+    );
+    assert!(
+        fixture
+            .control
+            .session()
+            .reader()
+            .unwrap()
+            .view()
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn not_dispatched_retains_new_input_and_returns_only_its_command_text() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.insert("  /command:check 🦀\n");
+    ui.editor.cursor = 3;
+    let source = ui.editor.take_literal();
+    fixture.control.compact(None, source).unwrap();
+    ui.insert("new unsent 雪");
+    ui.editor.cursor = "new ".len();
+    ui.attach_image(ion_app::image_input::ImageSource::Path(
+        fixture.root.join("new.png"),
+    ));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let mut update = fixture.control.next().await;
+            if let ControlUpdate::Settled(settlement) = &mut update {
+                settlement.outcome =
+                    OperationOutcome::NotDispatched(anyhow::anyhow!("manifest changed"));
+                let error = activity::apply(&mut ui, &fixture.control, update)
+                    .unwrap()
+                    .unwrap();
+                assert!(format!("{error:#}").contains("no executor invoked"));
+                break;
+            }
+            activity::apply(&mut ui, &fixture.control, update).unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("new unsent 雪", "new ".len())
+    );
+    assert!(
+        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+    );
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("  /command:check 🦀\n", 3)
+    );
+    assert!(ui.editor.images.is_empty());
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("new unsent 雪", "new ".len())
+    );
+    assert!(
+        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+    );
+    assert!(
+        fixture
+            .control
+            .session()
+            .reader()
+            .unwrap()
+            .view()
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn only_not_dispatched_settlement_returns_exact_direct_source() {
     let mut fixture = Fixture::new();
     let source = EditorDraft {

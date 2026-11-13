@@ -146,7 +146,7 @@ pub(super) fn apply(
                     failure.kind, failure.reason
                 );
                 if failure.kind == ion_app::AdmissionFailureKind::NotAccepted {
-                    ui.restore_editor(failure.metadata);
+                    ui.return_command_source(failure.metadata);
                 } else {
                     ui.note(format!("Continuation outcome unknown; original retained separately, not restored: {}", failure.metadata.literal));
                     ui.unresolved_recoveries.push(failure);
@@ -328,7 +328,7 @@ pub(super) fn apply(
             // Restore that exact source, never an uncertain executed command.
             if not_dispatched {
                 if let Some(source) = settlement.metadata.take() {
-                    ui.restore_editor(source);
+                    ui.return_command_source(source);
                 }
             } else {
                 drop(settlement.metadata);

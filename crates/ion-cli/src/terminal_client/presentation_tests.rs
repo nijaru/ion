@@ -951,6 +951,52 @@ async fn returned_input_does_not_move_a_pending_paste_out_of_browsed_history() {
 }
 
 #[tokio::test]
+async fn returned_command_text_cannot_claim_a_pending_clipboard_paste() {
+    let (release, held) = tokio::sync::oneshot::channel();
+    let mut ui = Frontend {
+        clipboard_job: Some(ClipboardJob {
+            stop: CancellationToken::new(),
+            task: tokio::spawn(async move { Ok(Some(held.await.unwrap())) }),
+        }),
+        ..Frontend::default()
+    };
+    ui.return_command_source(EditorDraft::at_end("! printf previous".into()));
+    assert!(ui.editor.draft.is_empty());
+    release
+        .send(PreparedPaste::Files(vec![PathBuf::from(
+            "/tmp/new file.rs",
+        )]))
+        .unwrap_or_else(|_| panic!("clipboard worker is retained"));
+    finish_clipboard_paste(&mut ui).await.unwrap();
+    assert_eq!(ui.editor.draft, "/tmp/new file.rs");
+    ui.recover_draft();
+    assert_eq!(ui.editor.draft, "! printf previous");
+    ui.recover_draft();
+    assert_eq!(ui.editor.draft, "/tmp/new file.rs");
+}
+
+#[test]
+fn returned_command_text_preserves_the_unsent_draft_under_browsed_history() {
+    let mut ui = Frontend::default();
+    ui.insert("new unsent 雪");
+    ui.editor.cursor = "new ".len();
+    ui.editor.prompt_history = vec!["history target".into()];
+    ui.editor.history_previous();
+    ui.return_command_source(EditorDraft::at_end("/session".into()));
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("new unsent 雪", "new ".len())
+    );
+    ui.recover_draft();
+    assert_eq!(ui.editor.draft, "/session");
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("new unsent 雪", "new ".len())
+    );
+}
+
+#[tokio::test]
 async fn completed_file_paste_clears_reader_status() {
     let mut ui = Frontend {
         status: "Reading clipboard…".into(),

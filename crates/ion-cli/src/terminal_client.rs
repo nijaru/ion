@@ -322,7 +322,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             match result {
                                 Ok(()) => ui.session_io.retain_source(source),
                                 Err(error) => {
-                                    if let Some(source) = source { ui.restore_editor(source); }
+                                    if let Some(source) = source { ui.return_command_source(source); }
                                     ui.status = format!("Model selection failed: {error:#}");
                                 }
                             }

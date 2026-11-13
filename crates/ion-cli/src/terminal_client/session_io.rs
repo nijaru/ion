@@ -444,7 +444,7 @@ pub(super) fn apply(
                     ui.note(format!("File operation failed; inspect before retrying. Original command retained separately: {}", source.literal));
                     ui.uncertain_commands.push(source);
                 } else {
-                    ui.restore_editor(source);
+                    ui.return_command_source(source);
                 }
             }
             if ui.session_io.blocked {
@@ -462,7 +462,7 @@ fn finish_command(ui: &mut Frontend, source: Option<EditorDraft>, result: Result
         Ok(()) => ui.session_io.retain_source(source),
         Err(error) => {
             if let Some(source) = source {
-                ui.restore_editor(source);
+                ui.return_command_source(source);
             }
             ui.status = format!("Session command was not started: {error:#}");
         }
