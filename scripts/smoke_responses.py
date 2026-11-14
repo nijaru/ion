@@ -1,10 +1,11 @@
-"""Qualify stateless Responses replay and effect/retry fences through the CLI."""
+"""Qualify stateless Responses replay, cancellation and effect/retry fences through the CLI."""
 
 import base64
 import hashlib
 import json
 import os
 import shlex
+import signal
 import struct
 import subprocess
 import sys
@@ -20,6 +21,8 @@ requests = {}
 errors = []
 coding = {}
 overflow = {}
+stop_release = threading.Event()
+stop_finished = threading.Event()
 
 
 def event(kind, **fields):
@@ -89,6 +92,28 @@ class Handler(BaseHTTPRequestHandler):
                     assert step == 2
                     assert [item for item in body["input"] if item.get("id") in ("msg_a", "msg_b")] == items
                     payload = finish([message("msg_blocks_reopen", "BLOCKS_REOPENED")])
+            elif self.path == "/stop/v1/responses":
+                if step == 1:
+                    self.provisional_until_stop()
+                    return
+                assert step in (2, 3), step
+                inputs = body["input"]
+                serialized = json.dumps(inputs)
+                assert all(value not in serialized for value in (
+                    "stopped-forbidden.txt", "STOP_PROVISIONAL_CIPHER", "PROVISIONAL_TOOL_DONE")), inputs
+                if step == 2:
+                    assert not any(item["type"] in ("function_call", "function_call_output") for item in inputs)
+                    # Reusing the cancelled stream's IDs is not authority to
+                    # restore its arguments. Only this accepted call may run.
+                    payload = finish([call(dict(path="fresh-after-stop.txt", content="FRESH_ACCEPTED_ONCE\n"))])
+                else:
+                    retained = [item for item in inputs if item["type"] == "function_call"]
+                    assert len(retained) == 1 and retained[0]["call_id"] == "call_1"
+                    assert json.loads(retained[0]["arguments"]) == dict(path="fresh-after-stop.txt", content="FRESH_ACCEPTED_ONCE\n")
+                    results = [item for item in inputs if item["type"] == "function_call_output"]
+                    assert len(results) == 1 and results[0]["call_id"] == "call_1"
+                    assert json.loads(results[0]["output"])["is_error"] is False
+                    payload = finish([message("msg_fresh_after_stop", "FRESH_AFTER_STOP_COMPLETED")])
             elif self.path == "/coding/v1/responses":
                 payload = self.coding_response(body, step)
             elif self.path in overflow:
@@ -135,6 +160,36 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:
             errors.append(repr(error))
             self.send_error(500, "fixture assertion failed")
+
+    def provisional_until_stop(self):
+        reasoning = dict(type="reasoning", id="rs_stop", summary=[], encrypted_content="STOP_PROVISIONAL_CIPHER")
+        write = call(dict(path="stopped-forbidden.txt", content="NEVER"))
+        text = message("msg_stop", "PROVISIONAL_TOOL_DONE 🦀", phase="commentary")
+        prefix = (event("response.created", response=dict(id="resp_1", model="mock", status="in_progress", output=[]))
+                  + event("response.output_item.added", output_index=0, item=reasoning)
+                  + event("response.output_item.done", output_index=0, item=reasoning)
+                  + event("response.output_item.added", output_index=1, item={**write, "arguments": "", "status": "in_progress"})
+                  + event("response.function_call_arguments.delta", output_index=1, item_id=write["id"], delta=write["arguments"])
+                  + event("response.function_call_arguments.done", output_index=1, item_id=write["id"], arguments=write["arguments"])
+                  + event("response.output_item.done", output_index=1, item=write)
+                  + event("response.output_item.added", output_index=2, item={**text, "content": [], "status": "in_progress"})
+                  + event("response.output_text.delta", output_index=2, item_id=text["id"], content_index=0, delta=text["content"][0]["text"]))
+        terminal = finish([reasoning, write, text])
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Length", str(len(prefix) + len(terminal)))
+            self.end_headers()
+            self.wfile.write(prefix)
+            self.wfile.flush()
+            assert stop_release.wait(15), "fixture did not release the held stream"
+            try:
+                self.wfile.write(terminal)
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # Cancellation may have closed the peer already.
+        finally:
+            stop_finished.set()
 
     def main_response(self, body, step):
         inputs = body["input"]
@@ -311,6 +366,7 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
     env.update(HOME=str(work / "home"), ION_HOME=str(work / "ion"), TMPDIR=str(work / "tmp"),
                XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), XDG_DATA_HOME=str(work / "data"), PYTHONSAFEPATH="1", RESPONSES_FIXTURE_KEY="fixture-key")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = False
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
@@ -353,6 +409,68 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         reopened_blocks = submit("blocks", "Continue with the original native messages")
         assert [item for item in reopened_blocks if item["type"] == "text_delta"] == [dict(type="text_delta", block=0, text="BLOCKS_REOPENED")]
         assert len(requests["/blocks/v1/responses"]) == 2
+
+        select("/stop")
+        child = subprocess.Popen([binary, "--json", "--cwd", workspace, "--session", work / "stop.sqlite",
+                                  "--tools", "write", "run", "Hold the provisional response until I stop."],
+                                 env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        records, reader_errors = [], []
+        streamed = threading.Event()
+
+        def drain():
+            try:
+                for line in child.stdout:
+                    record = json.loads(line)
+                    records.append(record)
+                    if record.get("type") == "text_delta" and record["text"] == "PROVISIONAL_TOOL_DONE 🦀":
+                        streamed.set()
+            except Exception as error:
+                reader_errors.append(repr(error))
+
+        reader = threading.Thread(target=drain)
+        reader.start()
+        try:
+            # This marker follows arguments.done AND output_item.done on the
+            # same stream: server write readiness alone is not the oracle.
+            assert streamed.wait(10), (records, errors, reader_errors)
+            assert not (workspace / "stopped-forbidden.txt").exists(), "provisional item executed before response acceptance"
+            child.send_signal(signal.SIGINT)
+            child.wait(timeout=10)
+            reader.join(timeout=2)
+            assert not reader.is_alive() and not reader_errors, reader_errors
+            assert child.returncode == 1, (records, child.stderr.read())
+            assert not stop_release.is_set(), "cancellation waited for provider completion"
+            assert records[-1]["type"] == "run_end" and records[-1]["status"] == "cancelled", records
+            assert not any(record["type"] in ("assistant_committed", "provider_retry", "tool_started", "tool_finished") for record in records), records
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=5)
+            stop_release.set()
+            reader.join(timeout=5)
+            child.stdout.close()
+            child.stderr.close()
+        assert stop_finished.wait(5), "held provider did not retire"
+        assert not reader.is_alive() and not errors, (reader_errors, errors)
+        stopped = inspect("stop")
+        assert not any(entry["kind"] in ("assistant", "tool_result") for entry in stopped), stopped
+        first_turn, = [entry["data"]["turn"] for entry in stopped if entry["kind"] == "turn_started"]
+        assert [entry["data"] for entry in stopped if entry["kind"] == "turn_ended"] == [dict(turn=first_turn, reason="cancelled")]
+        assert inspect("stop") == stopped, "passive reopen changed cancellation facts"
+        assert len(requests["/stop/v1/responses"]) == 1 and not (workspace / "stopped-forbidden.txt").exists()
+        fresh = submit("stop", "Start fresh accepted work.", "--tools", "write")
+        assert fresh[-1] == dict(type="run_end", status="completed"), fresh
+        assert sum(record["type"] == "tool_started" for record in fresh) == 1
+        assert (workspace / "fresh-after-stop.txt").read_text() == "FRESH_ACCEPTED_ONCE\n"
+        assert not (workspace / "stopped-forbidden.txt").exists()
+        after_stop = inspect("stop")
+        assert after_stop[:len(stopped)] == stopped, "fresh work rewrote cancellation facts"
+        turns = [entry["data"]["turn"] for entry in after_stop if entry["kind"] == "turn_started"]
+        assert len(turns) == 2 and turns[0] != turns[1]
+        assert len([entry for entry in after_stop if entry["kind"] == "tool_result"]) == 1
+        assert len(requests["/stop/v1/responses"]) == 3
+        assert inspect("stop") == after_stop, "passive inspection changed fresh work"
+        print("Responses stop: complete provisional call withheld, cancellation without peer completion, passive reopen and fresh same-ID effect: OK", flush=True)
 
         select("/coding", "--context-window", "65536", "--max-output-tokens", "4096")
         coding.update(phase="repair", source=workspace / "answer.py", counter=workspace / "coding-checks", initial="def answer():\n    return 0\n", before="def answer():\n    return 0\n\n# Independent writer's comment must survive the repair.\n", after="def answer():\n    return 2\n\n# Independent writer's comment must survive the repair.\n")
@@ -476,9 +594,10 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         assert not (workspace / "forbidden.txt").exists()
         assert not (workspace / "valid-truncated.txt").exists()
     finally:
+        stop_release.set()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
 
-print("Responses stateless replay, indexed text, native images, guarded repair/check failures, compaction/reopen, bounded overflow recovery, failed-attempt usage and effect fences: ok")
+print("Responses stateless replay, indexed text, native images, provisional cancellation/reopen, guarded repair/check failures, compaction/reopen, bounded overflow recovery, failed-attempt usage and effect fences: ok")
