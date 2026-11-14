@@ -4,7 +4,7 @@ use crate::{
         Component, Field, MappedLine, Origin, SourceKind, Wrapping, fit_line, wrap_mapped,
     },
     presentation_style::{Role, Theme},
-    tool_output::{OutputDetail, RenderOptions},
+    tool_output::{OutputDetail, RecordedExit, RenderOptions},
 };
 use ion_core::{
     ActivityGroup, ActivityState, ToolActivityKind, TranscriptActivity, TranscriptItem,
@@ -730,16 +730,12 @@ fn render_shell(
     );
     crate::tool_output::render_artifacts(&mut rows, &output.artifacts, "  ", width, detail);
     let value = &output.value;
-    let mut state = if let Some(signal) = value["signal"].as_i64() {
-        format!("signal {signal}")
-    } else if let Some(code) = value["exit_code"].as_i64() {
-        format!("exit {code}")
-    } else if value["wait_error"].as_str().is_some() {
-        "exit unknown; inspect details".into()
-    } else if output.is_error {
-        "failed; inspect details".into()
-    } else {
-        "completed".into()
+    let mut state = match RecordedExit::from_value(value) {
+        Some(RecordedExit::Signal(signal)) => format!("signal {signal}"),
+        Some(RecordedExit::Code(code)) => format!("exit {code}"),
+        Some(RecordedExit::Unavailable) => "exit unknown; inspect details".into(),
+        None if output.is_error => "failed; inspect details".into(),
+        None => "completed".into(),
     };
     if value["cancelled"].as_bool() == Some(true) {
         state.push_str(" · cancelled");
@@ -1337,13 +1333,16 @@ fn action_label(activity: &TranscriptActivity) -> String {
         ActivityState::Unknown => "Interrupted".into(),
         ActivityState::Failed => {
             if kind == ToolActivityKind::Command
-                && let Some(code) = activity
+                && let Some(exit) = activity
                     .result
                     .as_ref()
-                    .and_then(|result| result.value.get("exit_code"))
-                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|result| RecordedExit::from_value(&result.value))
             {
-                return format!("Exited {code}");
+                return match exit {
+                    RecordedExit::Code(code) => format!("Exited {code}"),
+                    RecordedExit::Signal(signal) => format!("Terminated by signal {signal}"),
+                    RecordedExit::Unavailable => "Exit unknown".into(),
+                };
             }
             failed_label(kind).into()
         }

@@ -1622,26 +1622,102 @@ fn withheld_result_notice_survives_long_subject_without_overflow() {
 }
 
 #[test]
-fn failed_command_surfaces_exit_and_stderr() {
-    let projection = TranscriptProjection {
-        items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
-            thinking: Vec::new(),
-            source: ion_core::TranscriptSource { entry: 21, part: 0 },
-            turn: 1,
-            open: false,
-            activities: vec![activity(
-                "x",
-                ToolActivityKind::Command,
-                "cargo test",
-                ActivityState::Failed,
-                Some(serde_json::json!({"exit_code":1,"stdout":"","stderr":"compile failed"})),
-            )],
-        })],
-    };
-    let rendered = plain_rows(&projection, 80).join("\n");
-    assert!(rendered.contains("• Exited 1 cargo test"));
-    assert!(rendered.contains("└ stderr"));
-    assert!(rendered.contains("compile failed"));
+fn command_exit_metadata_does_not_override_core_activity_state() {
+    for (kind, state, expected) in [
+        (ToolActivityKind::Command, ActivityState::Completed, "Ran"),
+        (
+            ToolActivityKind::Command,
+            ActivityState::Cancelled,
+            "Cancelled",
+        ),
+        (
+            ToolActivityKind::Command,
+            ActivityState::TimedOut,
+            "Timed out",
+        ),
+        (
+            ToolActivityKind::Command,
+            ActivityState::Unknown,
+            "Interrupted",
+        ),
+        (ToolActivityKind::Read, ActivityState::Failed, "Read failed"),
+    ] {
+        let activity = activity(
+            "x",
+            kind,
+            "check",
+            state,
+            Some(serde_json::json!({"signal":15, "wait_error":"wait failed"})),
+        );
+        assert_eq!(action_label(&activity), expected);
+    }
+}
+
+#[test]
+fn failed_command_surfaces_recorded_exit_and_stderr() {
+    for (exit, label, cause) in [
+        (serde_json::json!({"exit_code": 1}), "Exited 1", None),
+        (
+            serde_json::json!({"exit_code": null, "signal": 15}),
+            "Terminated by signal 15",
+            None,
+        ),
+        (
+            serde_json::json!({"exit_code": null, "signal": null, "wait_error": "wait failed 🦀\nstatus unavailable"}),
+            "Exit unknown",
+            Some("wait failed 🦀"),
+        ),
+    ] {
+        let mut value = exit;
+        value["stdout"] = serde_json::json!("partial check output");
+        value["stderr"] = serde_json::json!("compile failed");
+        let projection = TranscriptProjection {
+            items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                thinking: Vec::new(),
+                source: ion_core::TranscriptSource { entry: 21, part: 0 },
+                turn: 1,
+                open: false,
+                activities: vec![activity(
+                    "x",
+                    ToolActivityKind::Command,
+                    "cargo test",
+                    ActivityState::Failed,
+                    Some(value),
+                )],
+            })],
+        };
+        for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+            let theme = Theme::default();
+            let keys = crate::keybindings::KeyBindings::default();
+            let rendered = rows(
+                &projection.items,
+                100,
+                &RenderOptions::new(
+                    mode,
+                    &keys,
+                    &theme,
+                    ThinkingVisibility::Hidden,
+                    std::path::Path::new("/workspace"),
+                ),
+            )
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+            assert!(
+                rendered.contains(&format!("• {label} cargo test")),
+                "{rendered}"
+            );
+            assert!(rendered.contains("stderr") && rendered.contains("compile failed"));
+            assert!(rendered.contains("partial check output"));
+            if let Some(cause) = cause {
+                assert!(
+                    rendered.contains(cause) && rendered.contains("status unavailable"),
+                    "{rendered}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

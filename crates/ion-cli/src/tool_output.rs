@@ -52,6 +52,24 @@ impl<'a> RenderOptions<'a> {
 
 mod observations;
 
+pub(crate) enum RecordedExit {
+    Code(i64),
+    Signal(i64),
+    Unavailable,
+}
+
+impl RecordedExit {
+    pub(crate) fn from_value(output: &Value) -> Option<Self> {
+        if let Some(signal) = output["signal"].as_i64() {
+            Some(Self::Signal(signal))
+        } else if let Some(code) = output["exit_code"].as_i64() {
+            Some(Self::Code(code))
+        } else {
+            output["wait_error"].as_str().map(|_| Self::Unavailable)
+        }
+    }
+}
+
 enum Preview {
     Head(usize),
     Tail(usize),
@@ -336,6 +354,18 @@ pub(crate) fn render_command(
                 detail.theme,
             );
         }
+    }
+    if let Some(error) = output["wait_error"].as_str() {
+        note(rows, prefix, "exit status unavailable", width, detail.theme);
+        render_text(
+            rows,
+            error,
+            prefix,
+            Field::WaitError,
+            width,
+            detail,
+            Preview::Head(3),
+        );
     }
 }
 
@@ -817,6 +847,57 @@ pub(crate) mod tests {
                         ..
                     }
                 )));
+            }
+        }
+    }
+
+    #[test]
+    fn wait_failures_keep_their_own_source_and_expansion() {
+        let keys = crate::keybindings::KeyBindings::default();
+        let theme = Theme::default();
+        for mode in [OutputDetail::Compact, OutputDetail::Expanded] {
+            for width in [20, 100] {
+                let mut rows = Vec::new();
+                render_command(
+                    &mut rows,
+                    &json!({"wait_error": "wait 🦀\r\n\u{1b}[2Jmore\nlast preview\nOMITTED_WAIT_DETAIL"}),
+                    "",
+                    width,
+                    &RenderOptions::new(
+                        mode,
+                        &keys,
+                        &theme,
+                        ThinkingVisibility::Hidden,
+                        std::path::Path::new("/workspace"),
+                    ),
+                    3,
+                    false,
+                );
+                assert!(rows.iter().all(|row| row.line.width() <= width));
+                let text = rows
+                    .iter()
+                    .map(|row| row.line.to_string())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!text.contains(['\r', '\u{1b}']));
+                assert!(rows.iter().flat_map(|row| &row.map).any(|mapping| matches!(
+                    mapping.origin,
+                    crate::display_text::Origin::Component {
+                        component: Component::Field(Field::WaitError),
+                        ..
+                    }
+                )));
+                if width == 100 {
+                    assert!(text.contains("exit status unavailable"));
+                    assert_eq!(
+                        text.contains("OMITTED_WAIT_DETAIL"),
+                        mode == OutputDetail::Expanded
+                    );
+                    assert_eq!(
+                        text.contains("1 more wait error lines"),
+                        mode == OutputDetail::Compact
+                    );
+                }
             }
         }
     }

@@ -81,7 +81,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if salience:
                 if count == 0:
-                    calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; exit 7"})]
+                    calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; kill -TERM $$"})]
                     calls.extend(("write", {"path": f"mutation-{index}.txt", "content": "observed mutation\\n"}) for index in range(14))
                     calls.append(("exec", {"command": "touch active.ready; exec sleep 5"}))
                     calls.extend(("read", {"path": f"mutation-{index}.txt"}) for index in range(2))

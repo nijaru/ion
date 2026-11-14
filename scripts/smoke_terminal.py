@@ -823,7 +823,7 @@ def exercise_active_band():
                     repaint_time = time.monotonic()
                     repainted = True
                 if repainted and not checked and time.monotonic() - repaint_time > 0.4:
-                    for fact in [b"1 failed", b"1 running", b"2 queued", b"14 write", b"FAILURE_MARKER", b"Current activity", b"Running touch active.ready"]:
+                    for fact in [b"1 failed", b"1 running", b"2 queued", b"14 write", b"FAILURE_MARKER", b"Terminated by signal 15", b"Current activity", b"Running touch active.ready"]:
                         assert fact in output, ("active normal band hid known work", fact, output)
                     assert b"SALIENCE_DONE" not in output and b"\x1b[?1049h" not in output
                     checked = True
