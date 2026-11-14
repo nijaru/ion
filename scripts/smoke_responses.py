@@ -1,10 +1,13 @@
 """Qualify stateless Responses replay and effect/retry fences through the CLI."""
 
 import base64
+import hashlib
 import json
 import os
+import shlex
 import struct
 import subprocess
+import sys
 import tempfile
 import threading
 import zlib
@@ -15,6 +18,7 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = {}
 errors = []
+coding = {}
 
 
 def event(kind, **fields):
@@ -61,10 +65,13 @@ class Handler(BaseHTTPRequestHandler):
             assert body["store"] is False and body["stream"] is True
             assert body["include"] == ["reasoning.encrypted_content"]
             assert "previous_response_id" not in body and "conversation" not in body
-            assert all(tool["type"] == "function" and tool["strict"] is False for tool in body["tools"])
             history = requests.setdefault(self.path, [])
             history.append(body)
             step = len(history)
+            if self.path == "/coding/v1/responses" and coding["phase"] == "summary":
+                assert "tools" not in body
+            else:
+                assert all(tool["type"] == "function" and tool["strict"] is False for tool in body["tools"])
             if self.path == "/v1/responses":
                 payload = self.main_response(body, step)
             elif self.path == "/blocks/v1/responses":
@@ -81,6 +88,8 @@ class Handler(BaseHTTPRequestHandler):
                     assert step == 2
                     assert [item for item in body["input"] if item.get("id") in ("msg_a", "msg_b")] == items
                     payload = finish([message("msg_blocks_reopen", "BLOCKS_REOPENED")])
+            elif self.path == "/coding/v1/responses":
+                payload = self.coding_response(body, step)
             elif self.path == "/retry/v1/responses":
                 if step == 1:
                     prefix = event("response.created", response=dict(id="resp_1", usage=dict(input_tokens=11, output_tokens=2, input_tokens_details=dict(cached_tokens=0))))
@@ -155,6 +164,82 @@ class Handler(BaseHTTPRequestHandler):
         assert next(item for item in inputs if item.get("id") == "msg_final") == message("msg_final", "Done.", refusal=True)
         return finish([message("msg_reopen", "REOPENED")])
 
+    def coding_response(self, body, step):
+        # This controlled provider chooses the actions, not the agent runtime.
+        phase = coding["phase"]
+        if phase == "summary":
+            assert step == 9
+            text = json.dumps(body["input"])
+            assert "CODING_CHECK_FAILED" in text
+            assert "CODING_CIPHER" not in text, "opaque continuation leaked into summary prose"
+            return finish([message("msg_coding_summary", "REPAIR_SUMMARY: answer.py now returns 2; the failed check and stale edit were resolved; the check passed.")])
+        if phase == "reopen":
+            assert step == 10
+            text = json.dumps(body["input"])
+            assert "REPAIR_SUMMARY" in text
+            assert "CODING_CHECK_FAILED" not in text, "compacted raw failure remained in working context"
+            assert not any(item["type"] == "function_call" for item in body["input"])
+            return finish([message("msg_coding_reopen", "REPAIR_REOPENED_WITHOUT_REPLAY")])
+        if phase == "padding":
+            assert step == 8
+            results = {item["call_id"]: json.loads(item["output"])["is_error"] for item in body["input"] if item["type"] == "function_call_output"}
+            assert results == {f"call_coding_{index}": failed for index, failed in enumerate([True, False, True, False, False, False], 1)}
+            return finish([message("msg_coding_padding", "CODING_PADDING_COMPLETE")])
+        assert phase == "repair" and 1 <= step <= 7
+        inputs = body["input"]
+        if step > 1:
+            assert next(item for item in inputs if item.get("id") == "rs_coding") == dict(type="reasoning", id="rs_coding", summary=[], encrypted_content="CODING_CIPHER")
+        def result(previous):
+            output = next(item for item in inputs if item["type"] == "function_call_output" and item["call_id"] == f"call_coding_{previous}")
+            envelope = json.loads(output["output"])
+            assert isinstance(envelope["is_error"], bool)
+            payload = envelope["result"]
+            if "artifacts" in payload:
+                assert "entry" in payload
+                payload = payload["output"]
+            return envelope["is_error"], payload
+        if step == 1:
+            name, arguments = "exec", dict(command=coding["command"], timeout_ms=5000)
+        elif step == 2:
+            failed, output = result(1)
+            assert failed and output["exit_code"] == 1 and "CODING_CHECK_FAILED" in output["stdout"]
+            assert coding["counter"].read_text() == "0\n"
+            name, arguments = "read", dict(path="answer.py")
+        elif step in (3, 5):
+            failed, output = result(step - 1)
+            expected = coding["initial"] if step == 3 else coding["before"]
+            assert not failed and output["content"] == expected
+            digest = output["base_digest"]
+            assert digest == hashlib.sha256(expected.encode()).hexdigest()
+            if step == 3:
+                # An independent writer changes the file after the committed read.
+                # The model then issues its edit with that real, now-stale digest.
+                coding["source"].write_text(coding["before"])
+            name, arguments = "edit", dict(path="answer.py", base_digest=digest,
+                edits=[dict(old_text="return 0", new_text="return 2")])
+        elif step == 4:
+            failed, output = result(3)
+            assert failed and "base_digest does not match" in output["error"]
+            assert coding["source"].read_text() == coding["before"], "rejected edit changed the file"
+            name, arguments = "read", dict(path="answer.py")
+        elif step == 6:
+            failed, output = result(5)
+            assert not failed and output["new_digest"] == hashlib.sha256(coding["after"].encode()).hexdigest()
+            assert coding["source"].read_text() == coding["after"]
+            assert coding["counter"].read_text() == "0\n"
+            name, arguments = "exec", dict(command=coding["command"], timeout_ms=5000)
+        else:
+            failed, output = result(6)
+            assert not failed and output["exit_code"] == 0 and "CODING_CHECK_PASSED" in output["stdout"]
+            assert coding["counter"].read_text() == "0\n2\n"
+            return finish([message("msg_coding_final", "REPAIR_VERIFIED")])
+        invocation = call(arguments, name=name)
+        invocation.update(id=f"fc_coding_{step}", call_id=f"call_coding_{step}")
+        output = [invocation]
+        if step == 1:
+            output.insert(0, dict(type="reasoning", id="rs_coding", summary=[], encrypted_content="CODING_CIPHER"))
+        return finish(output)
+
     def log_message(self, format, *args):
         pass
 
@@ -182,8 +267,8 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
 
-    def select(prefix=""):
-        run(env, "use", "responses-fixture", "mock", "--endpoint", base + prefix + "/v1", "--wire", "openai-responses", "--images", "--api-key-env", "RESPONSES_FIXTURE_KEY")
+    def select(prefix="", *args):
+        run(env, "use", "responses-fixture", "mock", "--endpoint", base + prefix + "/v1", "--wire", "openai-responses", "--images", "--api-key-env", "RESPONSES_FIXTURE_KEY", *args)
 
     def submit(name, prompt, *args, success=True):
         return run(env, "--json", "--cwd", workspace, "--session", work / f"{name}.sqlite", *args, "run", prompt, success=success)
@@ -220,6 +305,44 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         reopened_blocks = submit("blocks", "Continue with the original native messages")
         assert [item for item in reopened_blocks if item["type"] == "text_delta"] == [dict(type="text_delta", block=0, text="BLOCKS_REOPENED")]
         assert len(requests["/blocks/v1/responses"]) == 2
+
+        select("/coding", "--context-window", "65536", "--max-output-tokens", "4096")
+        coding.update(phase="repair", source=workspace / "answer.py", counter=workspace / "coding-checks", initial="def answer():\n    return 0\n", before="def answer():\n    return 0\n\n# Independent writer's comment must survive the repair.\n", after="def answer():\n    return 2\n\n# Independent writer's comment must survive the repair.\n")
+        coding["source"].write_text(coding["initial"])
+        check = workspace / "check.py"
+        check.write_text("import pathlib, runpy, sys\nroot = pathlib.Path(__file__).parent\nvalue = runpy.run_path(str(root / 'answer.py'))['answer']()\nwith (root / 'coding-checks').open('a') as output:\n    output.write(f'{value}\\n')\nprint('CODING_CHECK_PASSED' if value == 2 else 'CODING_CHECK_FAILED')\nsys.exit(0 if value == 2 else 1)\n")
+        check_digest = hashlib.sha256(check.read_bytes()).hexdigest()
+        coding["command"] = f"{shlex.quote(sys.executable)} -I -B check.py"
+        repaired = submit("coding", "Repair answer.py and verify it.", "--tools", "read,edit,exec")
+        assert repaired[-1] == dict(type="run_end", status="completed"), repaired
+        assert sum(item["type"] == "tool_started" for item in repaired) == 6
+        assert coding["source"].read_text() == coding["after"]
+        assert coding["counter"].read_text() == "0\n2\n"
+        entries = inspect("coding")
+        outcomes = [entry["data"]["result"]["outcome"]["output"]["is_error"] for entry in entries if entry["kind"] == "tool_result"]
+        assert outcomes == [True, False, True, False, False, False], outcomes
+        # Retain a large settled suffix so the cut genuinely removes every old
+        # repair result from working context, not just an unrelated early entry.
+        coding["phase"] = "padding"
+        submit("coding", "Settled context:\n" + "retain recent context\n" * 4096, "--tools", "read,edit,exec")
+        before_compaction = inspect("coding")
+        coding["phase"] = "summary"
+        run(env, "--cwd", workspace, "--session", work / "coding.sqlite", "compact")
+        compacted = inspect("coding")
+        assert compacted[:len(before_compaction)] == before_compaction, "compaction rewrote raw facts"
+        cut = next(entry["data"]["through_entry"] for entry in reversed(compacted) if entry["kind"] == "compacted")
+        last_result = max(index + 1 for index, entry in enumerate(entries) if entry["kind"] == "tool_result")
+        assert cut >= last_result, "fixture left old coding results in working context"
+        coding["phase"] = "reopen"
+        continued = submit("coding", "Recall the verified repair without running it again.", "--tools", "read")
+        assert continued[-1] == dict(type="run_end", status="completed"), continued
+        reopened = inspect("coding")
+        assert reopened[:len(compacted)] == compacted
+        assert not any(entry["kind"] == "tool_result" for entry in reopened[len(compacted):])
+        assert inspect("coding") == reopened, "passive reopen changed history"
+        assert coding["source"].read_text() == coding["after"] and coding["counter"].read_text() == "0\n2\n"
+        assert hashlib.sha256(check.read_bytes()).hexdigest() == check_digest, "check source changed"
+        assert len(requests["/coding/v1/responses"]) == 10
 
         select("/retry")
         retried = submit("retry", "Retry before output")
@@ -266,4 +389,4 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         thread.join(timeout=2)
         assert not thread.is_alive()
 
-print("Responses stateless replay, indexed interleaved text, native images, real write, reopen, failed-attempt usage and failed/truncated effect fences: ok")
+print("Responses stateless replay, indexed text, native images, guarded repair/check failures, compaction/reopen, failed-attempt usage and effect fences: ok")
