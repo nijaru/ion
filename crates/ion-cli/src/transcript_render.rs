@@ -768,6 +768,7 @@ fn render_shell(
 #[derive(Debug)]
 struct DisplayActivity {
     summary: String,
+    changes: Option<crate::edit_diff::LineChanges>,
     detail: Option<String>,
     source: std::ops::Range<usize>,
     observation: bool,
@@ -1188,6 +1189,7 @@ fn coalesced_observation(
         observation: true,
         state: ActivityState::Completed,
         model_notice: None,
+        changes: None,
     }
 }
 
@@ -1314,6 +1316,7 @@ fn display_activity(
     let observation = is_observation(kind) && activity.children.is_empty();
     DisplayActivity {
         summary,
+        changes: crate::edit_diff::recorded(activity).and_then(|diff| diff.changes),
         detail,
         source: index..index + 1,
         observation,
@@ -1493,7 +1496,15 @@ fn push_activity(
     width: usize,
     theme: &Theme,
 ) {
-    let line = Line::from(Span::raw(item.summary.clone())).style(item.style(theme));
+    let mut line = Line::from(Span::raw(item.summary.clone())).style(item.style(theme));
+    if let Some(changes) = item.changes {
+        line.spans.extend([
+            Span::raw(" · "),
+            Span::styled(format!("+{}", changes.added), theme.style(Role::Added)),
+            Span::raw(" / "),
+            Span::styled(format!("-{}", changes.removed), theme.style(Role::Removed)),
+        ]);
+    }
     let source = if item.source.len() == 1 {
         MappedLine::component(line, Component::Field(Field::Summary), 0)
     } else {

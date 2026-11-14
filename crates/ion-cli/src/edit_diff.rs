@@ -12,9 +12,29 @@ pub(crate) struct RecordedDiff<'a> {
     pub fields: &'a Map<String, Value>,
     pub text: &'a str,
     pub truncated: bool,
+    pub changes: Option<LineChanges>,
 }
 
-pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>> {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LineChanges {
+    pub added: u64,
+    pub removed: u64,
+}
+
+impl RecordedDiff<'_> {
+    pub(crate) fn heading(&self) -> String {
+        let mut heading = "Recorded edit diff".to_owned();
+        if let Some(changes) = self.changes {
+            heading.push_str(&format!(" · +{} / -{}", changes.added, changes.removed));
+        }
+        if self.truncated {
+            heading.push_str(" · capture truncated");
+        }
+        heading
+    }
+}
+
+fn mutation_result(activity: &TranscriptActivity) -> Option<&Map<String, Value>> {
     if !matches!(
         activity.activity.kind,
         ToolActivityKind::Edit | ToolActivityKind::Write
@@ -23,12 +43,21 @@ pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>
         return None;
     }
     let result = activity.result.as_ref().filter(|result| !result.is_error)?;
-    let fields = result.value.as_object()?;
+    result.value.as_object()
+}
+
+pub(crate) fn recorded(activity: &TranscriptActivity) -> Option<RecordedDiff<'_>> {
+    let fields = mutation_result(activity)?;
     let diff = fields.get("diff")?;
     Some(RecordedDiff {
         fields,
         text: diff.get("text")?.as_str()?,
         truncated: diff.get("truncated")?.as_bool()?,
+        changes: diff
+            .get("added")
+            .and_then(Value::as_u64)
+            .zip(diff.get("removed").and_then(Value::as_u64))
+            .map(|(added, removed)| LineChanges { added, removed }),
     })
 }
 
@@ -40,6 +69,30 @@ pub(crate) fn render(
     detail: &crate::tool_output::RenderOptions<'_>,
 ) {
     let Some(diff) = recorded(activity) else {
+        if let Some(reason) = mutation_result(activity)
+            .and_then(|fields| fields.get("diff_omitted"))
+            .and_then(Value::as_str)
+        {
+            let style = detail.theme.style(Role::Secondary);
+            let mut notice = MappedLine::generated(Line::styled("… diff not captured: ", style), 0);
+            notice.append(&MappedLine::component(
+                Line::styled(reason.to_owned(), style),
+                Component::Field(Field::Omission),
+                0,
+            ));
+            let visible = if detail.detail == crate::tool_output::OutputDetail::Expanded {
+                notice
+            } else {
+                fit_mapped(notice, width.saturating_sub(prefix.width() + 2).max(1)).0
+            };
+            rows.extend(wrap_mapped(
+                &format!("{prefix}└ "),
+                &format!("{prefix}  "),
+                visible,
+                width,
+                Wrapping::Literal,
+            ));
+        }
         return;
     };
     const PREVIEW_LINES: usize = 8;
@@ -157,6 +210,40 @@ mod tests {
         assert!(rows.iter().any(|row| row.line.to_string().contains("+new")));
         activity.activity.kind = ToolActivityKind::Read;
         assert!(recorded(&activity).is_none());
+        activity.activity.kind = ToolActivityKind::Write;
+        let reason = format!("existing content: \u{1b}[2J{}", "界🦀".repeat(40));
+        activity.result.as_mut().unwrap().value = json!({"diff_omitted":reason});
+        for mode in [
+            crate::tool_output::OutputDetail::Compact,
+            crate::tool_output::OutputDetail::Expanded,
+        ] {
+            for width in 1..=40 {
+                let mut rows = vec![];
+                render(
+                    &mut rows,
+                    &activity,
+                    "  ",
+                    width,
+                    &crate::tool_output::RenderOptions::new(
+                        mode,
+                        &crate::keybindings::KeyBindings::default(),
+                        &crate::presentation_style::Theme::default(),
+                        crate::transcript_render::ThinkingVisibility::Hidden,
+                        std::path::Path::new("/workspace"),
+                    ),
+                );
+                assert!(rows.iter().all(
+                    |row| row.line.width() <= width && !row.line.to_string().contains('\u{1b}')
+                ));
+                if mode == crate::tool_output::OutputDetail::Compact {
+                    assert_eq!(rows.len(), 1);
+                }
+            }
+        }
+        assert_eq!(
+            activity.result.as_ref().unwrap().value["diff_omitted"],
+            reason
+        );
     }
 
     #[test]

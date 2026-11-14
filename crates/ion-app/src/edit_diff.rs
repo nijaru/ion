@@ -5,7 +5,7 @@ use std::{
 };
 
 use serde::Serialize;
-use similar::TextDiff;
+use similar::{DiffTag, TextDiff};
 
 const CAPTURE_BYTES: usize = 64 * 1024;
 
@@ -13,6 +13,8 @@ const CAPTURE_BYTES: usize = 64 * 1024;
 pub(crate) struct EditDiff {
     text: String,
     truncated: bool,
+    added: usize,
+    removed: usize,
 }
 
 pub(crate) fn capture(path: &str, before: &str, after: &str) -> EditDiff {
@@ -22,9 +24,20 @@ pub(crate) fn capture(path: &str, before: &str, after: &str) -> EditDiff {
         .diff_lines(before, after);
     // Escaping the filename prevents newlines/control bytes becoming patch headers.
     let header = format!("{path:?}");
+    // Count the snapshot diff operations, not the bounded formatted patch:
+    // capture may stop before later hunks or even the first added line.
+    let (added, removed) = diff
+        .ops()
+        .iter()
+        .filter(|op| op.tag() != DiffTag::Equal)
+        .fold((0, 0), |(added, removed), op| {
+            (added + op.new_range().len(), removed + op.old_range().len())
+        });
     let mut capture = EditDiff {
         text: String::new(),
         truncated: false,
+        added,
+        removed,
     };
     let result = write!(
         capture,
@@ -79,10 +92,30 @@ mod tests {
     }
 
     #[test]
+    fn line_totals_describe_snapshot_changes_not_context_or_patch_headers() {
+        for (before, after, added, removed) in [
+            ("", "one\ntwo\n", 2, 0),
+            ("one\ntwo\n", "", 0, 2),
+            ("one\ntwo\nthree\n", "one\nnew\nextra\nthree\n", 2, 1),
+            ("one", "one\n", 1, 1),
+            ("same\r\n", "same\r\n", 0, 0),
+        ] {
+            let patch = serde_json::to_value(capture("file", before, after)).unwrap();
+            assert_eq!(patch["added"], added, "{before:?} → {after:?}");
+            assert_eq!(patch["removed"], removed, "{before:?} → {after:?}");
+        }
+    }
+
+    #[test]
     fn large_changed_lines_have_an_explicit_utf8_safe_capture_bound() {
-        let patch = capture("large", &"界".repeat(CAPTURE_BYTES), "replacement\n");
+        let patch = capture("large", &"界".repeat(CAPTURE_BYTES), "one\ntwo\nthree\n");
         assert!(patch.truncated);
         assert!(patch.text.len() <= CAPTURE_BYTES);
         assert!(patch.text.is_char_boundary(patch.text.len()));
+        // The removed line exhausts capture before any added line is formatted.
+        assert!(!patch.text.contains("+one"));
+        let patch = serde_json::to_value(patch).unwrap();
+        assert_eq!(patch["added"], 3);
+        assert_eq!(patch["removed"], 1);
     }
 }

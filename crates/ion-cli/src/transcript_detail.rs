@@ -455,14 +455,7 @@ fn append_activity(text: &mut String, number: &str, activity: &TranscriptActivit
                     push_field(text, &format!("{key}: {value}"));
                 }
             }
-            push_field(
-                text,
-                if diff.truncated {
-                    "Recorded edit diff · capture truncated"
-                } else {
-                    "Recorded edit diff"
-                },
-            );
+            push_field(text, &diff.heading());
             if diff.text.is_empty() {
                 push_field(text, "No text changes");
             } else {

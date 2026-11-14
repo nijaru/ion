@@ -60,9 +60,16 @@ assert first_kinds.count('turn_started') == first_kinds.count('turn_ended') == 1
 assert second_kinds.count('turn_started') == second_kinds.count('turn_ended') == 2
 assert first_kinds.count('model_context_changed') == second_kinds.count('model_context_changed') == 1
 assert second['entries'][:len(first['entries'])] == first['entries']
+outputs = [entry['data']['result']['outcome']['output'] for entry in first['entries'] if entry['kind'] == 'tool_result']
+for index, expected in [(1, (2, 2)), (2, (1, 0))]:
+    diff = outputs[index]['value']['diff']
+    assert (diff['added'], diff['removed']) == expected, diff
 requests = [json.loads(line) for line in open(sys.argv[3])]
 assert len(requests) == 6, len(requests)
 assert len([m for m in requests[-1]['messages'] if m['role'] == 'user']) == 2
+delivered = [json.loads(message['content'])['result'] for message in requests[-1]['messages'] if message['role'] == 'tool']
+for index in (1, 2):
+    assert delivered[index]['diff'] == outputs[index]['value']['diff'], 'reopen changed recorded diff evidence'
 PY
 
 # An explicit session owns its original working directory. A conflicting

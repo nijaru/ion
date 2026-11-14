@@ -257,16 +257,7 @@ impl Document {
                         );
                     }
                 }
-                self.generated(
-                    key,
-                    Field::DiffLabel,
-                    if diff.truncated {
-                        "Recorded edit diff · capture truncated"
-                    } else {
-                        "Recorded edit diff"
-                    },
-                    width,
-                );
+                self.generated(key, Field::DiffLabel, &diff.heading(), width);
                 if diff.text.is_empty() {
                     self.generated(key, Field::Diff, "No text changes", width);
                 } else {

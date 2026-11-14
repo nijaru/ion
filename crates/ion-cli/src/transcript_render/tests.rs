@@ -31,6 +31,123 @@ fn has_color(rows: &[Line<'_>], text: &str, color: Color) -> bool {
 }
 
 #[test]
+fn mutation_totals_and_capture_omissions_remain_distinct_from_effect_state() {
+    use serde_json::json;
+    let theme = distinct_theme();
+    let keys = crate::keybindings::KeyBindings::default();
+    let edit = activity(
+        "edit",
+        ToolActivityKind::Edit,
+        "file",
+        ActivityState::Completed,
+        Some(
+            json!({"replacements":1,"diff":{"text":"--- file\n+++ file\n@@ -1 +1 @@\n-old\n","truncated":true,"added":3,"removed":1}}),
+        ),
+    );
+    let mut write = activity(
+        "write",
+        ToolActivityKind::Write,
+        "converted.txt",
+        ActivityState::Completed,
+        Some(json!({"created":false,"bytes":4,"diff_omitted":"existing file is not UTF-8"})),
+    );
+    write.identity = ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
+        assistant_entry: 1,
+        ordinal: 1,
+    });
+    for detail in [OutputDetail::Compact, OutputDetail::Expanded] {
+        let options = RenderOptions::new(
+            detail,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        );
+        let mut group = ActivityGroup {
+            thinking: vec![],
+            source: ion_core::TranscriptSource { entry: 1, part: 0 },
+            turn: 1,
+            open: false,
+            activities: vec![edit.clone(), write.clone()],
+        };
+        let rendered = rows(
+            &[TranscriptItem::ActivityGroup(group.clone())],
+            120,
+            &options,
+        );
+        let text = rendered
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("Edited file · 1 replacement · +3 / -1"),
+            "{text}"
+        );
+        assert!(has_color(&rendered, "+3", Color::Rgb(13, 14, 15)));
+        assert!(has_color(&rendered, "-1", Color::Rgb(16, 17, 18)));
+        assert!(text.contains("diff capture truncated"), "{text}");
+        assert!(text.contains("Wrote converted.txt · 4 B"), "{text}");
+        assert!(
+            text.contains("diff not captured: existing file is not UTF-8"),
+            "{text}"
+        );
+        assert!(!text.contains("No text changes"), "{text}");
+        assert_eq!(group.activities[1].state, ActivityState::Completed);
+        let items = [TranscriptItem::ActivityGroup(group.clone())];
+        let mut inspection = crate::transcript_detail::DetailView::new(None);
+        inspection.prepare(items.iter(), &[], 0, 120);
+        let raw = inspection.rows().join("\n");
+        assert!(
+            raw.contains("Recorded edit diff · +3 / -1 · capture truncated"),
+            "{raw}"
+        );
+        assert!(
+            raw.contains("diff_omitted") && raw.contains("existing file is not UTF-8"),
+            "{raw}"
+        );
+        for state in [
+            ActivityState::Failed,
+            ActivityState::Unknown,
+            ActivityState::Running,
+        ] {
+            for activity in &mut group.activities {
+                activity.state = state;
+            }
+            let rendered = rows(
+                &[TranscriptItem::ActivityGroup(group.clone())],
+                120,
+                &options,
+            );
+            let text = rendered
+                .iter()
+                .map(Line::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(
+                !text.contains("+3 / -1") && !text.contains("diff not captured"),
+                "{state:?}: {text}"
+            );
+        }
+        // A read-like payload does not gain mutation presentation or authority.
+        for activity in &mut group.activities {
+            activity.state = ActivityState::Completed;
+            activity.activity.kind = ToolActivityKind::Read;
+        }
+        let rendered = rows(&[TranscriptItem::ActivityGroup(group)], 120, &options);
+        let text = rendered
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !text.contains("+3 / -1") && !text.contains("diff not captured"),
+            "{text}"
+        );
+    }
+}
+
+#[test]
 fn custom_theme_reaches_nested_markdown_without_theming_source_inspection() {
     let theme = distinct_theme();
     let keys = crate::keybindings::KeyBindings::default();
