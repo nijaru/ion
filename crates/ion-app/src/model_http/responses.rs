@@ -88,6 +88,8 @@ fn bind(
 }
 
 fn stable_identity(initial: &Value, final_item: &Value) -> Result<(), ProviderError> {
+    // Phase classifies the message, not its identity: a producer may discover
+    // commentary while streaming. reconcile_done seals the final classification.
     for key in [
         "id",
         "type",
@@ -95,7 +97,6 @@ fn stable_identity(initial: &Value, final_item: &Value) -> Result<(), ProviderEr
         "name",
         "namespace",
         "role",
-        "phase",
         "encrypted_content",
     ] {
         if let Some(value) = initial

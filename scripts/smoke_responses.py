@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                 if step == 1:
                     payload = b""
                     for index, item in enumerate(items):
-                        initial = {**item, "status": "in_progress", "content": []}
+                        initial = {**item, "status": "in_progress", "content": [], "phase": "final_answer"}
                         payload += event("response.output_item.added", output_index=index, item=initial)
                     for index, delta in [(0, "A"), (1, "B"), (0, "a")]:
                         payload += event("response.output_text.delta", output_index=index, item_id=items[index]["id"], content_index=0, delta=delta)
@@ -199,10 +199,18 @@ class Handler(BaseHTTPRequestHandler):
             assert base64.b64decode(user["content"][1]["image_url"].split(",", 1)[1]) == png()
             reasoning = dict(id="rs_1", type="reasoning", summary=[])
             write = call(dict(path="created.txt", content="INDEPENDENT_EFFECT\n"))
-            # Ciphertext is deliberately absent from the done item.
+            commentary = message("msg_prepare", "Preparing the file.", phase="commentary")
+            # Phase is provisional until done; the producer learns that this
+            # message precedes a tool call. Ciphertext arrives only at terminal.
             return (event("response.output_item.added", output_index=0, item=reasoning)
                     + event("response.output_item.done", output_index=0, item=reasoning)
-                    + finish([{**reasoning, "encrypted_content": "TERMINAL_CIPHER"}, write]))
+                    + event("response.output_item.added", output_index=1,
+                            item={**commentary, "status": "in_progress", "content": [], "phase": "final_answer"})
+                    + event("response.output_text.delta", output_index=1, item_id=commentary["id"],
+                            content_index=0, delta="Preparing the file.")
+                    + event("response.output_item.done", output_index=1, item=commentary)
+                    + finish([{**reasoning, "encrypted_content": "TERMINAL_CIPHER"}, commentary, write]))
+        assert next(item for item in inputs if item.get("id") == "msg_prepare") == message("msg_prepare", "Preparing the file.", phase="commentary")
         reasoning = next(item for item in inputs if item["type"] == "reasoning")
         assert reasoning == dict(id="rs_1", type="reasoning", summary=[], encrypted_content="TERMINAL_CIPHER")
         if step == 2:

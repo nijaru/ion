@@ -121,6 +121,111 @@ fn text_and_refusal_blocks_retain_identity_across_items_snapshots_and_interleavi
 }
 
 #[test]
+fn message_phase_can_refine_before_finalization_and_retains_its_final_value_in_replay() {
+    // A streamed message may be classified as commentary only once a following
+    // tool call is known. Its ID, role and observed text have not changed.
+    for item_done in [false, true] {
+        let mut r = request();
+        let mut state = ResponsesState::default();
+        let mut initial = text_item("");
+        initial["status"] = json!("in_progress");
+        initial["content"] = json!([]);
+        state.accept(&added(0, initial), &r).unwrap();
+        let observed = state
+            .accept(
+                &json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"Reading."}),
+                &r,
+            )
+            .unwrap();
+        assert_eq!(
+            observed,
+            vec![ModelStreamEvent::TextDelta {
+                block: 0,
+                text: "Reading.".into()
+            }]
+        );
+        let mut commentary = text_item("Reading.");
+        commentary["phase"] = json!("commentary");
+        if item_done {
+            let observed = state
+                .accept(
+                    &json!({"type":"response.output_item.done","output_index":0,"item":commentary}),
+                    &r,
+                )
+                .unwrap();
+            assert_eq!(observed, vec![ModelStreamEvent::OutputObserved]);
+        }
+        let call = call_item("call_1", "{\"path\":\"a\"}");
+        state.accept(&added(1, call.clone()), &r).unwrap();
+        let output = vec![commentary, call];
+        let response = completed(state.accept(&terminal(output.clone()), &r).unwrap());
+        assert_eq!(
+            response.message.content[0],
+            Content::Text("Reading.".into())
+        );
+        assert!(
+            matches!(&response.message.content[1], Content::ToolCall(call) if call.name == "read")
+        );
+        r.messages.push(response.message);
+        r.messages.push(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ToolResult {
+                call_id: "call_1".into(),
+                name: "read".into(),
+                result: json!("contents"),
+                is_error: false,
+                images: vec![],
+            })],
+            provider_replay: None,
+        });
+        assert_eq!(responses_body(&r).unwrap()["input"][1], output[0]);
+    }
+}
+
+#[test]
+fn phase_refinement_does_not_allow_rewriting_final_phase_identity_or_observed_text() {
+    let r = request();
+    for (field, replacement, finalize) in [
+        ("phase", Some(json!("final_answer")), true),
+        ("phase", None, true),
+        ("id", Some(json!("different")), false),
+        ("role", Some(json!("user")), false),
+        ("phase", Some(json!("unknown")), false),
+        (
+            "content",
+            Some(json!([{"type":"output_text","text":"changed","annotations":[]}])),
+            false,
+        ),
+    ] {
+        let mut state = ResponsesState::default();
+        let mut initial = text_item("");
+        initial["content"] = json!([]);
+        state.accept(&added(0, initial), &r).unwrap();
+        state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"Reading."}), &r).unwrap();
+        let mut final_item = text_item("Reading.");
+        final_item["phase"] = json!("commentary");
+        if finalize {
+            state
+                .accept(
+                    &json!({"type":"response.output_item.done","output_index":0,"item":final_item}),
+                    &r,
+                )
+                .unwrap();
+        }
+        match replacement {
+            Some(value) => final_item[field] = value,
+            None => {
+                final_item.as_object_mut().unwrap().remove(field);
+            }
+        }
+        assert!(
+            state.accept(&terminal(vec![final_item]), &r).is_err(),
+            "{field}, finalized: {finalize}"
+        );
+    }
+}
+
+#[test]
 fn plain_chat_history_migrates_but_native_chat_replay_is_rejected() {
     let mut r = request();
     r.route = ModelRoute::direct(
