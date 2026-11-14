@@ -395,16 +395,71 @@ async fn binding_preflight_does_not_admit_a_prompt_on_the_old_model() {
 }
 
 #[tokio::test]
-async fn reasoning_identity_waits_for_current_binding_history() {
+async fn context_footer_tracks_planning_without_admitting_input() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
     let footer = |ui: &Frontend, control: &SessionControl<EditorDraft>| {
-        super::super::orientation::rows(ui, Some(control.agent().model()), 100, 1)[0].to_string()
+        super::super::orientation::rows(ui, Some(control.agent().model()), 120, 2)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
     };
-    ui.refresh_session(fixture.control.session()).unwrap();
+    let before = fixture.control.session().view().unwrap().entries;
+    ui.session_io.request_refresh();
+    settle_io(&mut fixture.control, &mut ui).await;
+    let report = fixture
+        .control
+        .agent()
+        .context_report(fixture.control.session(), fixture.control.instructions())
+        .unwrap();
+    let expected = format!("context ~{}/?", report.estimated_input_tokens);
+    assert!(
+        footer(&ui, &fixture.control).contains(&expected),
+        "{}",
+        footer(&ui, &fixture.control)
+    );
+    ui.insert("unsent 🦀");
+    assert!(footer(&ui, &fixture.control).contains(&expected));
+    ui.session_io.request_refresh();
+    assert!(
+        !footer(&ui, &fixture.control).contains("context"),
+        "pending snapshots are not current"
+    );
+    settle_io(&mut fixture.control, &mut ui).await;
+    assert!(footer(&ui, &fixture.control).contains(&expected));
+    assert_eq!(
+        serde_json::to_value(fixture.control.session().view().unwrap().entries).unwrap(),
+        serde_json::to_value(before).unwrap()
+    );
+    assert!(!fixture.control.is_busy());
+    assert_eq!(ui.editor.draft, "unsent 🦀");
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn binding_metadata_waits_for_current_history() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    let footer = |ui: &Frontend, control: &SessionControl<EditorDraft>| {
+        super::super::orientation::rows(ui, Some(control.agent().model()), 100, 2)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    ui.session_io.request_refresh();
+    settle_io(&mut fixture.control, &mut ui).await;
     assert!(footer(&ui, &fixture.control).contains("reasoning default"));
-    let release = hold_read(&fixture.control, &mut ui, |view| {
-        ReadOutput::History(Box::new(History::prepare(view)))
+    assert!(footer(&ui, &fixture.control).contains("context ~"));
+    let context = fixture
+        .control
+        .agent()
+        .context_report(fixture.control.session(), fixture.control.instructions());
+    let release = hold_read(&fixture.control, &mut ui, move |view| {
+        let mut history = History::prepare(view);
+        history.context = Some(context);
+        ReadOutput::History(Box::new(history))
     })
     .await;
     start_binding(
@@ -425,8 +480,10 @@ async fn reasoning_identity_waits_for_current_binding_history() {
     let finished = ui.session_io.complete().await;
     apply(&mut fixture.control, &mut ui, finished).unwrap();
     assert!(!footer(&ui, &fixture.control).contains("reasoning"));
+    assert!(!footer(&ui, &fixture.control).contains("context"));
     settle_io(&mut fixture.control, &mut ui).await;
     assert!(footer(&ui, &fixture.control).contains("reasoning high"));
+    assert!(footer(&ui, &fixture.control).contains("context ~"));
 
     start_binding(
         &mut fixture.control,

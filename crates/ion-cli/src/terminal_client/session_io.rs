@@ -39,6 +39,7 @@ pub(super) struct History {
     prompts: Vec<String>,
     label: String,
     reasoning: ion_ai::Reasoning,
+    context: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
     unfinished: bool,
 }
 
@@ -69,6 +70,7 @@ impl History {
             prompts,
             label,
             reasoning: view.reasoning,
+            context: None,
             unfinished,
         }
     }
@@ -154,19 +156,35 @@ impl SessionIo {
 
     pub(super) fn start_refresh(
         &mut self,
-        session: &std::sync::Arc<Session>,
+        control: &SessionControl<EditorDraft>,
         projection_revision: u64,
     ) -> Result<()> {
         if !self.refresh_pending || self.read.is_some() || self.binding.is_some() {
             return Ok(());
         }
         self.refresh_pending = false;
-        let reader = session.reader()?;
+        let session = control.session();
+        let io = session.io()?;
+        let agent = control.agent().clone();
+        let instructions = control.instructions().to_owned();
         self.start(session, async move {
             Ok(ReadOutput::History(
-                reader
-                    .map_view(|view| Box::new(History::prepare(view)))
-                    .await?,
+                io.run(move |session| {
+                    let view = session.view()?;
+                    let revision = view.entries.len() as u64;
+                    let context = agent.context_report(session, &instructions);
+                    let mut history = History::prepare(view);
+                    // A concurrent append can separate these read-only cuts. Never
+                    // attach another revision's estimate to the displayed history.
+                    if !context
+                        .as_ref()
+                        .is_ok_and(|report| report.revision != revision)
+                    {
+                        history.context = Some(context);
+                    }
+                    Ok(Box::new(history))
+                })
+                .await?,
             ))
         })?;
         self.read
@@ -491,6 +509,7 @@ impl Frontend {
             prompts,
             label,
             reasoning,
+            context,
             ..
         } = history;
         // The first native snapshot installs display facts, not a navigation.
@@ -515,6 +534,7 @@ impl Frontend {
         self.editor.replace_prompt_history(prompts, same_session);
         self.session_label = label;
         self.reasoning_preference = Some(reasoning);
+        self.context_estimate = context;
     }
 
     #[cfg(test)]

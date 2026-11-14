@@ -167,6 +167,7 @@ struct Frontend {
     session_label: String,
     // Selected preference from accepted History, not an active Turn's controls.
     reasoning_preference: Option<ion_ai::Reasoning>,
+    context_estimate: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
 }
 
 pub struct ChatInit {
@@ -229,7 +230,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         theme_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
-            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(runtime.session(), ui.conversation.revision()) {
+            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, ui.conversation.revision()) {
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }
             ui.sync_question(questions.as_ref());

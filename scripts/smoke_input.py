@@ -864,7 +864,8 @@ def exercise_orientation(work, env, endpoint):
         terminal = Terminal(cwd, env, mode, ["--cwd", str(cwd), "--tui-mode", mode,
                                             "--model", "other/VENDOR", "chat"])
         try:
-            terminal.wait_ready(lambda: "other/vendor/model · reasoning default · /help" in terminal.text())
+            terminal.wait_ready(lambda: "other/vendor/model · reasoning default · /help" in terminal.text()
+                                and re.search(r"context ~[0-9]+/\?", terminal.text()))
             database, = set((work / "ion").rglob("*.sqlite")) - previous
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == 0
@@ -899,7 +900,8 @@ def exercise_orientation(work, env, endpoint):
             for preference in ("high", "low", "default"):
                 terminal.output.clear()
                 terminal.send(f"/reasoning {preference}\r")
-                terminal.wait_ready(lambda: f"smoke/smoke-model · reasoning {preference} · /help" in terminal.text())
+                terminal.wait_ready(lambda: f"smoke/smoke-model · reasoning {preference} · /help" in terminal.text()
+                                    and re.search(r"context ~[0-9]+/\?", terminal.text()))
             terminal.output.clear()
             terminal.send("ORIENTATION_🦀\x01")
             # Inline CPR is synthetic in this fixture: it cannot model native
@@ -916,11 +918,25 @@ def exercise_orientation(work, env, endpoint):
             assert user_text(requests[-1]) == "PREFIX_ORIENTATION_🦀", user_text(requests[-1])
             assert requests[-1]["model"] == "smoke-model", requests[-1]
             terminal.wait(lambda: b"state=done" in terminal.output)
+            # Observe completed paints after this Turn's settlement, not an
+            # earlier context string left in the cumulative output capture.
+            settled = terminal.lifecycle_output.rfind(b"\x1b]7501;state=done:")
+            assert settled >= 0
+            def current_footer():
+                return painted_text(terminal.lifecycle_output[settled:], height=30)
+            terminal.wait_ready(lambda: re.search(r"context ~[0-9]+/\?", current_footer())
+                                and "Session refresh required" not in current_footer()
+                                and "Reading local state" not in current_footer())
+            terminal.send("/session\r")
+            terminal.wait_ready(lambda: re.search(r"~([0-9]+) input tokens", terminal.text()))
+            planned = re.findall(r"~([0-9]+) input tokens", terminal.text())[-1]
+            terminal.wait_ready(lambda: f"context ~{planned}/?" in current_footer())
+            assert len(requests) == before + 1, "context display issued a model request"
             terminal.finish()
         finally:
             terminal.close()
         assert (work / "ion/models.json").read_bytes() == defaults, "Session model changed the global default"
-        print(f"Orientation {mode}: canonical model patterns, failed-selection custody, name/new, help and exact draft (tiny resize in fullscreen): OK", flush=True)
+        print(f"Orientation {mode}: canonical model patterns, failed-selection custody, name/new, help, passive Core context estimate and exact draft (tiny resize in fullscreen): OK", flush=True)
 
 
 def exercise_configuration(work, base_env, endpoint):
