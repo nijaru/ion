@@ -19,6 +19,7 @@ binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = {}
 errors = []
 coding = {}
+overflow = {}
 
 
 def event(kind, **fields):
@@ -45,9 +46,9 @@ def finish(output, *, incomplete=False, output_tokens=8):
     return event("response.incomplete" if incomplete else "response.completed", response=response)
 
 
-def failed(output, usage):
+def failed(output, usage, *, code="server_error"):
     return event("response.failed", response=dict(id="resp_1", status="failed", output=output,
-                 usage=usage, error=dict(code="server_error", message="fixture failure")))
+                 usage=usage, error=dict(code=code, message="fixture failure")))
 
 
 def png():
@@ -68,7 +69,7 @@ class Handler(BaseHTTPRequestHandler):
             history = requests.setdefault(self.path, [])
             history.append(body)
             step = len(history)
-            if self.path == "/coding/v1/responses" and coding["phase"] == "summary":
+            if (self.path == "/coding/v1/responses" and coding["phase"] == "summary") or (self.path in overflow and step == 4):
                 assert "tools" not in body
             else:
                 assert all(tool["type"] == "function" and tool["strict"] is False for tool in body["tools"])
@@ -90,6 +91,8 @@ class Handler(BaseHTTPRequestHandler):
                     payload = finish([message("msg_blocks_reopen", "BLOCKS_REOPENED")])
             elif self.path == "/coding/v1/responses":
                 payload = self.coding_response(body, step)
+            elif self.path in overflow:
+                payload = self.overflow_response(body, step)
             elif self.path == "/retry/v1/responses":
                 if step == 1:
                     prefix = event("response.created", response=dict(id="resp_1", usage=dict(input_tokens=11, output_tokens=2, input_tokens_details=dict(cached_tokens=0))))
@@ -240,6 +243,51 @@ class Handler(BaseHTTPRequestHandler):
             output.insert(0, dict(type="reasoning", id="rs_coding", summary=[], encrypted_content="CODING_CIPHER"))
         return finish(output)
 
+    def overflow_response(self, body, step):
+        fixture = overflow[self.path]
+        if step == 1:
+            invocation = call(dict(command=fixture["command"]), name="exec")
+            invocation.update(id="fc_overflow_seed", call_id="call_overflow_seed")
+            return finish([dict(type="reasoning", id="rs_overflow", summary=[], encrypted_content="OVERFLOW_CIPHER"), invocation])
+        if step == 2:
+            result = next(item for item in body["input"] if item["type"] == "function_call_output")
+            result = json.loads(result["output"])
+            assert not result["is_error"] and fixture["counter"].read_text() == "once\n"
+            return finish([message("msg_overflow_seed", "SEED_COMPLETE")])
+        if step == 3:
+            assert "OVERFLOW_CIPHER" in json.dumps(body["input"])
+            assert any(item["type"] == "function_call_output" for item in body["input"])
+            output = []
+            if fixture["mode"] == "observed":
+                # The failed terminal snapshot itself is output observation;
+                # a complete native call is still not execution authority.
+                invocation = call(dict(command=fixture["forbidden_command"]), name="exec")
+                invocation.update(id="fc_overflow_forbidden", call_id="call_overflow_forbidden")
+                output = [invocation]
+            return failed(output, dict(input_tokens=31, output_tokens=5 if output else 0), code="context_length_exceeded")
+        if step == 4:
+            assert fixture["mode"] != "observed", "compacted after observed output"
+            assert "tools" not in body
+            summary_input = json.dumps(body["input"])
+            assert "OVERFLOW_CIPHER" not in summary_input, "opaque reasoning entered summary input"
+            records = [json.loads(line) for item in body["input"] if item["type"] == "message"
+                       for part in item["content"] if part["type"] == "input_text"
+                       for line in part["text"].splitlines() if line.startswith("{")]
+            results = [part["ToolResult"] for record in records for part in record["content"] if "ToolResult" in part]
+            assert len(results) == 1 and results[0]["call_id"] == "call_overflow_seed" and not results[0]["is_error"]
+            observed = results[0]["result"]["Full"]
+            observed = observed.get("output", observed)
+            assert observed["exit_code"] == 0 and observed["stdout"] == "PRESSURE_EFFECT_OBSERVED\n"
+            return finish([message("msg_overflow_summary", "PRESSURE_RECOVERY_SUMMARY: the counter already ran once.")])
+        assert step == 5 and fixture["mode"] != "observed", (self.path, step)
+        assert "PRESSURE_RECOVERY_SUMMARY" in json.dumps(body["input"])
+        assert "OVERFLOW_CIPHER" not in json.dumps(body["input"])
+        assert not any(item["type"] in ("function_call", "function_call_output") for item in body["input"]), "old effect stayed in recovered working context"
+        assert fixture["counter"].read_text() == "once\n"
+        if fixture["mode"] == "twice":
+            return failed([], dict(input_tokens=19, output_tokens=0), code="context_length_exceeded")
+        return finish([message("msg_overflow_recovered", "PRESSURE_RECOVERED")])
+
     def log_message(self, format, *args):
         pass
 
@@ -344,6 +392,50 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         assert hashlib.sha256(check.read_bytes()).hexdigest() == check_digest, "check source changed"
         assert len(requests["/coding/v1/responses"]) == 10
 
+        for mode in ("recover", "observed", "twice"):
+            name = f"overflow-{mode}"
+            prefix = f"/{name}"
+            counter = workspace / f"{name}-effects"
+            forbidden = workspace / f"{name}-forbidden"
+            overflow[prefix + "/v1/responses"] = dict(mode=mode, counter=counter,
+                command=f"printf 'once\\n' >> {shlex.quote(counter.name)}; printf 'PRESSURE_EFFECT_OBSERVED\\n'",
+                forbidden_command=f"printf 'forbidden\\n' >> {shlex.quote(forbidden.name)}")
+            select(prefix)
+            seeded = submit(name, "Record the initial effect.", "--tools", "exec")
+            assert seeded[-1] == dict(type="run_end", status="completed"), seeded
+            before = inspect(name)
+            assert counter.read_text() == "once\n"
+            continued = submit(name, "Continue after context pressure.", "--tools", "exec", success=mode == "recover")
+            assert not any(item["type"] in ("provider_retry", "tool_started", "tool_finished") for item in continued), continued
+            assert counter.read_text() == "once\n" and not forbidden.exists(), "recovery replayed or dispatched an effect"
+            after = inspect(name)
+            assert after[:len(before)] == before, "recovery rewrote the committed prefix"
+            added = after[len(before):]
+            cuts = [entry["data"]["through_entry"] for entry in added if entry["kind"] == "compacted"]
+            discarded = [entry["data"] for entry in added if entry["kind"] == "uncommitted_usage"]
+            assert len(discarded) == (2 if mode == "twice" else 1), discarded
+            assert all(entry["purpose"] == "assistant" for entry in discarded)
+            expected_usage = [(31, 5 if mode == "observed" else 0)]
+            if mode == "twice":
+                expected_usage.append((19, 0))
+            assert [(entry["usage"]["input_tokens"], entry["usage"]["output_tokens"]) for entry in discarded] == expected_usage
+            starts = [entry["data"]["turn"] for entry in added if entry["kind"] == "turn_started"]
+            ends = [entry["data"] for entry in added if entry["kind"] == "turn_ended"]
+            assert len(starts) == 1 and len(ends) == 1 and ends[0]["turn"] == starts[0], "recovery created another Turn"
+            assert all(entry["data"]["turn"] == starts[0] for entry in added if entry["kind"] == "assistant")
+            if mode == "observed":
+                assert not cuts and len(requests[prefix + "/v1/responses"]) == 3
+                assert not any(entry["kind"] in ("assistant", "tool_result") for entry in added), "failed native output entered model history"
+            else:
+                assert len(cuts) == 1 and len(requests[prefix + "/v1/responses"]) == 5
+                result_entry = next(index + 1 for index, entry in enumerate(before) if entry["kind"] == "tool_result")
+                assert cuts[0] >= result_entry, "cut retained the old native effect"
+                assert len([entry for entry in added if entry["kind"] == "assistant"]) == (1 if mode == "recover" else 0)
+            if mode == "recover":
+                assert continued[-1] == dict(type="run_end", status="completed"), continued
+            assert inspect(name) == after, "passive inspection changed recovery facts"
+            print(f"Responses overflow {mode}: {len(requests[prefix + '/v1/responses'])} requests, one effect, {len(cuts)} compaction(s): OK", flush=True)
+
         select("/retry")
         retried = submit("retry", "Retry before output")
         assert sum(item["type"] == "provider_retry" for item in retried) == 1, retried
@@ -389,4 +481,4 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         thread.join(timeout=2)
         assert not thread.is_alive()
 
-print("Responses stateless replay, indexed text, native images, guarded repair/check failures, compaction/reopen, failed-attempt usage and effect fences: ok")
+print("Responses stateless replay, indexed text, native images, guarded repair/check failures, compaction/reopen, bounded overflow recovery, failed-attempt usage and effect fences: ok")
