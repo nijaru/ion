@@ -116,7 +116,9 @@ pub(super) fn project(
     let (artifact, full_error) = if truncated {
         match artifacts
             .ok_or_else(|| {
-                std::io::Error::other("raw capture requires an explicit Session artifact sink")
+                std::io::Error::other(
+                    "converted text capture requires an explicit Session artifact sink",
+                )
             })
             .and_then(|sink| sink.capture("converted_text", text.as_bytes()))
         {

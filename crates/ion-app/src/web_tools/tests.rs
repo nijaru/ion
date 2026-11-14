@@ -276,6 +276,34 @@ async fn inline_utf8_prefix_links_to_complete_private_snapshot_not_a_live_refetc
     server.await.unwrap();
 }
 
+#[tokio::test]
+async fn truncated_output_without_capture_does_not_claim_retrievability() {
+    let (url, server) = fixture(vec![response(
+        "200 OK",
+        "Content-Type: text/plain\r\n",
+        "abcdef",
+    )])
+    .await;
+    let result = WebTools::new()
+        .unwrap()
+        .fetch(
+            &json!({"url":url, "max_bytes":4}),
+            CancellationToken::new(),
+            None,
+        )
+        .await;
+    assert!(!result.is_error);
+    assert_eq!(result.value["content"], "abcd");
+    assert_eq!(result.value["content_bytes"], 6);
+    assert_eq!(result.value["truncated"], true);
+    assert!(result.artifacts.is_empty());
+    assert!(result.value["artifact_error"].as_str().is_some());
+    let notice = result.value["notice"].as_str().unwrap();
+    assert!(notice.contains("untrusted"));
+    assert!(!notice.contains("snapshot is retained"), "{notice}");
+    assert_eq!(server.await.unwrap().len(), 1);
+}
+
 #[test]
 fn html_work_is_bounded_and_cancelled_before_snapshot_publication() {
     let url = Url::parse("http://localhost/").unwrap();

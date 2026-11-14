@@ -4,6 +4,7 @@ import hashlib
 from smoke_artifacts import artifact_bytes
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import threading
@@ -19,6 +20,7 @@ failures = []
 steps = {}
 search_calls = []
 SEARCH_QUERY = "ion current documentation"
+capture_database = None
 
 
 class Web(BaseHTTPRequestHandler):
@@ -55,6 +57,9 @@ class Provider(BaseHTTPRequestHandler):
             step = steps.get(prompt, 0)
             steps[prompt] = step + 1
             url = f"http://127.0.0.1:{web.server_port}"
+            if prompt == "WEB_CAPTURE_FAILURE":
+                self.capture_failure(body, step, url)
+                return
             args = {"url": url + "/redirect", "max_bytes": 16}
             if step == 0:
                 names = {t["function"]["name"] for t in body["tools"]}
@@ -101,6 +106,26 @@ class Provider(BaseHTTPRequestHandler):
         except Exception as error:
             failures.append(repr(error))
             self.send_error(500, str(error))
+
+    def capture_failure(self, body, step, url):
+        if step == 0:
+            # Fail only retained-byte insertion, not the effect outcome journal.
+            # This is the private fixture's DB; remove the fault after settlement.
+            with sqlite3.connect(capture_database) as connection:
+                connection.execute("CREATE TRIGGER fail_web_capture BEFORE INSERT ON artifact_chunks BEGIN SELECT RAISE(ABORT, 'injected web capture failure'); END")
+            self.calls([("capture", "web_fetch", {"url": url + "/document", "max_bytes": 16})])
+            return
+        assert step == 1, "unexpected model retry/refetch after capture failure"
+        with sqlite3.connect(capture_database) as connection:
+            connection.execute("DROP TRIGGER fail_web_capture")
+        result = json.loads(body["messages"][-1]["content"])
+        assert not result["is_error"], result
+        fetched = result["result"]
+        assert fetched["truncated"] and fetched["artifact_error"], fetched
+        assert fetched["source"]["body_sha256"] == DIGEST, fetched
+        assert "retrieval" not in fetched and "artifacts" not in fetched, fetched
+        assert "snapshot is retained" not in fetched["notice"], fetched
+        self.events({"content": "CAPTURE_FAILURE_REPORTED"}, "stop")
 
     def search_response(self, body):
         if self.path == "/proxy/v1/responses":
@@ -208,7 +233,9 @@ if __name__ == "__main__":
             env.update(HOME=str(root / "home"), ION_HOME=str(root / "ion"), TMPDIR=str(root / "tmp"), XDG_CONFIG_HOME=str(root / "config"), XDG_STATE_HOME=str(root / "state"), LANG="C.UTF-8")
 
             def run(*args):
-                return subprocess.run([str(BINARY), "--cwd", str(root / "work"), *args], env=env, capture_output=True, text=True, timeout=45, check=True)
+                result = subprocess.run([str(BINARY), "--cwd", str(root / "work"), *args], env=env, capture_output=True, text=True, timeout=45)
+                assert result.returncode == 0, (result.args, result.stdout, result.stderr, failures)
+                return result
 
             subprocess.run([str(BINARY), "use", "fixture", "web", "--endpoint", f"http://127.0.0.1:{provider.server_port}/v1", "--wire", "chat-completions"],
                            env=env, capture_output=True, text=True, timeout=45, check=True)
@@ -242,6 +269,20 @@ if __name__ == "__main__":
                 text = artifact_bytes(root,reference).decode()
                 assert "WEB_FETCH_DOCUMENT" in text and "UNEXPECTED_SCRIPT" not in text,text
                 assert f"http://localhost:{web.server_port}/reference" in text,text
+            capture_database = root / "capture.sqlite"
+            before_web = len(web_calls)
+            captured = run("--session", str(capture_database), "run", "WEB_CAPTURE_FAILURE")
+            assert captured.stdout.strip() == "CAPTURE_FAILURE_REPORTED", captured
+            assert len(web_calls) == before_web + 1 and steps["WEB_CAPTURE_FAILURE"] == 2
+            view = json.loads(run("--session", str(capture_database), "inspect").stdout)
+            outcomes = [entry["data"]["result"]["outcome"] for entry in view["entries"] if entry["kind"] == "tool_result"]
+            assert len(outcomes) == 1 and outcomes[0]["state"] == "observed"
+            output = outcomes[0]["output"]
+            assert not output["is_error"] and output["artifacts"] == []
+            assert output["value"]["truncated"] and output["value"]["artifact_error"]
+            assert output["value"]["content_bytes"] > len(output["value"]["content"].encode())
+            assert json.loads(run("--session", str(capture_database), "inspect").stdout)["entries"] == view["entries"]
+            assert not failures, failures
             env.update(MODEL_TOKEN="model-secret", SEARCH_TOKEN="search-secret")
             cases = [
                 ("SEARCH_NATIVE", "openai", []),
@@ -288,7 +329,7 @@ if __name__ == "__main__":
                     assert "model-secret" not in json.dumps(observed) and "search-secret" not in json.dumps(observed), observed
             for _, headers in web_calls:
                 assert not ({key.lower() for key in headers} & {"cookie", "authorization", "proxy-authorization", "referer"}), headers
-            print("Ion fetch and provider-first search→fetch: default/read-only/Code Mode/exclusion, native profile/auth, Exa/DeepSeek/Brave and persisted sources: OK")
+            print("Ion fetch and provider-first search→fetch: default/read-only/Code Mode/exclusion, capture-failure truth, native profile/auth, Exa/DeepSeek/Brave and persisted sources: OK")
     finally:
         for server in (web, provider):
             server.shutdown()
