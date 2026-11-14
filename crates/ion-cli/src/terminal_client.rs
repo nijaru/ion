@@ -757,17 +757,53 @@ async fn edit_text_in_terminal(
     }
 }
 
-fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
-    let mut label = match (view.last_usage.and_then(|usage| usage.input_tokens), window) {
-        (Some(input), Some(window)) => format!("input {input}/{window} tokens"),
-        (Some(input), None) => format!("input {input} tokens"),
-        (None, Some(window)) => format!("context ≤{window} tokens · usage unknown"),
-        (None, None) => "usage unknown".into(),
+fn context_report(report: &Result<ion_core::ContextReport, ion_core::AgentError>) -> String {
+    use ion_core::{ContextCapacity, ContextEstimateBasis};
+    let report = match report {
+        Ok(report) => report,
+        Err(error) => {
+            return format!(
+                "Context estimate unavailable: {}",
+                crate::metadata_field(&error.to_string())
+            );
+        }
     };
-    if let Some(through) = view.compacted_through {
-        label.push_str(&format!(" · summary through {through}"));
-    }
-    label
+    let model = format!(
+        "{}/{}",
+        crate::metadata_field(&report.model.provider),
+        crate::metadata_field(&report.model.model)
+    );
+    let active = report
+        .turn
+        .map_or_else(String::new, |turn| format!(" · turn {turn} active"));
+    let window = report
+        .context_window_tokens
+        .map_or_else(|| "unknown".into(), |window| window.to_string());
+    let basis = match report.basis {
+        ContextEstimateBasis::Calibrated => "calibrated",
+        ContextEstimateBasis::BytesFallback => "cold, byte-based",
+    };
+    let budget = match report.capacity {
+        ContextCapacity::Available { max_output_tokens } => {
+            format!("Output budget: ≤{max_output_tokens} tokens")
+        }
+        ContextCapacity::RequestBytesExceeded => {
+            "Output budget unavailable: retained request exceeds byte limit".into()
+        }
+        ContextCapacity::ContextWindowExhausted => {
+            "Output budget unavailable: estimated input fills context window".into()
+        }
+        ContextCapacity::OutputDisabled => {
+            "Output budget unavailable: configured output ceiling is zero".into()
+        }
+    };
+    format!(
+        "Context estimate · {model} · entry {}{active}\n~{} input tokens ({basis}) · window {window} tokens\n{budget} · retained request {}/{} bytes (planning, not wire)\nCurrent instructions/tools; excludes draft/queued input. Not an in-flight budget; active turns may retain earlier instructions/loadouts.",
+        report.revision,
+        report.estimated_input_tokens,
+        report.retained_request_bytes,
+        report.max_request_bytes,
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

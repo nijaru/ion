@@ -8,7 +8,7 @@ use ion_app::{ModelCycleDirection, SessionControl};
 use ion_terminal::{Screen, TerminalSession};
 
 use super::{
-    Builtin, EditorDraft, Frontend, Picker, ProgramStatusState, TuiMode, context_label,
+    Builtin, EditorDraft, Frontend, Picker, ProgramStatusState, TuiMode, context_report,
     edit_text_in_terminal,
     interaction::{editor_delivery, submit_editor},
     login_in_terminal, navigation, tasks, tools,
@@ -440,28 +440,34 @@ pub(super) fn handle_builtin(
                 })?;
         }
         Builtin::Session => {
-            let reader = runtime.session().reader()?;
+            let io = runtime.session().io()?;
             let path = runtime.session().path().to_owned();
-            let window = runtime.agent().limits().context_window_tokens;
+            let agent = runtime.agent().clone();
+            let instructions = runtime.instructions().to_owned();
             ui.session_io.start(runtime.session(), async move {
-                Ok(reader
-                    .map_view(move |view| {
-                        super::session_io::ReadOutput::SessionInfo(format!(
-                            "Session {} · {} turn(s) · {} · {}\n{}",
-                            path.display(),
-                            view.entries
-                                .iter()
-                                .filter(|entry| matches!(
-                                    entry,
-                                    ion_core::SessionEntry::TurnStarted { .. }
-                                ))
-                                .count(),
-                            view.name.as_deref().unwrap_or("unnamed"),
-                            context_label(&view, window),
-                            crate::session_usage::render(&view.usage()),
+                let (view, report) = io
+                    .run(move |session| {
+                        Ok((
+                            session.view()?,
+                            agent.context_report(session, &instructions),
                         ))
                     })
-                    .await?)
+                    .await?;
+                let summary = view.compacted_through.map_or_else(String::new, |through| {
+                    format!(" · summary through {through}")
+                });
+                Ok(super::session_io::ReadOutput::SessionInfo(format!(
+                    "Session {} · {} turn(s) · {}{}\n{}\n{}",
+                    path.display(),
+                    view.entries
+                        .iter()
+                        .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
+                        .count(),
+                    view.name.as_deref().unwrap_or("unnamed"),
+                    summary,
+                    context_report(&report),
+                    crate::session_usage::render(&view.usage()),
+                )))
             })?;
         }
         Builtin::Export => {

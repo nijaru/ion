@@ -157,6 +157,198 @@ fn gif_image() -> ImageContent {
 }
 
 #[tokio::test]
+async fn context_report_is_passive_and_shares_issuance_accounting() {
+    let root = root("report");
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
+    let service = Arc::new(ScriptedModelService::new([
+        text_response("first", Usage::known(1_000, 50)),
+        text_response("second", Usage::unknown()),
+    ]));
+    let limits = AgentLimits {
+        context_window_tokens: Some(2_000),
+        max_output_tokens: 4_000,
+        image_input: true,
+        ..limits()
+    };
+    let agent = configured(service.clone(), Arc::new(Echo), model(), limits);
+    agent
+        .submit(
+            session.clone(),
+            "first".into(),
+            "base".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let report = agent.context_report(&session, "base").unwrap();
+    assert_eq!(report.basis, ContextEstimateBasis::Calibrated);
+    assert_eq!(report.estimated_input_tokens, 1_050);
+    assert_eq!(
+        report.capacity,
+        ContextCapacity::Available {
+            max_output_tokens: 950
+        }
+    );
+    assert_eq!(report.revision, before.len() as u64);
+    assert_eq!(report.turn, None);
+    assert_eq!(
+        agent.context_report(&session, "different").unwrap().basis,
+        ContextEstimateBasis::BytesFallback
+    );
+    assert_eq!(
+        agent.context_report(&session, "base").unwrap().basis,
+        ContextEstimateBasis::Calibrated
+    );
+    let replacement = configured(
+        Arc::new(ScriptedModelService::new([])),
+        Arc::new(Echo),
+        named_model("replacement"),
+        AgentLimits {
+            context_window_tokens: Some(32_768),
+            ..limits
+        },
+    );
+    let other = replacement.context_report(&session, "base").unwrap();
+    assert_eq!(other.model, named_model("replacement"));
+    assert_eq!(other.context_window_tokens, Some(32_768));
+    assert_eq!(other.basis, ContextEstimateBasis::BytesFallback);
+    assert_eq!(session.view().unwrap().entries, before);
+    assert_eq!(service.requests().len(), 1);
+
+    let (turn, _) = session.begin_turn("next".into(), model()).unwrap();
+    let report = agent.context_report(&session, "base").unwrap();
+    assert_eq!(report.turn, Some(turn));
+    let model = model();
+    let tools = ToolSet::new([Arc::new(Echo) as Arc<dyn ToolSource>]);
+    let model_service: Arc<dyn ModelService> = service.clone();
+    let plan = RequestPlan::new(
+        &session,
+        session.request_basis(&model).unwrap(),
+        &model_service,
+        &tools,
+        ModelRouteReason::UserRequest,
+        RequestSettings {
+            model: &model,
+            instructions: "base",
+            limits,
+            authority: None,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(report.capacity.output_tokens(), plan.output_budget());
+    let issued = plan
+        .issue(
+            &session.io().unwrap(),
+            &model_service,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        service.requests()[1].controls.max_output_tokens,
+        report.capacity.output_tokens().unwrap()
+    );
+
+    // A compatible stored sample is not necessarily applicable: a newly
+    // committed image changes the image identity before any request is issued.
+    session
+        .begin_turn_message(
+            Message {
+                role: Role::User,
+                content: vec![Content::Image(tiny_image())],
+                provider_replay: None,
+            },
+            model.clone(),
+        )
+        .unwrap();
+    assert!(
+        session
+            .request_calibration_for(&issued.plan.prepared.scope)
+            .unwrap()
+            .is_some()
+    );
+    let before = session.view().unwrap().entries;
+    assert_eq!(
+        agent.context_report(&session, "base").unwrap().basis,
+        ContextEstimateBasis::BytesFallback
+    );
+    let unsupported = configured(
+        service.clone(),
+        Arc::new(Echo),
+        model,
+        AgentLimits {
+            image_input: false,
+            ..limits
+        },
+    );
+    assert!(matches!(
+        unsupported.context_report(&session, "base"),
+        Err(AgentError::ImagesUnsupported)
+    ));
+    assert_eq!(session.view().unwrap().entries, before);
+    assert_eq!(service.requests().len(), 2);
+    session.shutdown().await.unwrap();
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn context_report_distinguishes_planning_limits_without_generation() {
+    let root = root("report-limits");
+    let session = Session::create(root.join("session.db"), None).unwrap();
+    let service = Arc::new(ScriptedModelService::new([]));
+    let before = session.view().unwrap().entries;
+    for (limits, expected) in [
+        (
+            AgentLimits {
+                context_window_tokens: None,
+                max_output_tokens: 123,
+                ..limits()
+            },
+            ContextCapacity::Available {
+                max_output_tokens: 123,
+            },
+        ),
+        (
+            AgentLimits {
+                max_request_bytes: 0,
+                ..limits()
+            },
+            ContextCapacity::RequestBytesExceeded,
+        ),
+        (
+            AgentLimits {
+                context_window_tokens: Some(0),
+                ..limits()
+            },
+            ContextCapacity::ContextWindowExhausted,
+        ),
+        (
+            AgentLimits {
+                max_output_tokens: 0,
+                ..limits()
+            },
+            ContextCapacity::OutputDisabled,
+        ),
+    ] {
+        let agent = configured(service.clone(), Arc::new(Echo), model(), limits);
+        let report = agent.context_report(&session, "base").unwrap();
+        assert_eq!(report.capacity, expected);
+        assert_eq!(report.context_window_tokens, limits.context_window_tokens);
+        assert_eq!(report.basis, ContextEstimateBasis::BytesFallback);
+        assert!(report.retained_request_bytes > 0);
+    }
+    assert_eq!(session.view().unwrap().entries, before);
+    assert!(service.requests().is_empty());
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn committed_tool_exchange_calibrates_next_budget_from_total_input() {
     let root = root("tool");
     let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
@@ -583,6 +775,24 @@ async fn compaction_clears_calibration_before_the_next_request() {
             Usage::unknown(),
         )
         .unwrap();
+    let compacted = agent.context_report(&session, "base").unwrap();
+    assert_eq!(compacted.basis, ContextEstimateBasis::BytesFallback);
+    assert_ne!(compacted.estimated_input_tokens, 80_000);
+    assert_eq!(
+        session.view().unwrap().last_usage.unwrap().input_tokens,
+        Some(80_000)
+    );
+    session.shutdown().await.unwrap();
+    drop(session);
+    let session = Arc::new(Session::open(root.join("session.db")).unwrap());
+    let reopened = agent.context_report(&session, "base").unwrap();
+    assert_eq!(reopened.basis, ContextEstimateBasis::BytesFallback);
+    assert_eq!(
+        reopened.estimated_input_tokens,
+        compacted.estimated_input_tokens
+    );
+    assert_eq!(reopened.capacity, compacted.capacity);
+    assert_eq!(service.requests().len(), 1);
     agent
         .submit(
             session.clone(),

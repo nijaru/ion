@@ -7,6 +7,54 @@ use ion_core::{
     TranscriptPart, TranscriptProjection, TranscriptSource,
 };
 
+#[test]
+fn context_estimates_are_separate_from_historical_usage_and_explain_limits() {
+    use ion_core::{ContextCapacity, ContextEstimateBasis, ContextReport};
+    let mut report = ContextReport {
+        model: ModelRef {
+            provider: "new\nprovider".into(),
+            model: "current".into(),
+        },
+        revision: 17,
+        turn: Some(12),
+        context_window_tokens: Some(32_768),
+        estimated_input_tokens: 1_234,
+        basis: ContextEstimateBasis::BytesFallback,
+        retained_request_bytes: 6_000,
+        max_request_bytes: 10_000,
+        capacity: ContextCapacity::Available {
+            max_output_tokens: 4_096,
+        },
+    };
+    let cold = context_report(&Ok(report.clone()));
+    assert!(cold.contains("new provider/current · entry 17 · turn 12 active"));
+    assert!(cold.contains("~1234 input tokens (cold, byte-based) · window 32768 tokens"));
+    assert!(cold.contains("Output budget: ≤4096 tokens"));
+    assert!(cold.contains("6000/10000 bytes (planning, not wire)"));
+    assert!(cold.contains("excludes draft/queued input"));
+    assert!(cold.contains("Not an in-flight budget"));
+    report.basis = ContextEstimateBasis::Calibrated;
+    report.context_window_tokens = None;
+    assert!(context_report(&Ok(report.clone())).contains("(calibrated) · window unknown tokens"));
+    for (capacity, reason) in [
+        (ContextCapacity::RequestBytesExceeded, "exceeds byte limit"),
+        (
+            ContextCapacity::ContextWindowExhausted,
+            "fills context window",
+        ),
+        (ContextCapacity::OutputDisabled, "output ceiling is zero"),
+    ] {
+        report.capacity = capacity;
+        let text = context_report(&Ok(report.clone()));
+        assert!(text.contains(reason));
+        assert!(!text.contains("Output budget: ≤"));
+    }
+    assert!(
+        context_report(&Err(ion_core::AgentError::ImagesUnsupported))
+            .starts_with("Context estimate unavailable:")
+    );
+}
+
 fn history_with_tools(mut activities: Vec<TranscriptActivity>) -> TranscriptProjection {
     for (ordinal, activity) in activities.iter_mut().enumerate() {
         let parent = ToolOccurrence {

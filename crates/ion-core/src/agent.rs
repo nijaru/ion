@@ -156,6 +156,33 @@ impl Agent {
         self.limits
     }
 
+    /// Inspect the retained context with this agent's currently loaded tools and
+    /// the exact instructions its host would supply. Uses normal request planning
+    /// without admitting input, generating, refreshing tools or changing calibration.
+    /// Call on the host's retained blocking I/O lane, not in a render loop.
+    /// This estimate excludes drafts/uncommitted input and is not the budget of
+    /// an in-flight request or a promise to issue without refresh/compaction.
+    /// An active Turn may retain earlier instructions and a frozen loadout.
+    pub fn context_report(
+        &self,
+        session: &Session,
+        instructions: &str,
+    ) -> Result<crate::ContextReport, AgentError> {
+        let basis = session.request_basis(&self.model)?;
+        let revision = basis.revision;
+        let turn = basis.turn;
+        let prepared = crate::request::PreparedRequest::new(
+            session,
+            basis,
+            &self.service,
+            &self.tools,
+            ion_ai::ModelRouteReason::UserRequest,
+            self.request_settings(instructions),
+            None,
+        )?;
+        Ok(prepared.report(revision, turn))
+    }
+
     /// Validate a restored or prospective preference for both coding and summary
     /// requests. The service, not Core, owns wire/model-specific constraints.
     pub fn validate_reasoning(&self, reasoning: Reasoning) -> Result<(), AgentError> {

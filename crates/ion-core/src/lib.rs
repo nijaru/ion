@@ -91,6 +91,7 @@ pub use input::{
     PreparedInput,
 };
 pub use invocation::{ToolInvocation, ToolOccurrence, ToolOrigin};
+pub use request::{ContextCapacity, ContextEstimateBasis, ContextReport};
 pub use session::{
     ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter, AuthorityScope, ContextPoint,
     ContextPosition, ForkPoint, ModelContextSnapshot, ModelUsagePurpose, PreparedNavigation,

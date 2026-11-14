@@ -21,14 +21,62 @@ pub(crate) mod calibration;
 mod calibration_tests;
 pub(crate) use calibration::{RequestCalibration, RequestMeasurement, RequestScope};
 
+/// Local planning snapshot, not an admission or an in-flight request budget.
+/// Excludes drafts and uncommitted inputs; a Turn may retain a private frozen
+/// catalog or compact/refresh before its next request. Byte counts use Core's
+/// retained-request surrogate, not the provider's HTTP wire size.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ContextReport {
+    pub model: ModelRef,
+    pub revision: u64,
+    pub turn: Option<u64>,
+    pub context_window_tokens: Option<u32>,
+    pub estimated_input_tokens: u64,
+    pub basis: ContextEstimateBasis,
+    pub retained_request_bytes: usize,
+    pub max_request_bytes: usize,
+    pub capacity: ContextCapacity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ContextEstimateBasis {
+    Calibrated,
+    BytesFallback,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ContextCapacity {
+    Available { max_output_tokens: u32 },
+    RequestBytesExceeded,
+    ContextWindowExhausted,
+    OutputDisabled,
+}
+
+impl ContextCapacity {
+    pub fn output_tokens(self) -> Option<u32> {
+        match self {
+            Self::Available { max_output_tokens } => Some(max_output_tokens),
+            _ => None,
+        }
+    }
+}
+
 pub(crate) struct RequestPlan {
     turn: u64,
+    prepared: PreparedRequest,
+}
+
+/// Projection and measurement are shared by passive inspection and issuance;
+/// only a RequestPlan binds this candidate to an admitted logical Turn.
+pub(crate) struct PreparedRequest {
     request: ModelRequest,
     catalog: ToolCatalog,
     measurement: RequestMeasurement,
     scope: RequestScope,
     limits: AgentLimits,
     output_budget: Option<u32>,
+    estimated_input_tokens: u64,
+    basis: ContextEstimateBasis,
 }
 
 pub(crate) struct IssuedRequest {
@@ -75,8 +123,8 @@ impl RequestSettings<'_> {
     }
 }
 
-impl RequestPlan {
-    pub fn new(
+impl PreparedRequest {
+    pub(crate) fn new(
         session: &Session,
         basis: RequestBasis,
         service: &Arc<dyn ModelService>,
@@ -91,7 +139,6 @@ impl RequestPlan {
             limits,
             ..
         } = settings;
-        let turn = basis.turn.ok_or(SessionError::InvalidHistory)?;
         let previous: &[ToolSpec] = basis
             .previous
             .as_ref()
@@ -133,23 +180,68 @@ impl RequestPlan {
         let context_overhead = service.context_encoding_overhead(&request)?;
         let measurement =
             RequestMeasurement::measure(&request, calibration.as_ref(), context_overhead)?;
+        let calibration = calibration.filter(|sample| sample.applies(&measurement, &scope));
         let estimated_input = calibration.as_ref().map_or_else(
             || measurement.fallback_input_tokens(),
             |calibration| calibration.estimate(&measurement),
         );
+        let basis = if calibration.is_some() {
+            ContextEstimateBasis::Calibrated
+        } else {
+            ContextEstimateBasis::BytesFallback
+        };
         let output_budget = limits.output_budget(
             measurement.retained_bytes(),
             estimated_input,
             limits.max_output_tokens,
         );
         Ok(Self {
-            turn,
             request,
             catalog,
             measurement,
             scope,
             limits,
             output_budget,
+            estimated_input_tokens: estimated_input,
+            basis,
+        })
+    }
+
+    pub(crate) fn report(&self, revision: u64, turn: Option<u64>) -> ContextReport {
+        ContextReport {
+            model: self.request.route.effective.clone(),
+            revision,
+            turn,
+            context_window_tokens: self.limits.context_window_tokens,
+            estimated_input_tokens: self.estimated_input_tokens,
+            basis: self.basis,
+            retained_request_bytes: self.measurement.retained_bytes(),
+            max_request_bytes: self.limits.max_request_bytes,
+            capacity: self.limits.context_capacity(
+                self.measurement.retained_bytes(),
+                self.estimated_input_tokens,
+                self.limits.max_output_tokens,
+            ),
+        }
+    }
+}
+
+impl RequestPlan {
+    pub fn new(
+        session: &Session,
+        basis: RequestBasis,
+        service: &Arc<dyn ModelService>,
+        tools: &ToolSet,
+        reason: ModelRouteReason,
+        settings: RequestSettings<'_>,
+        catalog: Option<&ToolCatalog>,
+    ) -> Result<Self, AgentError> {
+        let turn = basis.turn.ok_or(SessionError::InvalidHistory)?;
+        Ok(Self {
+            turn,
+            prepared: PreparedRequest::new(
+                session, basis, service, tools, reason, settings, catalog,
+            )?,
         })
     }
 
@@ -163,10 +255,12 @@ impl RequestPlan {
         usage: Usage,
     ) -> Result<(), SessionError> {
         let scope = self
+            .prepared
             .scope
             .clone()
             .with_model(execution.route.effective.clone());
-        if let Some(calibration) = RequestCalibration::new(&self.measurement, scope, usage) {
+        if let Some(calibration) = RequestCalibration::new(&self.prepared.measurement, scope, usage)
+        {
             io.run(move |session| session.set_request_calibration(calibration))
                 .await?;
         }
@@ -174,30 +268,31 @@ impl RequestPlan {
     }
 
     pub fn output_budget(&self) -> Option<u32> {
-        self.output_budget
+        self.prepared.output_budget
     }
 
     pub fn output_reserve(&self) -> u32 {
-        self.limits
-            .preferred_output_reserve(self.measurement.fixed_input_tokens())
+        self.prepared
+            .limits
+            .preferred_output_reserve(self.prepared.measurement.fixed_input_tokens())
     }
 
     pub fn keep_bytes(&self) -> usize {
-        self.limits.compaction_keep_bytes(
-            self.measurement.fixed_input_tokens() + u64::from(self.output_reserve()),
+        self.prepared.limits.compaction_keep_bytes(
+            self.prepared.measurement.fixed_input_tokens() + u64::from(self.output_reserve()),
         )
     }
 
     pub fn reasoning(&self) -> Reasoning {
-        self.request.controls.reasoning
+        self.prepared.request.controls.reasoning
     }
 
     pub fn catalog(&self) -> &ToolCatalog {
-        &self.catalog
+        &self.prepared.catalog
     }
 
     pub fn request(&self) -> &ModelRequest {
-        &self.request
+        &self.prepared.request
     }
 
     pub async fn issue<F>(
@@ -210,27 +305,31 @@ impl RequestPlan {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        self.request.controls.max_output_tokens =
-            self.output_budget.ok_or(AgentError::ContextTooLarge)?;
-        model.validate_controls(&self.request.route.effective, &self.request.controls)?;
+        let prepared = &mut self.prepared;
+        prepared.request.controls.max_output_tokens =
+            prepared.output_budget.ok_or(AgentError::ContextTooLarge)?;
+        model.validate_controls(
+            &prepared.request.route.effective,
+            &prepared.request.controls,
+        )?;
         let turn = self.turn;
-        let model_ref = self.request.route.effective.clone();
+        let model_ref = prepared.request.route.effective.clone();
         let context = ModelContextSnapshot {
-            instructions: self
+            instructions: prepared
                 .request
                 .instructions
                 .clone()
                 .expect("agent instructions"),
-            tools: self.request.tools.clone(),
+            tools: prepared.request.tools.clone(),
         };
-        let measurement = self.measurement.clone();
-        let scope = self.scope.clone();
+        let measurement = prepared.measurement.clone();
+        let scope = prepared.scope.clone();
         io.run(move |session| {
             session.admit_request(turn, model_ref, context)?;
             session.activate_request_calibration(&measurement, &scope)
         })
         .await?;
-        let attempt = generate_with_retry(model, &self.request, stop, observe, |observed| {
+        let attempt = generate_with_retry(model, &prepared.request, stop, observe, |observed| {
             io.run_with(move |session| {
                 session
                     .record_uncommitted_usage(
@@ -243,7 +342,7 @@ impl RequestPlan {
         })
         .await;
         // Retain the route actually used by pre-output retry for cache warming.
-        self.request.route = attempt.route.clone();
+        prepared.request.route = attempt.route.clone();
         Ok(IssuedRequest {
             attempt,
             plan: self,
@@ -294,14 +393,28 @@ impl AgentLimits {
         estimated_input: u64,
         ceiling: u32,
     ) -> Option<u32> {
-        if bytes > self.max_request_bytes || ceiling == 0 {
-            return None;
+        self.context_capacity(bytes, estimated_input, ceiling)
+            .output_tokens()
+    }
+
+    fn context_capacity(self, bytes: usize, estimated_input: u64, ceiling: u32) -> ContextCapacity {
+        if bytes > self.max_request_bytes {
+            return ContextCapacity::RequestBytesExceeded;
         }
-        let Some(capacity) = self.context_window_tokens else {
-            return Some(ceiling);
+        if ceiling == 0 {
+            return ContextCapacity::OutputDisabled;
+        }
+        let max_output_tokens = match self.context_window_tokens {
+            None => ceiling,
+            Some(capacity) => {
+                let available = u64::from(capacity).saturating_sub(estimated_input);
+                if available == 0 {
+                    return ContextCapacity::ContextWindowExhausted;
+                }
+                ceiling.min(available as u32)
+            }
         };
-        let available = u64::from(capacity).saturating_sub(estimated_input);
-        (available > 0).then(|| ceiling.min(available as u32))
+        ContextCapacity::Available { max_output_tokens }
     }
 
     pub(crate) fn request_output_budget(

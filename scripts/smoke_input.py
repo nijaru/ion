@@ -365,6 +365,9 @@ def exercise_usage(work, base_env, endpoint):
             terminal.wait(lambda: "Total tokens: 1034" in terminal.text())
             assert "Cache read tokens: 555" in terminal.text(), terminal.text()
             assert "Cost: unknown" in terminal.text(), terminal.text()
+            assert "Context estimate" in terminal.text(), terminal.text()
+            assert "~1034 input tokens (calibrated)" in terminal.text(), terminal.text()
+            assert "excludes draft/queued input" in terminal.text(), terminal.text()
             assert len(requests) == before + 1
             terminal.output.clear()
             terminal.send("WAIT_USAGE\r")
@@ -372,6 +375,8 @@ def exercise_usage(work, base_env, endpoint):
             terminal.send("/session\r")
             terminal.wait(lambda: "2turn(s)" in re.sub(r"\s+", "", terminal.text()))
             assert "Recorded usage · 1 observation(s)" in terminal.text(), terminal.text()
+            assert "Context estimate" in terminal.text() and " active" in terminal.text(), terminal.text()
+            assert "Not an in-flight budget" in terminal.text(), terminal.text()
             assert b"state=done" not in terminal.output, "inspection settled the active request"
             assert not release.is_set() and len(requests) == before + 2
             release.set()

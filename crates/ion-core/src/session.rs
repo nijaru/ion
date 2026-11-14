@@ -96,6 +96,7 @@ pub(crate) struct CommittedInputEntries {
 /// A single committed projection; catalogue and service preparation must happen
 /// after releasing the store lock.
 pub(crate) struct RequestBasis {
+    pub revision: u64,
     pub turn: Option<u64>,
     pub messages: Vec<Message>,
     pub previous: Option<ModelContextSnapshot>,
@@ -1040,6 +1041,7 @@ impl Session {
     pub(crate) fn request_basis(&self, model: &ModelRef) -> Result<RequestBasis, SessionError> {
         let store = self.lock_store()?;
         Ok(RequestBasis {
+            revision: store.state.sequence,
             turn: store.state.active,
             messages: context_projection(&store, Some(model)),
             previous: store.state.last_context.clone(),
