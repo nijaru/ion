@@ -42,6 +42,8 @@ ion --continue compact               # request context summary
 
 Run `ion --help` and `ion COMMAND --help` for complete supported options. The current CLI supports `@file` context arguments, images, explicit model and reasoning selection, and tool include/exclude filters. Headless/RPC mode needs an already configured model and credentials.
 
+Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use `/reasoning` to change the preference.
+
 JSONL `text_delta` and `thinking_delta` events carry a zero-based `block` index, numbered independently within each response. Append each delta to its own block, not to one shared string; updates can interleave. `assistant_committed` replaces provisional content, including text not streamed earlier; `response_restarted` discards it. These block indices are not durable Session coordinates.
 
 Terminal chat temporarily enables grapheme clustering (mode 2027) when the terminal reports it as supported and currently off, and restores the prior setting when yielding the terminal. Without reported support, rendering stays best-effort; complex emoji alignment depends on the terminal and its Unicode width tables.

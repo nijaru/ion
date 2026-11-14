@@ -395,6 +395,59 @@ async fn binding_preflight_does_not_admit_a_prompt_on_the_old_model() {
 }
 
 #[tokio::test]
+async fn reasoning_identity_waits_for_current_binding_history() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    let footer = |ui: &Frontend, control: &SessionControl<EditorDraft>| {
+        super::super::orientation::rows(ui, Some(control.agent().model()), 100, 1)[0].to_string()
+    };
+    ui.refresh_session(fixture.control.session()).unwrap();
+    assert!(footer(&ui, &fixture.control).contains("reasoning default"));
+    let release = hold_read(&fixture.control, &mut ui, |view| {
+        ReadOutput::History(Box::new(History::prepare(view)))
+    })
+    .await;
+    start_binding(
+        &mut fixture.control,
+        &mut ui,
+        BindingChange::SelectReasoning(ion_ai::Reasoning::High),
+        None,
+    )
+    .unwrap();
+    assert!(!footer(&ui, &fixture.control).contains("reasoning"));
+    finish_binding(&mut fixture.control, &mut ui).await;
+    assert_eq!(
+        fixture.control.session().reasoning().unwrap(),
+        ion_ai::Reasoning::High
+    );
+    assert!(!footer(&ui, &fixture.control).contains("reasoning"));
+    release.send(()).unwrap();
+    let finished = ui.session_io.complete().await;
+    apply(&mut fixture.control, &mut ui, finished).unwrap();
+    assert!(!footer(&ui, &fixture.control).contains("reasoning"));
+    settle_io(&mut fixture.control, &mut ui).await;
+    assert!(footer(&ui, &fixture.control).contains("reasoning high"));
+
+    start_binding(
+        &mut fixture.control,
+        &mut ui,
+        BindingChange::SelectReasoning(ion_ai::Reasoning::BudgetTokens(0)),
+        None,
+    )
+    .unwrap();
+    assert!(!footer(&ui, &fixture.control).contains("reasoning"));
+    finish_binding(&mut fixture.control, &mut ui).await;
+    assert!(!footer(&ui, &fixture.control).contains("reasoning"));
+    settle_io(&mut fixture.control, &mut ui).await;
+    assert!(footer(&ui, &fixture.control).contains("reasoning high"));
+    assert_eq!(
+        fixture.control.session().reasoning().unwrap(),
+        ion_ai::Reasoning::High
+    );
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn stale_history_cut_does_not_erase_newer_publication() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();

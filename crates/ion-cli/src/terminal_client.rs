@@ -165,6 +165,8 @@ struct Frontend {
     question: Option<QuestionModal>,
     cwd: PathBuf,
     session_label: String,
+    // Selected preference from accepted History, not an active Turn's controls.
+    reasoning_preference: Option<ion_ai::Reasoning>,
 }
 
 pub struct ChatInit {

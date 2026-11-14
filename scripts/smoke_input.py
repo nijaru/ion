@@ -279,7 +279,7 @@ def exercise_slash_input(work, base_env, endpoint):
         literals = ["  /Users/nick/project/src/main.rs\nInspect this file 🦀  ",
                     "/unregistered-command literal prompt", "/skill:missing literal skill input"]
         try:
-            terminal.wait_ready(lambda: "smoke/slash-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/slash-model · reasoning default · /help" in terminal.text())
             for index, literal in enumerate(literals, 1):
                 terminal.output.clear()
                 terminal.send("\x1b[200~" + literal + "\x1b[201~\r")
@@ -864,7 +864,7 @@ def exercise_orientation(work, env, endpoint):
         terminal = Terminal(cwd, env, mode, ["--cwd", str(cwd), "--tui-mode", mode,
                                             "--model", "other/VENDOR", "chat"])
         try:
-            terminal.wait_ready(lambda: "other/vendor/model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "other/vendor/model · reasoning default · /help" in terminal.text())
             database, = set((work / "ion").rglob("*.sqlite")) - previous
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 assert connection.execute("SELECT count(*) FROM entries").fetchone()[0] == 0
@@ -887,7 +887,7 @@ def exercise_orientation(work, env, endpoint):
             terminal.send(b"\x15\x0b")
             terminal.output.clear()
             terminal.send("/model smoke-model\r")
-            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · reasoning default · /help" in terminal.text())
             previous = set((work / "ion").rglob("*.sqlite"))
             terminal.output.clear()
             terminal.send("/new\r")
@@ -896,6 +896,10 @@ def exercise_orientation(work, env, endpoint):
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 header = json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])
             terminal.wait_ready(lambda: "Session " + header["id"][:8] in terminal.text())
+            for preference in ("high", "low", "default"):
+                terminal.output.clear()
+                terminal.send(f"/reasoning {preference}\r")
+                terminal.wait_ready(lambda: f"smoke/smoke-model · reasoning {preference} · /help" in terminal.text())
             terminal.output.clear()
             terminal.send("ORIENTATION_🦀\x01")
             # Inline CPR is synthetic in this fixture: it cannot model native
@@ -904,7 +908,7 @@ def exercise_orientation(work, env, endpoint):
             if mode == "fullscreen":
                 for rows, columns in ((1, 12), (4, 30), (30, 100)):
                     terminal.resize(rows, columns)
-                terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
+                terminal.wait_ready(lambda: "smoke/smoke-model · reasoning default · /help" in terminal.text())
             terminal.wait(lambda: "ORIENTATION_🦀" in terminal.text())
             assert len(requests) == before, "presentation admitted model input"
             terminal.send("PREFIX_\r")
@@ -937,7 +941,7 @@ def exercise_configuration(work, base_env, endpoint):
         before = len(requests)
         terminal = Terminal(cwd, env, mode)
         try:
-            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · reasoning default · /help" in terminal.text())
             release.clear()
             terminal.send("WAIT_HISTORY\r")
             terminal.wait(lambda: len(requests) == before + 1)
@@ -1000,7 +1004,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.send("high")
             terminal.paint()
             terminal.send("\r")
-            terminal.wait_ready(lambda: "Generation effort selected" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · reasoning high · /help" in terminal.text())
             # The next ready route cannot carry the current reasoning policy.
             # A failed preflight must not skip ahead or replace the old binding.
             models = home / "models.json"
@@ -1071,7 +1075,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.send("\x03")
             terminal.wait(lambda: "read login credential" in terminal.text())
             assert not credential.exists(), "cancelled model auth saved a key"
-            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · reasoning high · /help" in terminal.text())
             terminal.send("\x15")
             terminal.paint()
             terminal.output.clear()
@@ -1084,7 +1088,7 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.send("\r")
             terminal.wait(lambda: "openai API key:" in terminal.text())
             terminal.send("DISPOSABLE_MODEL_KEY\rSECRET_TAIL_SHOULD_NOT_SUBMIT\r")
-            terminal.wait_ready(lambda: "openai/gpt-5.4-mini · /help" in terminal.text())
+            terminal.wait_ready(lambda: "openai/gpt-5.4-mini · reasoning high · /help" in terminal.text())
             assert credential.read_text() == "DISPOSABLE_MODEL_KEY"
             assert credential.stat().st_mode & 0o777 == 0o600
             assert len(requests) == before, "configuration or secret typeahead admitted input"
@@ -1100,7 +1104,7 @@ def exercise_configuration(work, base_env, endpoint):
             # A fresh press must still choose, not submit the buried draft.
             terminal.output.clear()
             terminal.send("\r")
-            terminal.wait_ready(lambda: "smoke/smoke-model · /help" in terminal.text())
+            terminal.wait_ready(lambda: "smoke/smoke-model · reasoning high · /help" in terminal.text())
             terminal.send(b"\x1b[13;1:2u\x1b[13;3:2u\x1b[13;1:2u")
             terminal.paint()
             assert len(requests) == before, "held picker key admitted the retained draft"

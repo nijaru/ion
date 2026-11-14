@@ -33,11 +33,20 @@ pub(super) fn rows(
                 .style(crate::presentation_style::Role::Secondary),
         ));
     }
-    rows.push(Line::styled(
-        fit_line(
-            &format!("{}/{} · /help", model.provider, model.model),
-            width,
+    // Binding completion requires a fresh History before its preference can
+    // accompany the current model. Painting never locks Session storage.
+    let reasoning = ui
+        .reasoning_preference
+        .filter(|_| !ui.session_io.blocked && ui.session_io.binding.is_none());
+    let identity = match reasoning {
+        Some(reasoning) => format!(
+            "{}/{} · reasoning {reasoning} · /help",
+            model.provider, model.model
         ),
+        None => format!("{}/{} · /help", model.provider, model.model),
+    };
+    rows.push(Line::styled(
+        fit_line(&identity, width),
         ui.themes
             .theme()
             .style(crate::presentation_style::Role::Secondary),
@@ -52,7 +61,7 @@ mod tests {
 
     #[test]
     fn identity_chrome_is_control_safe_bounded_and_does_not_change_the_draft() {
-        let ui = Frontend {
+        let mut ui = Frontend {
             editor: Editor {
                 draft: "unsent 🦀".into(),
                 cursor: 3,
@@ -66,17 +75,45 @@ mod tests {
             provider: "provider".into(),
             model: "vendor/model".into(),
         };
-        for width in [1, 2, 12, 40, 100] {
-            for budget in 0..=3 {
-                let rows = rows(&ui, Some(&model), width, budget);
-                assert_eq!(rows.len(), budget.min(2));
-                for row in rows {
-                    assert!(row.width() <= width);
-                    let text = row.to_string();
-                    assert!(!text.contains(['\u{1b}', '\n', '\r']));
+        for (preference, label) in [
+            (None, ""),
+            (
+                Some(ion_ai::Reasoning::ProviderDefault),
+                " · reasoning default",
+            ),
+            (Some(ion_ai::Reasoning::Off), " · reasoning off"),
+            (Some(ion_ai::Reasoning::Low), " · reasoning low"),
+            (Some(ion_ai::Reasoning::Medium), " · reasoning medium"),
+            (Some(ion_ai::Reasoning::High), " · reasoning high"),
+            (
+                Some(ion_ai::Reasoning::BudgetTokens(u32::MAX)),
+                " · reasoning budget:4294967295",
+            ),
+        ] {
+            ui.reasoning_preference = preference;
+            assert_eq!(
+                rows(&ui, Some(&model), 100, 1)[0].to_string(),
+                format!("provider/vendor/model{label} · /help")
+            );
+            for width in [1, 2, 12, 40, 100] {
+                for budget in 0..=3 {
+                    let rows = rows(&ui, Some(&model), width, budget);
+                    assert_eq!(rows.len(), budget.min(2));
+                    for row in rows {
+                        assert!(row.width() <= width);
+                        let text = row.to_string();
+                        assert!(!text.contains(['\u{1b}', '\n', '\r']));
+                    }
                 }
             }
         }
+        ui.session_io.blocked = true;
+        assert_eq!(
+            rows(&ui, Some(&model), 100, 1)[0].to_string(),
+            "provider/vendor/model · /help"
+        );
+        ui.session_io.blocked = false;
+        ui.reasoning_preference = None;
         assert!(
             rows(&ui, None, 100, 2).is_empty(),
             "setup has no bound Session"

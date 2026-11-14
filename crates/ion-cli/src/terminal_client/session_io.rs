@@ -38,6 +38,7 @@ pub(super) struct History {
     projection: conversation::Prepared,
     prompts: Vec<String>,
     label: String,
+    reasoning: ion_ai::Reasoning,
     unfinished: bool,
 }
 
@@ -67,6 +68,7 @@ impl History {
             projection,
             prompts,
             label,
+            reasoning: view.reasoning,
             unfinished,
         }
     }
@@ -488,6 +490,7 @@ impl Frontend {
             projection,
             prompts,
             label,
+            reasoning,
             ..
         } = history;
         // The first native snapshot installs display facts, not a navigation.
@@ -511,6 +514,7 @@ impl Frontend {
         }
         self.editor.replace_prompt_history(prompts, same_session);
         self.session_label = label;
+        self.reasoning_preference = Some(reasoning);
     }
 
     #[cfg(test)]

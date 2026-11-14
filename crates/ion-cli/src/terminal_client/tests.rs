@@ -319,7 +319,10 @@ async fn detailed_help_and_binding_orientation_are_presentation_not_input() {
             .is_none()
     );
     let footer = orientation::rows(&ui, Some(fixture.control.agent().model()), 100, 2);
-    assert_eq!(footer[1].to_string(), "fixture/fixture · /help");
+    assert_eq!(
+        footer[1].to_string(),
+        "fixture/fixture · reasoning default · /help"
+    );
     command::handle_builtin(
         &mut fixture.control,
         &fixture.host,
