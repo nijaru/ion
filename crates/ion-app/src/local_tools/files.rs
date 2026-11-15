@@ -716,28 +716,80 @@ mod tests {
     }
 
     #[test]
-    fn write_preserves_existing_symlink() {
-        let root = std::env::temp_dir().join(format!("ion-tools-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let target = root.join("target.txt");
-        fs::write(&target, "old").unwrap();
-        std::os::unix::fs::symlink("target.txt", root.join("link.txt")).unwrap();
-        let tools = LocalTools::new(&root).unwrap();
-        let output = write(
-            &tools.cwd,
-            &json!({"path":"link.txt","content":"new","base_digest":hex_digest(b"old")}),
-            &CancellationToken::new(),
-            None,
-        );
-        assert!(!output.is_error, "{}", output.value);
-        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
-        assert!(
-            fs::symlink_metadata(root.join("link.txt"))
-                .unwrap()
-                .file_type()
-                .is_symlink()
-        );
-        fs::remove_dir_all(root).unwrap();
+    fn guarded_mutations_preserve_symlinks_and_unix_permissions() {
+        for mode in [0o751, 0o640] {
+            let root =
+                std::env::temp_dir().join(format!("ion-file-modes-{}", uuid::Uuid::now_v7()));
+            fs::create_dir(&root).unwrap();
+            let target = root.join("target.txt");
+            let alias = root.join("link.txt");
+            fs::write(&target, "old").unwrap();
+            fs::set_permissions(&target, fs::Permissions::from_mode(mode)).unwrap();
+            std::os::unix::fs::symlink("target.txt", &alias).unwrap();
+            let tools = LocalTools::new(&root).unwrap();
+            let stop = CancellationToken::new();
+            let written = write(
+                &tools.cwd,
+                &json!({"path":"link.txt","content":"new","base_digest":hex_digest(b"old")}),
+                &stop,
+                None,
+            );
+            assert!(!written.is_error, "{}", written.value);
+            assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+            assert_eq!(
+                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+            assert!(
+                fs::symlink_metadata(&alias)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+
+            let edited = edit(
+                &tools.cwd,
+                &json!({"path":"link.txt","edits":[{"old_text":"new","new_text":"edited"}],"base_digest":written.value["new_digest"]}),
+                &stop,
+                None,
+            );
+            assert!(!edited.is_error, "{}", edited.value);
+            assert_eq!(fs::read_to_string(&target).unwrap(), "edited");
+            assert_eq!(
+                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+            assert!(
+                fs::symlink_metadata(&alias)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+
+            let stale = write(
+                &tools.cwd,
+                &json!({"path":"link.txt","content":"lost","base_digest":written.value["new_digest"]}),
+                &stop,
+                None,
+            );
+            assert!(stale.is_error, "{}", stale.value);
+            assert_eq!(
+                stale.value["error"],
+                "base_digest does not match current file; read again before changing it"
+            );
+            assert_eq!(fs::read_to_string(&target).unwrap(), "edited");
+            assert_eq!(
+                fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+                mode
+            );
+            assert!(
+                fs::symlink_metadata(&alias)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink()
+            );
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -13,9 +14,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("ION_SMOKE_BIN", ROOT / "target/debug/ion"))
 
-SOURCE = """def add(a, b):
+SOURCE = """#!/usr/bin/env python3
+def add(a, b):
     return a - b
+
+
+if __name__ == "__main__":
+    print(add(2, 3))
 """
+SOURCE_MODE = 0o751
 TEST = """import unittest
 from calculator import add
 
@@ -41,7 +48,7 @@ PROMPT = (
 FOLLOWUP = "Describe the verified calculator change without running any tools."
 # The correction keeps the source size unchanged. Disable bytecode caching so
 # same-second writes cannot make a later check import the broken version.
-CHECK_COMMAND = "python3 -B -m unittest -q"
+CHECK_COMMAND = "python3 -B -m unittest -q && ./calculator.py"
 requests = []
 
 
@@ -148,6 +155,7 @@ class Provider(BaseHTTPRequestHandler):
                 assert envelope["is_error"] is False, envelope
                 assert envelope["result"]["exit_code"] == 0, envelope
                 assert "Ran 3 tests" in envelope["result"]["stderr"] and "OK" in envelope["result"]["stderr"], envelope
+                assert envelope["result"]["stdout"] == "5\n", envelope
                 self.send_final("CODING_SMOKE_OK")
             elif count == 6:
                 assert [message["content"] for message in body["messages"] if message["role"] == "user"] == [PROMPT, FOLLOWUP], body
@@ -234,6 +242,7 @@ def main():
         workspace = root / "workspace"
         workspace.mkdir()
         (workspace / "calculator.py").write_text(SOURCE)
+        (workspace / "calculator.py").chmod(SOURCE_MODE)
         (workspace / "test_calculator.py").write_text(TEST)
         server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -299,6 +308,7 @@ def main():
             )
             assert result.returncode == 0, (result.stdout, result.stderr)
             assert result.stdout.strip() == "CODING_SMOKE_OK", result
+            assert stat.S_IMODE((workspace / "calculator.py").stat().st_mode) == SOURCE_MODE
             first_view = inspect_session(workspace, env)
             assert first_view["unfinished_turn"] is None, first_view
             assert first_view["entries"][-1]["kind"] == "turn_ended", first_view["entries"][-1]
@@ -332,7 +342,11 @@ def main():
         )
         assert oracle.returncode == 0, oracle
         source = (workspace / "calculator.py").read_text()
-        assert "return a + b" in source and "return a - b" not in source, source
+        assert source == SOURCE.replace("return a - b", "return a + b"), source
+        assert stat.S_IMODE((workspace / "calculator.py").stat().st_mode) == SOURCE_MODE
+        executable = subprocess.run([str(workspace / "calculator.py")], cwd=workspace, env=env,
+                                    capture_output=True, text=True, check=True, timeout=15)
+        assert executable.stdout == "5\n" and executable.stderr == "", executable
 
         assert (workspace / "test_calculator.py").read_text() == TEST
         assert {path.name for path in workspace.iterdir()} == {"calculator.py", "test_calculator.py"}
@@ -355,11 +369,12 @@ def main():
             assert output["is_error"] == wire_results[result["call_id"]]["is_error"], result
         assert results[4]["outcome"]["output"]["is_error"] is True, results[4]
         assert results[-1]["outcome"]["output"]["is_error"] is False, results[-1]
+        assert results[-1]["outcome"]["output"]["value"]["stdout"] == "5\n", results[-1]
         assistants = [entry["data"] for entry in view["entries"] if entry["kind"] == "assistant"]
         assert assistants[0]["termination"] == {"Incomplete": "MaxOutputTokens"}, assistants[0]
         reasons = [assistant["execution"]["route"]["reason"] for assistant in assistants]
         assert reasons == ["user_request"] + ["tool_continuation"] * 5 + ["user_request"], reasons
-        print("Ion rejected truncated mutations, observed a failed check, corrected and verified the fixture, and reopened for a tool-free follow-up: OK")
+        print("Ion rejected truncated mutations, repaired and directly ran an executable without changing its mode, and reopened with retained results: OK")
 
 
 if __name__ == "__main__":
