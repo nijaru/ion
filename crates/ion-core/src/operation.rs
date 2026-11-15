@@ -103,6 +103,10 @@ impl OperationFence {
 /// An owned stop-and-join handle, not authority to abort execution. Dropping it
 /// requests stop; the Session retains the task and its outcome until joined.
 /// Await a retained `&mut Operation` when selecting repeatedly on completion.
+///
+/// Core execution entry points use caller tokens as parent cancellation scopes.
+/// Stopping this operation cancels its work and descendants, not that parent or
+/// sibling operations. Cancelling the parent still stops this operation.
 #[must_use = "retain and join the operation; dropping it only requests stop"]
 pub struct Operation<T, E> {
     owner: Option<Arc<OperationOwner>>,

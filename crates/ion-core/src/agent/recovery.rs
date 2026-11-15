@@ -80,6 +80,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
+        let stop = stop.child_token();
         let io = session.io()?;
         let turn_io = session.io()?;
         let agent = self.clone();

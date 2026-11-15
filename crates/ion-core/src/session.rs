@@ -906,6 +906,7 @@ impl Session {
         F: FnOnce(String, CancellationToken, ArtifactSink) -> W + Send + 'static,
         W: std::future::Future<Output = crate::ToolOutput> + Send + 'static,
     {
+        let stop = stop.child_token();
         let session = self.clone();
         self.operations.start(stop.clone(), async move {
             if stop.is_cancelled() {

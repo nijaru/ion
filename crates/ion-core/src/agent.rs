@@ -305,6 +305,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
+        let stop = stop.child_token();
         let SubmissionRequest { key, input } = request;
         // Reconciliation is read-only and remains available after shutdown. Do
         // not let busy/closed admission or changed preflight hide a durable key.
@@ -443,6 +444,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
+        let stop = stop.child_token();
         let agent = self.clone();
         session.operations.start(stop.clone(), {
             let session = session.clone();

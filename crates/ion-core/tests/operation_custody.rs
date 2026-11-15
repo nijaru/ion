@@ -4,9 +4,9 @@ use ion_ai::{
     ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 use ion_core::{
-    Agent, AgentError, OperationError, Session, SessionEntry, SessionError, ToolActivityKind,
-    ToolDefinition, ToolExecutor, ToolExposure, ToolOutcome, ToolOutput, ToolPresentation,
-    ToolRegistration, ToolSource, TurnEndReason,
+    Agent, AgentError, Operation, OperationError, Session, SessionEntry, SessionError,
+    ToolActivityKind, ToolDefinition, ToolExecutor, ToolExposure, ToolOutcome, ToolOutput,
+    ToolPresentation, ToolRegistration, ToolSource, TurnEndReason,
 };
 use std::{
     fs,
@@ -25,6 +25,7 @@ struct BlockingWrite {
     started: Arc<tokio::sync::Semaphore>,
     release: Arc<(Mutex<bool>, Condvar)>,
     finished: Arc<AtomicBool>,
+    stop: Mutex<Option<CancellationToken>>,
     path: PathBuf,
 }
 impl BlockingWrite {
@@ -63,6 +64,7 @@ impl ToolExecutor for BlockingWrite {
         invocation: ion_core::ToolInvocation<'a>,
     ) -> BoxFuture<'a, ToolOutput> {
         let stop = invocation.stop().clone();
+        *self.stop.lock().unwrap() = Some(stop.clone());
         Box::pin(async move {
             let release = self.release.clone();
             let started = self.started.clone();
@@ -107,6 +109,155 @@ fn model() -> ModelRef {
     }
 }
 
+fn held_shell(
+    session: &Arc<Session>,
+    parent: &CancellationToken,
+    path: PathBuf,
+) -> (
+    Operation<ToolOutput, SessionError>,
+    tokio::sync::oneshot::Receiver<CancellationToken>,
+    Arc<tokio::sync::Semaphore>,
+) {
+    let (started, running) = tokio::sync::oneshot::channel();
+    let release = Arc::new(tokio::sync::Semaphore::new(0));
+    let gate = release.clone();
+    let operation = session.run_user_shell(
+        "held effect".into(),
+        false,
+        parent.clone(),
+        move |_, stop, _| async move {
+            started.send(stop.clone()).unwrap();
+            let outcome = tokio::select! {
+                biased;
+                () = stop.cancelled() => "stopped",
+                permit = gate.acquire() => { permit.unwrap().forget(); "released" }
+            };
+            fs::write(path, outcome).unwrap();
+            shell_output()
+        },
+    );
+    (operation, running, release)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn operation_stop_is_local_but_parent_cancellation_reaches_all_sessions() {
+    for mode in ["stop", "drop", "shutdown", "parent"] {
+        let root =
+            std::env::temp_dir().join(format!("ion-stop-scope-{mode}-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let first = Arc::new(Session::create(root.join("first.sqlite"), Some(&root)).unwrap());
+        let second = Arc::new(Session::create(root.join("second.sqlite"), Some(&root)).unwrap());
+        let parent = CancellationToken::new();
+        let (operation, started, _release) = held_shell(&first, &parent, root.join("first-effect"));
+        let (other, other_started, release_other) =
+            held_shell(&second, &parent, root.join("second-effect"));
+        let first_stop = started.await.unwrap();
+        let second_stop = other_started.await.unwrap();
+        let mut operation = Some(operation);
+        match mode {
+            "stop" => operation.as_ref().unwrap().request_stop(),
+            "drop" => drop(operation.take()),
+            "shutdown" => first.shutdown().await.unwrap(),
+            "parent" => parent.cancel(),
+            _ => unreachable!(),
+        }
+        tokio::time::timeout(Duration::from_secs(4), first_stop.cancelled())
+            .await
+            .unwrap();
+        let parent_stopped = parent.is_cancelled();
+        let other_stopped = second_stop.is_cancelled();
+        release_other.add_permits(1);
+        if let Some(operation) = operation {
+            operation.await.unwrap();
+        }
+        other.await.unwrap();
+        first.shutdown().await.unwrap();
+        second.shutdown().await.unwrap();
+        let first_effect = fs::read_to_string(root.join("first-effect")).unwrap();
+        let second_effect = fs::read_to_string(root.join("second-effect")).unwrap();
+        let first_entries = first.view().unwrap().entries;
+        let second_entries = second.view().unwrap().entries;
+        drop((first, second));
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            parent_stopped,
+            mode == "parent",
+            "{mode}: operation cancelled its caller's scope"
+        );
+        assert_eq!(
+            other_stopped,
+            mode == "parent",
+            "{mode}: unrelated Session was stopped"
+        );
+        assert_eq!(first_effect, "stopped");
+        assert_eq!(
+            second_effect,
+            if mode == "parent" {
+                "stopped"
+            } else {
+                "released"
+            }
+        );
+        for entries in [first_entries, second_entries] {
+            assert_eq!(entries.len(), 2);
+            assert!(matches!(entries[0], SessionEntry::UserShellAdmitted { .. }));
+            assert!(matches!(
+                entries[1],
+                SessionEntry::UserShellSettled {
+                    outcome: ion_core::UserShellOutcome::Observed { .. },
+                    ..
+                }
+            ));
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn stale_operation_handles_cannot_stop_replacement_work() {
+    for joined in [false, true] {
+        let root = std::env::temp_dir().join(format!("ion-stale-stop-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let parent = CancellationToken::new();
+        let mut old =
+            session.run_user_shell("old".into(), false, parent.clone(), |_, _, _| async {
+                shell_output()
+            });
+        let fence = old.fence();
+        tokio::time::timeout(Duration::from_secs(4), async {
+            while !fence.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        if joined {
+            (&mut old).await.unwrap();
+        }
+        session.ensure_idle().unwrap();
+        let prefix = session.view().unwrap().entries;
+        let (current, started, release) = held_shell(&session, &parent, root.join("effect"));
+        let current_stop = started.await.unwrap();
+        if joined {
+            old.request_stop();
+        }
+        drop(old);
+        let parent_stopped = parent.is_cancelled();
+        let current_stopped = current_stop.is_cancelled();
+        release.add_permits(1);
+        current.await.unwrap();
+        session.shutdown().await.unwrap();
+        let entries = session.view().unwrap().entries;
+        let effect = fs::read_to_string(root.join("effect")).unwrap();
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+        assert!(!parent_stopped && !current_stopped, "joined={joined}");
+        assert_eq!(effect, "released");
+        assert_eq!(&entries[..prefix.len()], prefix);
+        assert_eq!(entries.len(), prefix.len() + 2);
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
     for mode in ["drop", "timeout", "abort"] {
@@ -117,6 +268,7 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
             started: Arc::new(tokio::sync::Semaphore::new(0)),
             release: Arc::new((Mutex::new(false), Condvar::new())),
             finished: Arc::new(AtomicBool::new(false)),
+            stop: Mutex::new(None),
             path: root.join("effect"),
         });
         let _release_on_failure = ReleaseOnDrop(tools.clone());
@@ -165,7 +317,8 @@ async fn dropped_timed_out_and_aborted_callers_cannot_release_started_work() {
                 drop(operation);
             }
         }
-        let stopped = stop.is_cancelled();
+        let stopped = tools.stop.lock().unwrap().as_ref().unwrap().is_cancelled();
+        assert!(!stop.is_cancelled(), "{mode}: stop escaped the operation");
         let blocked = !tools.finished.load(Ordering::SeqCst);
         assert!(!fence.is_finished(), "stop is not actual completion");
         let premature = agent
@@ -249,11 +402,19 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
     assert!(matches!(cancelled, Err(SessionError::UserShellCancelled)));
     assert_eq!(session.entry_count().unwrap(), 0);
     let stop = CancellationToken::new();
+    let (started, running) = tokio::sync::oneshot::channel();
     let failed = session
-        .run_user_shell("interrupted".into(), false, stop.clone(), |_, _, _| async {
-            panic!("controlled execution task panic before host work")
-        })
+        .run_user_shell(
+            "interrupted".into(),
+            false,
+            stop.clone(),
+            move |_, actual_stop, _| async move {
+                started.send(actual_stop).unwrap();
+                panic!("controlled execution task panic before host work")
+            },
+        )
         .await;
+    let actual_stop = running.await.unwrap();
     let denied = session
         .run_user_shell(
             "must not resume".into(),
@@ -267,7 +428,8 @@ async fn stop_before_admission_is_inert_and_genuine_task_panic_closes_live_execu
     let view = session.view().unwrap();
     drop(session);
     fs::remove_dir_all(root).unwrap();
-    assert!(stop.is_cancelled());
+    assert!(actual_stop.is_cancelled());
+    assert!(!stop.is_cancelled());
     for result in [failed, denied] {
         assert!(matches!(
             result,
@@ -442,17 +604,18 @@ async fn shutdown_and_operation_waiters_share_actual_completion() {
         "fixture".into(),
         false,
         stop.clone(),
-        move |_, _, _| async move {
-            started.send(()).unwrap();
+        move |_, actual_stop, _| async move {
+            started.send(actual_stop).unwrap();
             held.await.unwrap();
             shell_output()
         },
     );
     let waiter = tokio::spawn(operation);
-    running.await.unwrap();
+    let actual_stop = running.await.unwrap();
     let closing = session.clone();
     let shutdown = tokio::spawn(async move { closing.shutdown().await });
-    stop.cancelled().await; // Shutdown has registered its independent join wait.
+    actual_stop.cancelled().await; // Shutdown has registered its independent join wait.
+    assert!(!stop.is_cancelled());
     release.send(()).unwrap();
     let (joined, closed) = tokio::time::timeout(Duration::from_secs(4), async {
         tokio::join!(waiter, shutdown)

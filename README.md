@@ -100,6 +100,8 @@ Rust application entry points and examples live in `crates/ion-cli/examples/`. `
 
 `Session::create/open` and `SessionSetup::new` are blocking factory operations. Async coding clients use retained `CodingApplication::prepare_setup`, Session I/O and reader capabilities. Keep `setup.retirements()` outside the controller: after controller shutdown, drain reliable updates, release every Session/read capability, then await the retirement scope's `join()`. Shutdown preserves read-only access; retirement separately joins native SQLite close and writer-lease release. Cancelling a borrowed wait does not cancel or discard its native work.
 
+Core execution APIs treat a caller's cancellation token as a parent scope. Cancelling it stops all operations beneath it; stopping or dropping one `Operation` stops only that operation and its descendants, not the parent or sibling Sessions. Dropping an operation handle requests stop but does not join it. Retain and await the handle, or join through Session shutdown, before releasing the host resources its work uses.
+
 A local input ID or pending launch is not durable acceptance. Use Core input/request receipts and reliable control updates to distinguish committed, not accepted and unresolved inputs. Never automatically retry or restore an unresolved input as a fresh request.
 
 ## Limitations

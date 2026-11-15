@@ -537,6 +537,193 @@ async fn keyed_uncertain_commit_is_not_replaced_by_faulted_reconciliation() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+struct HeldGeneration {
+    entered: tokio::sync::Semaphore,
+    calls: std::sync::atomic::AtomicUsize,
+}
+impl ModelService for HeldGeneration {
+    fn stream<'a>(
+        &'a self,
+        _request: ModelRequest,
+    ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.entered.add_permits(1);
+            std::future::pending().await
+        })
+    }
+}
+
+async fn stop_generation<T>(
+    operation: crate::Operation<T, AgentError>,
+    parent: &CancellationToken,
+    cancel_parent: bool,
+    service: &HeldGeneration,
+) {
+    tokio::time::timeout(Duration::from_secs(5), service.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    if cancel_parent {
+        parent.cancel();
+    } else {
+        operation.request_stop();
+    }
+    let result = tokio::time::timeout(Duration::from_secs(5), operation)
+        .await
+        .unwrap();
+    assert!(matches!(result, Err(AgentError::Cancelled)));
+    assert_eq!(parent.is_cancelled(), cancel_parent);
+    assert_eq!(
+        service.calls.load(Ordering::SeqCst),
+        1,
+        "stop must not retry generation"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn every_generation_entry_owns_its_stop_scope_and_inherits_parent_stop() {
+    for entry in ["submit", "keyed", "resume", "completion", "compact"] {
+        for cancel_parent in [false, true] {
+            let service = Arc::new(HeldGeneration {
+                entered: tokio::sync::Semaphore::new(0),
+                calls: std::sync::atomic::AtomicUsize::new(0),
+            });
+            let (root, session, agent) = fixture(service.clone());
+            let agent =
+                agent.with_recovery_scope(AuthorityScope::new("fixture/stop-scope-v1").unwrap());
+            let parent = CancellationToken::new();
+            let mut original = Vec::new();
+            match entry {
+                "submit" => {
+                    stop_generation(
+                        agent.submit(
+                            session.clone(),
+                            "work".into(),
+                            "test".into(),
+                            parent.clone(),
+                            |_| {},
+                        ),
+                        &parent,
+                        cancel_parent,
+                        &service,
+                    )
+                    .await
+                }
+                "keyed" => {
+                    let submission = agent
+                        .submit_request::<_, ()>(
+                            session.clone(),
+                            request(),
+                            "test".into(),
+                            parent.clone(),
+                            None,
+                            |_| {},
+                        )
+                        .await
+                        .unwrap();
+                    stop_generation(
+                        submission.operation.unwrap(),
+                        &parent,
+                        cancel_parent,
+                        &service,
+                    )
+                    .await;
+                }
+                "resume" => {
+                    let (binding, _) = agent.admission_binding(&session, "test").unwrap();
+                    session
+                        .admit_turn(user_text("work".into()), agent.model.clone(), None, binding)
+                        .unwrap();
+                    let point = session.recovery_state().unwrap().unwrap().point;
+                    let (_, operation) = agent
+                        .resume_turn::<_, ()>(
+                            session.clone(),
+                            point,
+                            "test".into(),
+                            parent.clone(),
+                            None,
+                            |_| {},
+                        )
+                        .await
+                        .unwrap();
+                    stop_generation(operation, &parent, cancel_parent, &service).await;
+                }
+                "completion" => {
+                    let completions = CompletionInbox::new(session.id());
+                    let permit = completions
+                        .reserve(0, None, CompletionDelivery::Wake)
+                        .unwrap();
+                    permit.offer(CompletionNotice {
+                        source_session: uuid::Uuid::now_v7(),
+                        run: uuid::Uuid::now_v7(),
+                        child_session: uuid::Uuid::now_v7(),
+                    });
+                    let inbox = Arc::new(
+                        SteeringInbox::<()>::new(agent.limits(), crate::InputBudget::default())
+                            .with_completions(completions),
+                    );
+                    let submission = agent
+                        .submit_completions(
+                            session.clone(),
+                            "test".into(),
+                            parent.clone(),
+                            inbox,
+                            |_| {},
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    stop_generation(submission.operation, &parent, cancel_parent, &service).await;
+                    drop(permit);
+                }
+                "compact" => {
+                    let seed = Agent {
+                        service: PreflightService::new(|| false, || {}),
+                        ..agent.clone()
+                    };
+                    seed.submit(
+                        session.clone(),
+                        "settled".into(),
+                        "test".into(),
+                        CancellationToken::new(),
+                        |_| {},
+                    )
+                    .await
+                    .unwrap();
+                    original = session.view().unwrap().entries;
+                    stop_generation(
+                        agent.compact(None, session.clone(), parent.clone(), |_| {}),
+                        &parent,
+                        cancel_parent,
+                        &service,
+                    )
+                    .await;
+                }
+                _ => unreachable!(),
+            }
+            session.shutdown().await.unwrap();
+            let view = session.view().unwrap();
+            if entry == "compact" {
+                assert_eq!(
+                    view.entries, original,
+                    "stopped compaction must not publish a cut"
+                );
+            } else {
+                assert_eq!(view.turns().len(), 1);
+                assert_eq!(view.turns()[0].end, Some(crate::TurnEndReason::Cancelled));
+                assert!(!view.entries.iter().any(|entry| matches!(
+                    entry,
+                    SessionEntry::Assistant { .. } | SessionEntry::ToolResult { .. }
+                )));
+            }
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
 // A Send-only observer whose destructor reenters the operation owner.
 struct ReentrantDrop {
     session: Arc<Session>,

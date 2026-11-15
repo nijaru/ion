@@ -1111,7 +1111,13 @@ async fn owner_drop_requests_stop_and_core_retains_the_actual_task() {
         .submit(Delivery::Start, prompt("root"), meta("root"))
         .unwrap();
     model.wait_calls(1).await;
+    let steering = control.steering().unwrap();
     drop(control);
+    assert!(
+        steering
+            .submit(Message::user_input("too late".into(), []), meta("late"))
+            .is_err()
+    );
     session.shutdown().await.unwrap();
     assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
         entry,

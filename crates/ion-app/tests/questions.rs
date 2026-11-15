@@ -568,8 +568,16 @@ async fn control_stop_before_answer_prevents_dependent_dispatch() {
             (),
         )
         .unwrap();
-    let _pending = wait_for_pending(&mut fixture).await;
+    let pending = wait_for_pending(&mut fixture).await;
     fixture.control.request_stop();
+    assert!(matches!(
+        fixture
+            .responder
+            .as_ref()
+            .unwrap()
+            .answer(pending.request, vec![QuestionAnswer::Option { index: 0 }]),
+        Err(ion_app::QuestionError::Stopped | ion_app::QuestionError::StaleRequest)
+    ));
     let settlement = wait_for_settlement(&mut fixture).await;
     assert!(matches!(
         settlement.outcome,

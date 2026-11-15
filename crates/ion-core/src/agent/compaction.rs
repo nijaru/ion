@@ -26,6 +26,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send + 'static,
     {
+        let stop = stop.child_token();
         let instructions = instructions.filter(|text| !text.trim().is_empty());
         let agent = self.clone();
         session.operations.start(stop.clone(), {

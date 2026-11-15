@@ -25,6 +25,7 @@ impl Agent {
         if inbox.completions.is_none() {
             return Ok(None);
         }
+        let stop = stop.child_token();
         let io = session.io()?;
         let turn_io = session.io()?;
         let agent = self.clone();
