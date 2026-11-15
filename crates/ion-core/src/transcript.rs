@@ -744,6 +744,9 @@ impl LiveTranscript {
             AgentEvent::ContextCompacted { through_entry } => {
                 self.note(format!("Context summarized through entry {through_entry}"));
             }
+            AgentEvent::ContextCompactionSkipped { reason } => self.note(format!(
+                "Auto-compaction skipped: {reason}; existing context retained"
+            )),
             AgentEvent::ProviderReplayRebased => {
                 self.note("Provider reasoning context reset".into());
             }

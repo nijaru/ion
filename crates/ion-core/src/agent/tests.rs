@@ -9,6 +9,8 @@ use ion_ai::{
     ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 
+mod optional_compaction;
+
 fn tiny_image() -> ImageContent {
     ImageContent::from_bytes(&[
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
@@ -4193,6 +4195,123 @@ async fn output_pressure_compacts_before_issuing_a_coding_request() {
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[tokio::test]
+async fn rejected_optional_summaries_do_not_block_coding_or_replace_context() {
+    let root = std::env::temp_dir().join(format!("ion-optional-summary-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let rejected = || {
+        Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("unfinished summary".into())],
+                provider_replay: None,
+            },
+            usage: Usage::known(500, 100),
+            termination: ResponseTermination::Incomplete(ion_ai::IncompleteReason::MaxOutputTokens),
+            returned_model: None,
+        })])
+    };
+    let scripts = Arc::new(ScriptedModelService::new([
+        response(vec![Content::Text("h".repeat(9600))]),
+        rejected(),
+        response(vec![Content::ToolCall(ToolCall {
+            id: "write-once".into(),
+            name: "write".into(),
+            arguments: serde_json::json!({"path":"answer.txt","content":"done"}),
+            raw_arguments: None,
+        })]),
+        rejected(),
+        response(vec![Content::Text("done".into())]),
+    ]));
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+    agent
+        .submit(
+            session.clone(),
+            "earlier task".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let agent = agent.with_limits(AgentLimits {
+        max_output_tokens: 2500,
+        context_window_tokens: Some(5_000),
+        ..AgentLimits::default()
+    });
+    let skipped = Arc::new(Mutex::new(0));
+    let observed_skips = skipped.clone();
+    let result = agent
+        .submit(
+            session.clone(),
+            "write the answer".into(),
+            "test".into(),
+            CancellationToken::new(),
+            move |event| {
+                if matches!(event, AgentEvent::ContextCompactionSkipped { .. }) {
+                    *observed_skips.lock().unwrap() += 1;
+                }
+            },
+        )
+        .await;
+    assert_eq!(
+        *skipped.lock().unwrap(),
+        2,
+        "both attempts must be optional, once per model/tool step"
+    );
+    assert_eq!(
+        result.unwrap(),
+        "done",
+        "output reserve is a preference, not a prerequisite for coding"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("answer.txt")).unwrap(),
+        "done"
+    );
+    let requests = scripts.requests();
+    assert_eq!(
+        requests.len(),
+        5,
+        "one optional attempt per model/tool step, no hidden summary retry"
+    );
+    for request in [&requests[2], &requests[4]] {
+        assert!(
+            request.controls.max_output_tokens > 0 && request.controls.max_output_tokens < 2500
+        );
+        assert!(!request.tools.is_empty());
+        assert!(
+            request
+                .messages
+                .iter()
+                .any(|message| message.content.contains(&Content::Text("h".repeat(9600))))
+        );
+        assert!(
+            !serde_json::to_string(&request.messages)
+                .unwrap()
+                .contains("unfinished summary")
+        );
+    }
+    let view = session.view().unwrap();
+    assert!(view.entries.starts_with(&before));
+    assert!(view.compacted_through.is_none());
+    assert_eq!(view.usage().uncommitted.observations, 2);
+    assert_eq!(view.usage().uncommitted.output_tokens.reported, 200);
+    assert_eq!(
+        view.entries
+            .iter()
+            .filter(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+            .count(),
+        1
+    );
+    drop((agent, session));
+    let reopened = Session::open(root.join("session.sqlite")).unwrap();
+    assert_eq!(reopened.view().unwrap().entries, view.entries);
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]

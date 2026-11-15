@@ -21,6 +21,8 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 refusal_requests = {}
 refusal_text = "I cannot help with that 🦀."
+optional_requests = []
+optional_history = "h" * 36000
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -31,8 +33,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
 
-        def event(delta, reason=None):
+        def event(delta, reason=None, usage=None):
             data = {"id": "headless", "choices": [{"index": 0, "delta": delta, "finish_reason": reason}]}
+            if usage is not None:
+                data["usage"] = usage
             self.wfile.write(b"data: " + json.dumps(data).encode() + b"\n\n")
             self.wfile.flush()
 
@@ -40,7 +44,21 @@ class Handler(BaseHTTPRequestHandler):
             group_prompt = next((str(message["content"]) for message in body["messages"] if message["role"] == "user" and "GROUP_TIMEOUT" in str(message["content"])), None)
             refusal_prompt = next((str(message["content"]) for message in reversed(body["messages"])
                                    if message["role"] == "user" and str(message["content"]).startswith("CHAT_REFUSAL_")), None)
-            if refusal_prompt is not None:
+            if body["model"] == "optional-model":
+                optional_requests.append(body)
+                if not body.get("tools"):
+                    event({"content": "AUX_INCOMPLETE_NEVER_CONTEXT"}, "length",
+                          {"prompt_tokens": 500, "completion_tokens": 100})
+                elif prompt == "SEED_OPTIONAL":
+                    event({"content": optional_history}, "stop")
+                elif body["messages"][-1]["role"] == "tool":
+                    event({"content": "CODING_COMPLETED"}, "stop")
+                else:
+                    event({"tool_calls": [{"index": 0, "id": "optional-effect", "type": "function", "function": {
+                        "name": "exec", "arguments": json.dumps({"command": "printf 'ONCE\\n' >> effect.txt", "timeout_ms": 5000})}}]}, "tool_calls")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            elif refusal_prompt is not None:
                 requests = refusal_requests.setdefault(refusal_prompt, [])
                 requests.append(body)
                 if "INTERRUPTED" in refusal_prompt and len(requests) == 1:
@@ -230,6 +248,62 @@ def exercise_refusals(work, env):
     print("Ion headless refusal output, continuation, and response admission: OK")
 
 
+def exercise_optional_compaction(work, endpoint):
+    for json_output in (True, False):
+        sandbox = work / f"optional-{json_output}"
+        workspace = sandbox / "workspace"
+        workspace.mkdir(parents=True)
+        (workspace / ".git").mkdir()  # Bound instruction discovery to this fixture.
+        env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
+        env.update(HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"))
+        # The retained history fits with a positive, clamped output budget, but
+        # consumes more than half the full coding application's available room.
+        subprocess.run([binary, "use", "optional-fixture", "optional-model", "--endpoint", endpoint,
+                        "--wire", "chat-completions", "--context-window", "28000", "--max-output-tokens", "16000"],
+                       env=env, capture_output=True, check=True)
+        optional_requests.clear()
+        seed = subprocess.run([binary, "--cwd", workspace, "run", "SEED_OPTIONAL"], env=env,
+                              stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+        assert seed.returncode == 0 and seed.stdout == optional_history + "\n", (seed.returncode, seed.stderr)
+        database = session_database(sandbox / "ion", workspace)
+        before = entries(database)
+        command = [binary, "--cwd", workspace, "--session", database] + (["--json"] if json_output else [])
+        child = subprocess.run(command + ["run", "FINISH_OPTIONAL"], env=env,
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+        assert child.returncode == 0, (child.returncode, child.stdout[-3000:], child.stderr)
+        assert (workspace / "effect.txt").read_text() == "ONCE\n", "coding effect was omitted or replayed"
+        if json_output:
+            records = [json.loads(line) for line in child.stdout.splitlines()]
+            skips = [record for record in records if record["type"] == "context_compaction_skipped"]
+            assert skips == [dict(type="context_compaction_skipped", reason="invalid summary: model output limit reached")] * 2, skips
+            assert records[-1] == dict(type="run_end", status="completed"), records[-1]
+            assert next(record["text"] for record in records if record["type"] == "final") == "CODING_COMPLETED"
+        else:
+            assert child.stdout == "CODING_COMPLETED\n", child.stdout
+            assert child.stderr.count("Auto-compaction skipped:") == 2, child.stderr
+            assert child.stderr.count("existing context retained") == 2, child.stderr
+        assert len(optional_requests) == 5, "one optional attempt per model/tool step; no hidden retries"
+        for request in (optional_requests[1], optional_requests[3]):
+            assert not request.get("tools"), "auxiliary request advertised effect authority"
+        for request in (optional_requests[2], optional_requests[4]):
+            assert request.get("tools") and 0 < request["max_completion_tokens"] < 16000, request.keys()
+            assert any(message["role"] == "assistant" and message["content"] == optional_history for message in request["messages"])
+            assert "AUX_INCOMPLETE_NEVER_CONTEXT" not in json.dumps(request["messages"])
+        facts = entries(database)
+        assert facts[:len(before)] == before, "optional failure rewrote existing history"
+        assert not any(fact["kind"] == "compacted" for fact in facts), "rejected summary committed a cut"
+        assert sum(fact["kind"] == "tool_result" for fact in facts) == 1, "auxiliary call gained execution authority"
+        usage = [fact["data"]["usage"] for fact in facts if fact["kind"] == "uncommitted_usage"]
+        assert len(usage) == 2 and sum(item["output_tokens"] for item in usage) == 200, usage
+        assert facts[-1]["kind"] == "turn_ended" and facts[-1]["data"]["reason"] == "completed", facts[-1]
+        reopened = subprocess.run([binary, "--session", database, "inspect"], env=env,
+                                  stdin=subprocess.DEVNULL, capture_output=True, check=True, text=True, timeout=15)
+        assert json.loads(reopened.stdout)["entries"] == facts and entries(database) == facts
+        assert len(optional_requests) == 5, "passive reopening dispatched model work"
+    print("Ion optional compaction failure, clamped coding effects, accounting and reopening: OK")
+
+
 with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
     work = Path(temporary)
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
@@ -240,6 +314,7 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "headless-smoke", "model", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        exercise_optional_compaction(work, endpoint)
         exercise_refusals(work, env)
         burst_workspace = work / "burst"
         burst_workspace.mkdir()

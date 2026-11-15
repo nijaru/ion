@@ -99,6 +99,9 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
         AgentEvent::ContextCompacted { through_entry } => {
             json!({"type":"context_compacted","through_entry":through_entry})
         }
+        AgentEvent::ContextCompactionSkipped { reason } => {
+            json!({"type":"context_compaction_skipped","reason":reason})
+        }
         AgentEvent::ProviderReplayRebased => json!({"type":"provider_replay_rebased"}),
         AgentEvent::ProviderReplayNotice {
             action,
@@ -162,6 +165,9 @@ pub(super) fn diagnostic(event: &AgentEvent) -> Option<String> {
         } => format!("[summary request too large; retrying through entry {next_through_entry}]"),
         AgentEvent::ContextCompacted { through_entry } => {
             format!("[context summarized through entry {through_entry}]")
+        }
+        AgentEvent::ContextCompactionSkipped { reason } => {
+            format!("[Auto-compaction skipped: {reason}; existing context retained]")
         }
         AgentEvent::ProviderReplayRebased => "[provider reasoning context reset]".into(),
         AgentEvent::ProviderReplayNotice {

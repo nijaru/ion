@@ -135,6 +135,7 @@ impl ChildProgress {
             | AgentEvent::ResponseRestarted
             | AgentEvent::ProviderRetry { .. }
             | AgentEvent::ContextCompactionRetry { .. }
+            | AgentEvent::ContextCompactionSkipped { .. }
             | AgentEvent::ContextCompacted { .. }
             | AgentEvent::ProviderReplayRebased => Some(ChildActivity::Model),
             AgentEvent::ThinkingDelta { .. } => Some(ChildActivity::Thinking),

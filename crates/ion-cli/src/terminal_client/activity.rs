@@ -193,8 +193,11 @@ pub(super) fn apply(
             ui.status.clear();
         }
         ControlUpdate::Activity(Observation::Event { operation, event }) => {
-            if matches!(event.as_ref(), AgentEvent::ContextCompactionRetry { .. })
-                && !ui.conversation.live_for(operation)
+            if matches!(
+                event.as_ref(),
+                AgentEvent::ContextCompactionRetry { .. }
+                    | AgentEvent::ContextCompactionSkipped { .. }
+            ) && !ui.conversation.live_for(operation)
                 && let Some(note) = crate::agent_events::diagnostic(&event)
             {
                 ui.note(note);

@@ -11,6 +11,20 @@ use ion_ai::{IncompleteReason, ModelResponse, ModelRouteReason, ResponseTerminat
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
+// Only failures of the auxiliary generation may forgo this optimization.
+// Cancellation, accounting/storage and local invariants must still stop work.
+fn optional_compaction_failure(error: &AgentError) -> Option<String> {
+    match error {
+        // A provider-cancelled summary is not our operation's cancellation.
+        // Intake checks the operation token again before issuing any request.
+        AgentError::Provider(error) => Some(format!("provider: {:?}", error.kind)),
+        AgentError::ReplayContextChanged => Some("summary provider replay unavailable".into()),
+        AgentError::InvalidSummary(reason) => Some(format!("invalid summary: {reason}")),
+        AgentError::IncompleteModelResponse => Some("incomplete summary response".into()),
+        _ => None,
+    }
+}
+
 pub(super) struct RequestCycle<'a> {
     agent: &'a Agent,
     io: &'a crate::SessionIo,
@@ -137,7 +151,13 @@ impl<'a> RequestCycle<'a> {
                     // through intake for newly queued steering/stop.
                     Ok(None) | Err(AgentError::ContextTooLarge) if !required => continue,
                     Ok(None) => return Err(AgentError::ContextTooLarge),
-                    Err(error) => return Err(error),
+                    Err(error) => {
+                        if !required && let Some(reason) = optional_compaction_failure(&error) {
+                            observe(AgentEvent::ContextCompactionSkipped { reason });
+                            continue;
+                        }
+                        return Err(error);
+                    }
                 }
             }
             let output_budget = output_budget.ok_or(AgentError::ContextTooLarge)?;

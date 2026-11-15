@@ -655,6 +655,12 @@ pub enum AgentEvent {
     ContextCompacted {
         through_entry: u64,
     },
+    /// Optional output-room planning failed; the existing context is retained.
+    /// Reason contains only a provider category or a static validation cause,
+    /// never an untrusted provider error payload. Not a durable context change.
+    ContextCompactionSkipped {
+        reason: String,
+    },
     ProviderReplayRebased,
     ProviderReplayNotice {
         action: String,
