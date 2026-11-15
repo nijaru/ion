@@ -35,11 +35,11 @@ def chunk(kind, payload):
     return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
 
 
-def tiny_png():
+def tiny_png(rgba=b"\xff\x00\x00\xff"):
     return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00\xff"))
+        + chunk(b"IDAT", zlib.compress(b"\x00" + rgba))
         + chunk(b"IEND", b"")
     )
 
@@ -103,6 +103,29 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def image_pixel(part):
+    """Decode the first pixel of this fixture's one-pixel RGB/RGBA PNG."""
+    png = base64.b64decode(part["image_url"]["url"].split(",", 1)[1])
+    assert png.startswith(b"\x89PNG\r\n\x1a\n"), png[:16]
+    offset, compressed, channels = 8, bytearray(), None
+    while offset < len(png):
+        length = struct.unpack(">I", png[offset:offset + 4])[0]
+        kind = png[offset + 4:offset + 8]
+        payload = png[offset + 8:offset + 8 + length]
+        if kind == b"IHDR":
+            width, height, depth, color, compression, filtering, interlace = struct.unpack(">IIBBBBB", payload)
+            assert (width, height, depth, compression, filtering, interlace) == (1, 1, 8, 0, 0, 0)
+            assert color in (2, 6), color
+            channels = 3 if color == 2 else 4
+        elif kind == b"IDAT":
+            compressed.extend(payload)
+        offset += 12 + length
+    row = zlib.decompress(compressed)
+    assert channels is not None and len(row) == channels + 1 and row[0] <= 4, row
+    # All PNG filters predict zero at the first pixel of the first row.
+    return tuple(row[1:4]) + (row[4] if channels == 4 else 255,)
+
+
 def user_image_request(request, expected_text):
     users = [message for message in request["messages"] if message["role"] == "user"]
     first = users[0]["content"]
@@ -117,26 +140,61 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
     workspace.mkdir()
     (workspace / "red.png").write_bytes(tiny_png())
     (workspace / "bad.png").write_bytes(b"\x89PNG\r\n\x1a\ninvalid")
-    env = {**os.environ, "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    quoted_argv_name = '"literal image.png'
+    (workspace / quoted_argv_name).write_bytes(tiny_png(b"\x00\xff\x00\xff"))
+    home = work / "home"
+    home.mkdir()
+    image_reference = "~/screen shots/café 🦀.png"
+    home_image = home / "screen shots" / "café 🦀.png"
+    home_image.parent.mkdir()
+    home_image.write_bytes(tiny_png())
+    literal_image = workspace / "~" / "screen shots" / "café 🦀.png"
+    literal_image.parent.mkdir(parents=True)
+    literal_image.write_bytes(tiny_png(b"\x00\x00\xff\xff"))
+    (work / "tmp").mkdir()
+    env = {key: value for key, value in os.environ.items() if key not in {
+        "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+        "XIAOMI_API_KEY", "ION_CUSTOM_API_KEY", "SMOKE_API_KEY",
+    }}
+    env.update(HOME=str(home), ION_HOME=str(work / "ion"), XDG_CONFIG_HOME=str(work / "config"),
+               XDG_STATE_HOME=str(work / "state"), TMPDIR=str(work / "tmp"))
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "smoke", "vision", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
-        first = subprocess.run([binary, "--cwd", workspace, "--image", "red.png", "run", "Inspect the picture."], env=env, check=True, capture_output=True, text=True)
+        first = subprocess.run([binary, "--cwd", workspace, "--image", image_reference,
+                                "--image", "./" + image_reference, "--image", quoted_argv_name,
+                                "run", "Inspect the picture."],
+                               env=env, check=True, capture_output=True, text=True)
         assert first.stdout.strip() == "IMAGE_OK", first
+        home_image.write_bytes(tiny_png(b"\x00\xff\x00\xff"))
         resumed = subprocess.run([binary, "--cwd", workspace, "--continue", "run", "Continue."], env=env, check=True, capture_output=True, text=True)
         assert resumed.stdout.strip() == "IMAGE_OK", resumed
         assert len(requests) == 2
-        user_image_request(requests[0], "Inspect the picture.")
+        initial = user_image_request(requests[0], "Inspect the picture.")[0]["content"]
+        pixels = [image_pixel(part) for part in initial[1:]]
+        assert pixels == [(255, 0, 0, 255), (0, 0, 255, 255), (0, 255, 0, 255)], pixels
         users = user_image_request(requests[1], "Inspect the picture.")
+        assert users[0]["content"] == initial, users
         assert users[1]["content"] == "Continue.", users
+        home_image.write_bytes(tiny_png())
         inspect = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout
         assert "base64 image data omitted" in inspect
         assert "iVBORw0KGgo" not in inspect
         invalid = subprocess.run([binary, "--cwd", workspace, "--image", "bad.png", "run", "Inspect."], env=env, capture_output=True, text=True)
         assert invalid.returncode != 0 and "invalid image" in invalid.stderr
+        for index, unusable_home in enumerate((None, "", "relative")):
+            rejected_session = work / f"invalid-home-{index}.sqlite"
+            invalid_env = {key: value for key, value in env.items() if key != "HOME"}
+            if unusable_home is not None:
+                invalid_env["HOME"] = unusable_home
+            rejected = subprocess.run([binary, "--cwd", workspace, "--session", rejected_session,
+                                       "--image", image_reference, "run", "Never admitted."],
+                                      env=invalid_env, capture_output=True, text=True)
+            assert rejected.returncode != 0 and "HOME" in rejected.stderr, rejected
+            assert not rejected_session.exists(), rejected_session
         assert len(requests) == 2
         subprocess.run([binary, "use", "smoke", "text-only", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         unsupported = subprocess.run([binary, "--cwd", workspace, "--image", "red.png", "run", "Inspect."], env=env, capture_output=True, text=True)
@@ -172,7 +230,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                     os.write(master, b"Inspect in terminal.\r")
                     sent_first = True
                 if sent_first and len(requests) >= 3 and b"IMAGE_OK" in output and not attached_second:
-                    os.write(master, b"/image red.png\r")
+                    os.write(master, ("/image " + json.dumps(image_reference, ensure_ascii=False) + "\r").encode())
                     attached_second = True
                 if attached_second and b"image(s) attached to the next prompt" in output and not sent_second:
                     if not release_terminal_request.is_set():
@@ -212,6 +270,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             last_user = [message for message in requests[3]["messages"] if message["role"] == "user"][-1]["content"]
             assert last_user[0] == {"type": "text", "text": "Inspect again."}
             assert last_user[1]["type"] == "image_url"
+            assert image_pixel(last_user[1]) == (255, 0, 0, 255), last_user
             with sqlite3.connect(terminal_session) as connection:
                 facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
             assert [fact["data"]["reason"] for fact in facts if fact["kind"] == "turn_ended"] == ["completed", "completed"]

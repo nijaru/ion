@@ -1,7 +1,10 @@
 //! Command origin, lexical identity and terminal-only dispatch.
 //!
 //! Editor commands own their exact source; shortcuts leave the editor untouched.
-use std::path::{Path, PathBuf};
+use std::{
+    borrow::Cow,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use ion_app::{ModelCycleDirection, SessionControl};
@@ -14,6 +17,20 @@ use super::{
     login_in_terminal, navigation, tasks, tools,
 };
 use ion_app::image_input::ImageSource;
+
+/// Completion spells quoted paths as JSON, not shell words. An unquoted tail
+/// remains one literal path, including spaces; only its home prefix is expanded.
+fn image_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
+    let path = if args.starts_with('"') {
+        Cow::Owned(serde_json::from_str::<String>(args).context("invalid quoted image path")?)
+    } else {
+        Cow::Borrowed(args)
+    };
+    anyhow::ensure!(!path.is_empty(), "use /image PATH");
+    let path = ion_app::expand_home_path(Path::new(path.as_ref()), home)
+        .context("cannot expand image path")?;
+    Ok(cwd.join(path))
+}
 
 pub(super) enum CommandInput {
     Editor(EditorDraft),
@@ -403,7 +420,12 @@ pub(super) fn handle_builtin(
                 runtime.agent().model(),
                 runtime.agent().limits().image_input,
             )?;
-            ui.attach_image(ImageSource::Path(PathBuf::from(args)));
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            ui.attach_image(ImageSource::Path(image_path(
+                args,
+                &ui.cwd,
+                home.as_deref(),
+            )?));
         }
         Builtin::Skills => ui.print(super::resource_commands::skills(
             runtime.resources(),
@@ -625,4 +647,69 @@ pub(super) fn handle_builtin(
         kind => anyhow::bail!("use {}", kind.usage()),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn image_operand_decodes_completion_spelling_and_resolves_home() {
+        let cwd = Path::new("/workspace");
+        let home = Path::new("/home/user");
+        for name in [
+            "screen shots/café 🦀.png",
+            "quote\" and slash\\.png",
+            "line\n tab\t.png",
+        ] {
+            let raw = format!("~/{name}");
+            let quoted = serde_json::to_string(&raw).unwrap();
+            assert_eq!(
+                image_path(&quoted, cwd, Some(home)).unwrap(),
+                home.join(name)
+            );
+            assert_eq!(image_path(&raw, cwd, Some(home)).unwrap(), home.join(name));
+        }
+        for literal in [
+            "./~/shot.png",
+            "~someone/shot.png",
+            "$HOME/shot.png",
+            "@~/shot.png",
+            "two pictures.png",
+        ] {
+            assert_eq!(
+                image_path(literal, cwd, Some(home)).unwrap(),
+                cwd.join(literal)
+            );
+        }
+        assert_eq!(image_path("~", cwd, Some(home)).unwrap(), home);
+    }
+
+    #[test]
+    fn image_operand_rejects_invalid_quotes_and_home_without_fallback() {
+        let cwd = Path::new("/workspace");
+        for invalid in [
+            "",
+            "\"\"",
+            "\"unclosed",
+            "\"one.png\" \"two.png\"",
+            "\"bad\\q.png\"",
+        ] {
+            assert!(
+                image_path(invalid, cwd, Some(Path::new("/home/user"))).is_err(),
+                "{invalid:?}"
+            );
+        }
+        for home in [None, Some(Path::new("")), Some(Path::new("relative"))] {
+            assert!(image_path("~/shot.png", cwd, home).is_err());
+            assert_eq!(
+                image_path("shot.png", cwd, home).unwrap(),
+                cwd.join("shot.png")
+            );
+            assert_eq!(
+                image_path("/shots/one.png", cwd, home).unwrap(),
+                Path::new("/shots/one.png")
+            );
+        }
+    }
 }

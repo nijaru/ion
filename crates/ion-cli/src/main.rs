@@ -563,17 +563,18 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             };
             ensure!(!stop.is_cancelled(), "application startup interrupted");
             selected.require_access(credentials)?;
+            let home = std::env::var_os("HOME").map(PathBuf::from);
             let sources = cli
                 .image
                 .iter()
                 .map(|path| {
-                    ion_app::image_input::ImageSource::Path(if path.is_absolute() {
-                        path.clone()
-                    } else {
-                        session_cwd.join(path)
-                    })
+                    let path = ion_app::expand_home_path(path, home.as_deref())
+                        .context("cannot expand image path")?;
+                    Ok(ion_app::image_input::ImageSource::Path(
+                        session_cwd.join(path),
+                    ))
                 })
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
             // Startup has not admitted a Session operation or taken terminal
             // custody. Preserve default SIGINT here; registering Tokio's handler
             // would also change the later interactive terminal's signal behavior.
@@ -585,7 +586,6 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 stop.child_token(),
             )
             .await?;
-            let home = std::env::var_os("HOME").map(PathBuf::from);
             let paths = match &action {
                 Action::Run { input } | Action::Chat { input } => input
                     .files()

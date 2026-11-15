@@ -42,6 +42,8 @@ ion --continue compact               # request context summary
 
 Run `ion --help` and `ion COMMAND --help` for complete supported options. The current CLI supports `@file` context arguments, images, explicit model and reasoning selection, and tool include/exclude filters. Headless/RPC mode needs an already configured model and credentials.
 
+Attach pictures with `ion --image "~/Pictures/screenshot.png" run "Explain this"` or `/image "~/Pictures/screenshot.png"` in chat. Both resolve `~/…` from the client's `HOME`; use `./~/…` for a literal tilde directory. Chat accepts an unquoted path (including spaces) or a JSON-quoted path, matching file completion; it does not evaluate shell expressions. Pictures in accepted messages are saved in the Session, so reopening does not reread their source files.
+
 Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use `/reasoning` to change the preference.
 
 JSONL `text_delta` and `thinking_delta` events carry a zero-based `block` index, numbered independently within each response. Append each delta to its own block, not to one shared string; updates can interleave. `assistant_committed` replaces provisional content, including text not streamed earlier; `response_restarted` discards it. These block indices are not durable Session coordinates.
