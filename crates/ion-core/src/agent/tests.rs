@@ -3015,6 +3015,9 @@ async fn committed_transcript_survives_steering_and_response_restart() {
                             TranscriptItem::UserShell(_) => false,
                             TranscriptItem::Readiness {
                                 turn: notice_turn, ..
+                            }
+                            | TranscriptItem::TurnTermination {
+                                turn: notice_turn, ..
                             } => *notice_turn == turn,
                         })
                         .collect::<Vec<_>>();
@@ -3059,6 +3062,9 @@ async fn committed_transcript_survives_steering_and_response_restart() {
             TranscriptItem::ActivityGroup(group) => group.turn == turn,
             TranscriptItem::UserShell(_) => false,
             TranscriptItem::Readiness {
+                turn: notice_turn, ..
+            }
+            | TranscriptItem::TurnTermination {
                 turn: notice_turn, ..
             } => *notice_turn == turn,
         })

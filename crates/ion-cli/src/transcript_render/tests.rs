@@ -31,6 +31,53 @@ fn has_color(rows: &[Line<'_>], text: &str, color: Color) -> bool {
 }
 
 #[test]
+fn turn_terminations_are_literal_wrapped_status_not_assistant_markdown() {
+    let theme = distinct_theme();
+    let keys = crate::keybindings::KeyBindings::default();
+    let options = RenderOptions::new(
+        OutputDetail::Compact,
+        &keys,
+        &theme,
+        ThinkingVisibility::Hidden,
+        std::path::Path::new("/workspace"),
+    );
+    for (reason, expected) in [
+        (ion_core::TurnTermination::Cancelled, "Turn 7 stopped"),
+        (ion_core::TurnTermination::Interrupted, "Turn 7 interrupted"),
+        (
+            ion_core::TurnTermination::Failed("**provider**:\nInvalidRequest\x1b".into()),
+            "Turn 7 failed · **provider**: InvalidRequest�",
+        ),
+    ] {
+        let item = TranscriptItem::TurnTermination {
+            source: ion_core::TranscriptSource { entry: 12, part: 0 },
+            turn: 7,
+            reason,
+        };
+        let rendered = layout(&item, 100, &options);
+        assert_eq!(
+            rendered
+                .rows
+                .iter()
+                .map(Line::to_string)
+                .collect::<Vec<_>>()
+                .join(""),
+            expected
+        );
+        let narrow = layout(&item, 12, &options);
+        assert!(narrow.rows.len() > 1);
+        assert!(narrow.rows.iter().all(|row| row.width() <= 12));
+        assert!(
+            !narrow
+                .rows
+                .iter()
+                .any(|row| row.to_string().contains('\x1b'))
+        );
+        assert_eq!(narrow.rows.len(), narrow.provenance.len());
+    }
+}
+
+#[test]
 fn mutation_totals_and_capture_omissions_remain_distinct_from_effect_state() {
     use serde_json::json;
     let theme = distinct_theme();

@@ -15,7 +15,7 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
         AgentEvent::TurnResumed { point } => json!({"type":"turn_resumed","point":point}),
         // This receipt stream does not echo normalized file contents or image data.
         AgentEvent::TurnAccepted { turn, .. } => json!({"type":"turn_accepted","turn":turn}),
-        AgentEvent::TurnEnded { turn, reason } => {
+        AgentEvent::TurnEnded { turn, reason, .. } => {
             json!({"type":"turn_ended","turn":turn,"reason":reason})
         }
         AgentEvent::ModelOutputObserved => json!({"type":"model_output_observed"}),

@@ -172,7 +172,12 @@ impl AssistantRecord {
 #[derive(Debug)]
 pub(crate) struct CommittedAssistant {
     pub entry: u64,
-    pub complete: bool,
+    pub end: Option<u64>,
+}
+
+pub(crate) struct TurnClosure {
+    pub entry: u64,
+    pub settlements: Vec<(crate::ToolSettlement, ToolActivity)>,
 }
 
 impl SessionView {
@@ -1454,7 +1459,7 @@ impl Session {
             Ok(false)
         } else {
             self.commit_assistant(turn, assistant, Vec::new(), Vec::new())
-                .map(|(committed, _)| committed.complete)
+                .map(|(committed, _)| committed.end.is_some())
         }
     }
 
@@ -1495,6 +1500,7 @@ impl Session {
         let entry = store.state.sequence + 1;
         store.append(&entries)?;
         let mut inputs = CommittedInputEntries::default();
+        let mut end = None;
         for (offset, fact) in entries.iter().enumerate() {
             let coordinate = entry + offset as u64;
             match fact {
@@ -1505,16 +1511,11 @@ impl Session {
                     inputs.steering.end = coordinate + 1;
                 }
                 SessionEntry::Completion { .. } => inputs.completion = Some(coordinate),
+                SessionEntry::TurnEnded { .. } => end = Some(coordinate),
                 _ => {}
             }
         }
-        Ok((
-            CommittedAssistant {
-                entry,
-                complete: !has_calls && !continue_turn,
-            },
-            inputs,
-        ))
+        Ok((CommittedAssistant { entry, end }, inputs))
     }
 
     /// Publish a truncated assistant attempt and every unexecuted call's
@@ -1694,7 +1695,7 @@ impl Session {
         turn: u64,
         reason: TurnEndReason,
         unstarted: &BTreeSet<String>,
-    ) -> Result<Vec<(crate::ToolSettlement, ToolActivity)>, SessionError> {
+    ) -> Result<TurnClosure, SessionError> {
         let mut store = self.lock_store()?;
         if store.state.active != Some(turn) {
             return Err(SessionError::InvalidHistory);
@@ -1722,7 +1723,10 @@ impl Session {
         let mut entries = pending_results(turn, &store.state.pending, unstarted);
         entries.push(SessionEntry::TurnEnded { turn, reason });
         store.append(&entries)?;
-        Ok(settlements)
+        Ok(TurnClosure {
+            entry: store.state.sequence,
+            settlements,
+        })
     }
 }
 

@@ -6,6 +6,98 @@ use ion_core::{
 };
 
 #[tokio::test]
+async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() {
+    for reason in [
+        ion_core::TurnEndReason::Cancelled,
+        ion_core::TurnEndReason::Failed("provider: InvalidRequest".into()),
+    ] {
+        let mut fixture = crate::terminal_client::tests::Fixture::new();
+        let operation = fixture
+            .control
+            .compact(
+                None,
+                crate::terminal_client::EditorDraft::at_end(String::new()),
+            )
+            .unwrap();
+        let session = fixture.control.session();
+        let mut view = session.view().unwrap();
+        let mut conversation = Conversation::default();
+        conversation.reconcile(session, &view);
+        let input = Message::user_input("request".into(), []);
+        conversation.observe(
+            operation,
+            &AgentEvent::TurnAccepted {
+                entry: 1,
+                turn: 1,
+                input: input.clone(),
+            },
+        );
+        fixtures::publish(&mut conversation);
+        conversation.observe(
+            operation,
+            &AgentEvent::TextDelta {
+                block: 0,
+                text: "provisional".into(),
+            },
+        );
+        conversation.observe(
+            operation,
+            &AgentEvent::TurnEnded {
+                entry: 2,
+                turn: 1,
+                reason: reason.clone(),
+            },
+        );
+        assert_eq!(
+            conversation.items().count(),
+            2,
+            "provisional content is removed, not promoted"
+        );
+        assert_eq!(
+            conversation
+                .segments(true)
+                .iter()
+                .filter(|segment| matches!(
+                    segment,
+                    Segment::Item(TranscriptItem::TurnTermination { .. })
+                ))
+                .count(),
+            1
+        );
+        fixtures::publish(&mut conversation);
+        conversation.clear_live();
+        view.entries = vec![
+            ion_core::SessionEntry::TurnStarted {
+                turn: 1,
+                input,
+                model: ion_ai::ModelRef {
+                    provider: "fixture".into(),
+                    model: "fixture".into(),
+                },
+                completion: vec![],
+                request: None,
+                recovery: None,
+            },
+            ion_core::SessionEntry::TurnEnded { turn: 1, reason },
+        ];
+        view.context_path = vec![1, 2];
+        conversation.reconcile(session, &view);
+        assert_eq!(
+            conversation
+                .items()
+                .filter(|item| matches!(item, TranscriptItem::TurnTermination { .. }))
+                .count(),
+            1
+        );
+        assert!(
+            conversation.segments(true).is_empty(),
+            "canonical refresh cannot republish an acknowledged closure"
+        );
+        fixture.control.shutdown().await;
+    }
+}
+
+#[tokio::test]
 async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not() {
     let mut fixture = crate::terminal_client::tests::Fixture::new();
     let operation = fixture

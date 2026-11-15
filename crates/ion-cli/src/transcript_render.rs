@@ -315,6 +315,23 @@ pub(super) fn layout(
         return block;
     }
     match item {
+        TranscriptItem::TurnTermination { turn, reason, .. } => {
+            block.extend(
+                ContentRoot::Block,
+                wrap_mapped(
+                    "",
+                    "",
+                    MappedLine::component(
+                        Line::from(Span::raw(turn_termination_text(*turn, reason)))
+                            .style(detail.theme.style(Role::Secondary)),
+                        Component::Generated(0),
+                        0,
+                    ),
+                    width,
+                    Wrapping::Literal,
+                ),
+            );
+        }
         TranscriptItem::Readiness { turn, notices, .. } => {
             block.extend(
                 ContentRoot::Block,
@@ -361,6 +378,16 @@ pub fn rows(
         rows.extend(block.rows);
     }
     rows
+}
+
+pub(super) fn turn_termination_text(turn: u64, reason: &ion_core::TurnTermination) -> String {
+    match reason {
+        ion_core::TurnTermination::Cancelled => format!("Turn {turn} stopped"),
+        ion_core::TurnTermination::Interrupted => format!("Turn {turn} interrupted"),
+        ion_core::TurnTermination::Failed(cause) => {
+            format!("Turn {turn} failed · {}", clean_inline(cause))
+        }
+    }
 }
 
 pub(super) fn readiness_text(turn: u64, notices: &[ion_core::CompletionNotice]) -> String {

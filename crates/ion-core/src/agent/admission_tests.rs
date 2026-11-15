@@ -537,6 +537,82 @@ async fn keyed_uncertain_commit_is_not_replaced_by_faulted_reconciliation() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test]
+async fn turn_end_events_name_the_actual_committed_fact() {
+    for mode in ["completed", "failed", "cancelled"] {
+        let held = Arc::new(HeldGeneration {
+            entered: tokio::sync::Semaphore::new(0),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let service: Arc<dyn ModelService> = match mode {
+            "completed" => PreflightService::new(|| false, || {}),
+            "failed" => Arc::new(ScriptedModelService::new([Script::OpenError(
+                ProviderError {
+                    kind: ion_ai::ProviderErrorKind::InvalidRequest,
+                    message: "fixture failure".into(),
+                    retry_after_ms: None,
+                },
+            )])),
+            "cancelled" => held.clone(),
+            _ => unreachable!(),
+        };
+        let (root, session, agent) = fixture(service);
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let operation = agent.submit(
+            session.clone(),
+            "work".into(),
+            "test".into(),
+            CancellationToken::new(),
+            move |event| observed.lock().unwrap().push(event),
+        );
+        if mode == "cancelled" {
+            tokio::time::timeout(Duration::from_secs(5), held.entered.acquire())
+                .await
+                .unwrap()
+                .unwrap()
+                .forget();
+            operation.request_stop();
+        }
+        let result = operation.await;
+        assert_eq!(result.is_ok(), mode == "completed");
+        session.shutdown().await.unwrap();
+        let view = session.view().unwrap();
+        let events = events.lock().unwrap();
+        let endings = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::TurnEnded {
+                    turn,
+                    entry,
+                    reason,
+                } => Some((*turn, *entry, reason)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(endings.len(), 1);
+        let (turn, entry, reason) = endings[0];
+        assert_eq!(
+            &view.entries[entry as usize - 1],
+            &SessionEntry::TurnEnded {
+                turn,
+                reason: reason.clone()
+            }
+        );
+        let mut live = crate::LiveTranscript::default();
+        for event in events.iter() {
+            live.observe(event);
+        }
+        assert_eq!(
+            live.projection(),
+            &crate::TranscriptProjection::from_session(&view)
+        );
+        drop(events);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
 struct HeldGeneration {
     entered: tokio::sync::Semaphore,
     calls: std::sync::atomic::AtomicUsize,

@@ -258,9 +258,10 @@ impl Turn<'_> {
                 committed_steering.observe(turn, observe);
                 plan.record_observed_input(io, &execution, response.usage)
                     .await?;
-                if committed.complete {
+                if let Some(entry) = committed.end {
                     observe(AgentEvent::TurnEnded {
                         turn,
+                        entry,
                         reason: TurnEndReason::Completed,
                     });
                     observe(AgentEvent::Final(final_text.clone()));
@@ -301,10 +302,10 @@ impl Turn<'_> {
                         .as_ref()
                         .map_or_else(BTreeSet::new, |batch| batch.never_dispatched().clone());
                     let ending = reason.clone();
-                    let settlements = io
+                    let closure = io
                         .run(move |session| session.end_turn(turn, ending, &never_dispatched))
                         .await?;
-                    for (result, activity) in settlements {
+                    for (result, activity) in closure.settlements {
                         observe(AgentEvent::ToolFinished {
                             call_id: result.call_id,
                             name: result.name,
@@ -312,7 +313,11 @@ impl Turn<'_> {
                             outcome: result.outcome,
                         });
                     }
-                    observe(AgentEvent::TurnEnded { turn, reason });
+                    observe(AgentEvent::TurnEnded {
+                        turn,
+                        entry: closure.entry,
+                        reason,
+                    });
                 }
                 Err(error)
             }

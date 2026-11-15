@@ -117,5 +117,5 @@ pub use tool_result::{ToolOutcome, ToolOutput, ToolResultProjection, ToolSettlem
 pub use transcript::{
     ActivityGroup, ActivityResult, ActivityState, GroupThinking, LiveTranscript,
     TranscriptActivity, TranscriptActivityIdentity, TranscriptItem, TranscriptMessage,
-    TranscriptPart, TranscriptProjection, TranscriptSource, UserShellActivity,
+    TranscriptPart, TranscriptProjection, TranscriptSource, TurnTermination, UserShellActivity,
 };

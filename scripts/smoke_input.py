@@ -50,6 +50,22 @@ class Handler(BaseHTTPRequestHandler):
         prompt = last_user["content"]
         if isinstance(prompt, list):
             prompt = "".join(part["text"] for part in prompt if part["type"] == "text")
+        if prompt == "FAILED_OUTCOME":
+            payload = json.dumps({"error": {"type": "invalid_request_error", "message": "fixture rejected request"}}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if prompt == "WAIT_OUTCOME":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(b'data: {"choices":[{"index":0,"delta":{"content":"PROVISIONAL_OUTCOME"},"finish_reason":null}]}\n\n')
+            self.wfile.flush()
+            assert release.wait(10), "fixture did not release stopped response"
+            return
         delta = None
         if prompt.startswith("TASK_PARENT_") or prompt.startswith("TASK_CHILD_"):
             fresh = body["messages"][-1]["role"] == "user"
@@ -398,6 +414,66 @@ def exercise_usage(work, base_env, endpoint):
         assert "Total tokens: 1034 reported (incomplete)" in report, report
         assert len(requests) == before + 2
         print(f"Session usage {mode}: cached totals, busy snapshot, partial reporting and passive CLI: OK", flush=True)
+
+
+def exercise_turn_outcomes(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        sandbox = work / f"outcomes-{mode}"
+        cwd = sandbox / "workspace"
+        cwd.mkdir(parents=True)
+        env = dict(base_env, HOME=str(sandbox / "home"), ION_HOME=str(sandbox / "ion"),
+                   XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"))
+        subprocess.run([binary, "use", "smoke", "model", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        database = sandbox / "conversation.sqlite"
+        args = ["--cwd", cwd, "--session", database, "--tui-mode", mode, "chat"]
+        before = len(requests)
+        release.clear()
+        terminal = Terminal(cwd, env, mode, args)
+        try:
+            terminal.wait_ready(lambda: "smoke/model" in terminal.text())
+            terminal.send("WAIT_OUTCOME\r")
+            terminal.wait(lambda: "PROVISIONAL_OUTCOME" in terminal.text())
+            terminal.send(b"\x03")
+            terminal.wait_ready(lambda: "Turn 1 stopped" in terminal.text())
+            release.set()
+            terminal.send("AFTER_STOP_OUTCOME\r")
+            terminal.wait_ready(lambda: "DONE_AFTER_STOP_OUTCOME" in terminal.text())
+            terminal.send("FAILED_OUTCOME\r")
+            # A settled failed operation publishes state=error, not state=done.
+            terminal.wait(lambda: "Turn 3 failed" in terminal.text() and "InvalidRequest" in terminal.text()
+                          and b"state=error:app=ion" in terminal.output)
+            terminal.paint()
+            terminal.send("AFTER_FAILURE_OUTCOME\r")
+            terminal.wait_ready(lambda: "DONE_AFTER_FAILURE_OUTCOME" in terminal.text())
+            terminal.finish()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            release.set()
+            terminal.close()
+        def inspect():
+            return json.loads(subprocess.run([binary, "--session", database, "inspect"], env=env,
+                              check=True, capture_output=True).stdout)
+        view = inspect()
+        endings = [entry["data"]["reason"] for entry in view["entries"] if entry["kind"] == "turn_ended"]
+        assert endings == ["cancelled", "completed", {"failed": "provider: InvalidRequest"}, "completed"], endings
+        assert "PROVISIONAL_OUTCOME" not in json.dumps(view)
+        assert not any(entry["kind"] == "tool_result" for entry in view["entries"])
+        assert len(requests) == before + 4, "stopped/failed requests were retried"
+        assert all("PROVISIONAL_OUTCOME" not in json.dumps(body) for body in requests[before:])
+        terminal = Terminal(cwd, env, mode, args)
+        try:
+            terminal.wait_ready(lambda: "DONE_AFTER_FAILURE_OUTCOME" in terminal.text())
+            terminal.paint()
+            text = painted_text(terminal.output)
+            assert "Turn 1 stopped" in text and "Turn 3 failed" in text and "InvalidRequest" in text, text
+            assert "PROVISIONAL_OUTCOME" not in text
+            terminal.finish()
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        assert inspect() == view and len(requests) == before + 4, "passive reopen changed facts or requested generation"
+        print(f"Turn outcomes {mode}: stopped/failed history, continuation, passive reopen, no retry or provisional commit: OK", flush=True)
 
 
 def exercise_launch(work, base_env, endpoint):
@@ -1625,6 +1701,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_tasks(work, env)
         exercise_launch(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_usage(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_turn_outcomes(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         # Display sanitation must not bypass the secret reader's input guard.
         terminal = Terminal(work, env, "inline", ["login", "unsafe\x1b[31mprovider"])
         try:

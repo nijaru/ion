@@ -538,6 +538,49 @@ mod tests {
     }
 
     #[test]
+    fn termination_is_a_source_anchored_inspection_entry_after_continuation() {
+        let history = TranscriptProjection {
+            items: vec![
+                TranscriptItem::TurnTermination {
+                    source: TranscriptSource { entry: 2, part: 0 },
+                    turn: 1,
+                    reason: ion_core::TurnTermination::Cancelled,
+                },
+                TranscriptItem::TurnTermination {
+                    source: TranscriptSource { entry: 4, part: 0 },
+                    turn: 2,
+                    reason: ion_core::TurnTermination::Failed("provider: InvalidRequest".into()),
+                },
+            ],
+        };
+        let mut view = DetailView::default();
+        view.prepare(history.items.iter(), &[], 0, 80);
+        let text = view.rows().join("\n");
+        assert!(
+            text.contains("Turn 1 stopped")
+                && text.contains("Turn 2 failed · provider: InvalidRequest"),
+            "{text}"
+        );
+        for _ in 0..view.rows().len() {
+            if view.window(1)[0].contains("Turn 1 stopped") {
+                break;
+            }
+            view.scroll_by(-1);
+        }
+        assert!(view.window(1)[0].contains("Turn 1 stopped"));
+        let anchor = view.anchor.clone();
+        assert_eq!(
+            anchor.as_ref().unwrap().entry,
+            EntryKey::Fact(TranscriptSource { entry: 2, part: 0 })
+        );
+        view.prepare(history.items.iter(), &[], 0, 25);
+        assert!(view.window(1)[0].contains("Turn 1 stopped"));
+        assert_eq!(view.anchor, anchor);
+        view.scroll_by(isize::MAX);
+        assert!(view.window(8).join("\n").contains("InvalidRequest"));
+    }
+
+    #[test]
     fn inspection_keeps_group_thinking_in_source_order_without_renumbering_tools() {
         let mut history = tool_history(vec![activity(0), activity(1)]);
         let TranscriptItem::ActivityGroup(group) = &mut history.items[0] else {

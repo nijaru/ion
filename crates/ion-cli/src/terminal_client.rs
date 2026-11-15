@@ -820,7 +820,9 @@ fn transcript_item_turn(item: &TranscriptItem) -> Option<u64> {
     match item {
         TranscriptItem::User(message) | TranscriptItem::Assistant(message) => message.turn,
         TranscriptItem::ActivityGroup(group) => Some(group.turn),
-        TranscriptItem::Readiness { turn, .. } => Some(*turn),
+        TranscriptItem::Readiness { turn, .. } | TranscriptItem::TurnTermination { turn, .. } => {
+            Some(*turn)
+        }
         TranscriptItem::UserShell(_) => None,
     }
 }

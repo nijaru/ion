@@ -110,8 +110,21 @@ pub struct UserShellActivity {
     pub exclude_from_context: bool,
 }
 
+/// A recorded non-successful Turn closure, not a statement about tool effects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TurnTermination {
+    Cancelled,
+    Interrupted,
+    Failed(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
+    TurnTermination {
+        source: TranscriptSource,
+        turn: u64,
+        reason: TurnTermination,
+    },
     User(TranscriptMessage),
     Assistant(TranscriptMessage),
     ActivityGroup(ActivityGroup),
@@ -134,7 +147,7 @@ impl TranscriptItem {
             Self::User(message) | Self::Assistant(message) => message.source,
             Self::ActivityGroup(group) => Some(group.source),
             Self::UserShell(shell) => Some(shell.source),
-            Self::Readiness { source, .. } => Some(*source),
+            Self::Readiness { source, .. } | Self::TurnTermination { source, .. } => Some(*source),
         }
     }
 
@@ -147,7 +160,7 @@ impl TranscriptItem {
                 !group.open && group.activities.iter().all(activity_is_settled)
             }
             Self::UserShell(shell) => shell.outcome.is_some(),
-            Self::Readiness { .. } => true,
+            Self::Readiness { .. } | Self::TurnTermination { .. } => true,
         }
     }
 }
@@ -259,7 +272,9 @@ impl TranscriptProjection {
                     };
                     shell.outcome = Some(outcome.clone());
                 }
-                SessionEntry::TurnEnded { .. } => builder.close_group(),
+                SessionEntry::TurnEnded { turn, reason } => {
+                    builder.push_turn_ended(entry_coordinate, *turn, reason)
+                }
                 SessionEntry::ContextSelected { .. }
                 | SessionEntry::ModelSelected { .. }
                 | SessionEntry::ReasoningSelected { .. }
@@ -510,6 +525,21 @@ impl TranscriptBuilder {
         index
     }
 
+    fn push_turn_ended(&mut self, entry: u64, turn: u64, reason: &crate::TurnEndReason) {
+        self.close_group();
+        let reason = match reason {
+            crate::TurnEndReason::Completed => return,
+            crate::TurnEndReason::Cancelled => TurnTermination::Cancelled,
+            crate::TurnEndReason::Interrupted => TurnTermination::Interrupted,
+            crate::TurnEndReason::Failed(cause) => TurnTermination::Failed(cause.clone()),
+        };
+        self.projection.items.push(TranscriptItem::TurnTermination {
+            source: TranscriptSource { entry, part: 0 },
+            turn,
+            reason,
+        });
+    }
+
     fn close_group(&mut self) {
         if let Some((_, index)) = self.active_group.take()
             && let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[index]
@@ -756,7 +786,14 @@ impl LiveTranscript {
                 child,
                 outcome,
             } => self.builder.push_child_result(*parent, *child, outcome),
-            AgentEvent::TurnEnded { .. } => self.builder.close_group(),
+            AgentEvent::TurnEnded {
+                entry,
+                turn,
+                reason,
+            } => {
+                self.restart_partial_response();
+                self.builder.push_turn_ended(*entry, *turn, reason);
+            }
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
             )),
@@ -1050,6 +1087,7 @@ mod tests {
                 },
                 SessionEntry::TurnEnded { turn, reason } => AgentEvent::TurnEnded {
                     turn: *turn,
+                    entry: index as u64 + 1,
                     reason: reason.clone(),
                 },
                 _ => unreachable!("this fixture contains only Turn, response and outcome facts"),
@@ -1095,6 +1133,96 @@ mod tests {
                     if parts == &vec![TranscriptPart::Text("I found the issue.".into())]
             )
         }));
+    }
+
+    #[test]
+    fn recorded_turn_outcomes_survive_reopen_and_respect_selected_ancestry() {
+        let root =
+            std::env::temp_dir().join(format!("ion-transcript-end-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = crate::Session::create(&path, Some(&root)).unwrap();
+        let mut live = LiveTranscript::default();
+        for reason in [
+            TurnEndReason::Cancelled,
+            TurnEndReason::Interrupted,
+            TurnEndReason::Failed("provider: InvalidRequest".into()),
+            TurnEndReason::Completed,
+        ] {
+            let (turn, _) = session
+                .begin_turn(
+                    "inspect".into(),
+                    ModelRef {
+                        provider: "test".into(),
+                        model: "model".into(),
+                    },
+                )
+                .unwrap();
+            let started = session.view().unwrap();
+            let before = TranscriptProjection::from_session(&started);
+            let SessionEntry::TurnStarted { input, .. } = started.entries.last().unwrap() else {
+                panic!()
+            };
+            live.observe(&AgentEvent::TurnAccepted {
+                turn,
+                entry: started.entries.len() as u64,
+                input: input.clone(),
+            });
+            if !matches!(reason, TurnEndReason::Completed) {
+                live.observe(&AgentEvent::TextDelta {
+                    block: 0,
+                    text: "uncommitted response".into(),
+                });
+            }
+            let closure = session
+                .end_turn(turn, reason.clone(), &Default::default())
+                .unwrap();
+            live.observe(&AgentEvent::TurnEnded {
+                turn,
+                entry: closure.entry,
+                reason: reason.clone(),
+            });
+            let view = session.view().unwrap();
+            let ended = TranscriptProjection::from_session(&view);
+            assert_eq!(
+                live.projection(),
+                &ended,
+                "termination discards only provisional output and agrees with durable history"
+            );
+            let expected = usize::from(!matches!(reason, TurnEndReason::Completed));
+            assert_eq!(
+                ended.items.len(),
+                before.items.len() + expected,
+                "recorded {reason:?} must remain visible without assistant or tool content"
+            );
+            if expected == 1 {
+                let item = ended.items.last().unwrap();
+                assert_eq!(
+                    item.source(),
+                    Some(TranscriptSource {
+                        entry: view.entries.len() as u64,
+                        part: 0
+                    })
+                );
+                assert!(item.is_sealed());
+            }
+            let mut selected = view.clone();
+            selected.context_path.pop();
+            assert_eq!(
+                TranscriptProjection::from_session(&selected),
+                before,
+                "a closure outside selected ancestry is not a visible outcome"
+            );
+        }
+        let expected = TranscriptProjection::from_session(&session.view().unwrap());
+        drop(session);
+        let reopened = crate::Session::open(&path).unwrap();
+        assert_eq!(
+            TranscriptProjection::from_session(&reopened.view().unwrap()),
+            expected
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

@@ -47,6 +47,7 @@ pub(super) enum Field {
     Image(usize),
     ChildLabel,
     Readiness,
+    TurnTermination,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -154,6 +155,14 @@ impl Document {
                         key,
                         Field::Message,
                         source_message_layout(message, user, width),
+                    );
+                }
+                TranscriptItem::TurnTermination { turn, reason, .. } => {
+                    self.generated(
+                        key,
+                        Field::TurnTermination,
+                        &crate::transcript_render::turn_termination_text(*turn, reason),
+                        width,
                     );
                 }
                 TranscriptItem::Readiness { turn, notices, .. } => {

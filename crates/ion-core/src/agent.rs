@@ -607,6 +607,8 @@ pub enum AgentEvent {
     },
     TurnEnded {
         turn: u64,
+        /// Global Session entry coordinate of the committed TurnEnded fact.
+        entry: u64,
         reason: TurnEndReason,
     },
     /// Generated content without a human delta. Not call admission or an effect.

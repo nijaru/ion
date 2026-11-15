@@ -1161,10 +1161,30 @@ async fn committed_roots_publish_during_work_but_unobserved_shells_remain_mutabl
         // prefix, even before anything has been physically published.
         for _ in 0..2 {
             ui.load_history(fixture.control.session(), &view);
-            assert_eq!(ui.conversation.items().count(), 2);
+            assert_eq!(ui.conversation.items().count(), 3);
+            assert_eq!(
+                ui.conversation
+                    .items()
+                    .filter(|item| matches!(
+                        item,
+                        TranscriptItem::TurnTermination {
+                            turn: 1,
+                            reason: ion_core::TurnTermination::Cancelled,
+                            ..
+                        }
+                    ))
+                    .count(),
+                1,
+                "only the recorded closure is projected, not the unfinished operation"
+            );
             ui.print(Builtin::help(&KeyBindings::default()));
         }
         let pending = ui.pending_history_rows(80);
+        assert!(
+            pending
+                .iter()
+                .any(|row| row.to_string().contains("Turn 1 stopped"))
+        );
         assert_eq!(
             pending
                 .iter()
