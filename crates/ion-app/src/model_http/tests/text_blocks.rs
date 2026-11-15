@@ -91,6 +91,73 @@ fn anthropic_text_identity_is_dense_lazy_and_independent_of_native_and_thinking_
 }
 
 #[test]
+fn chat_refusal_deltas_are_visible_assistant_text() {
+    let mut state = ChatState::default();
+    for part in ["I cannot ", "help with that 🦀."] {
+        assert_eq!(
+            visible(
+                state
+                    .accept(&json!({"choices":[{"index":0,"delta":{"refusal":part}}]}))
+                    .unwrap()
+            ),
+            vec![ModelStreamEvent::TextDelta {
+                block: 0,
+                text: part.into()
+            }]
+        );
+    }
+    state
+        .accept(&json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}))
+        .unwrap();
+    let response = state.complete(&request()).unwrap();
+    assert_eq!(
+        response.message.content,
+        vec![Content::Text("I cannot help with that 🦀.".into())]
+    );
+    assert_eq!(response.termination, ResponseTermination::Completed);
+}
+
+#[test]
+fn chat_refusal_and_content_keep_distinct_dense_text_identities() {
+    for fields in [["content", "refusal"], ["refusal", "content"]] {
+        let mut state = ChatState::default();
+        assert!(
+            visible(
+                state
+                    .accept(&json!({"choices":[{"delta":{"content":"","refusal":null}}]}))
+                    .unwrap()
+            )
+            .is_empty()
+        );
+        for (field, text, block) in [
+            (fields[0], "A", 0),
+            (fields[1], "B", 1),
+            (fields[0], "a", 0),
+        ] {
+            assert_eq!(
+                visible(
+                    state
+                        .accept(&json!({"choices":[{"delta":{field:text}}]}))
+                        .unwrap()
+                ),
+                vec![ModelStreamEvent::TextDelta {
+                    block,
+                    text: text.into()
+                }]
+            );
+        }
+        state
+            .accept(&json!({"choices":[{"delta":{},"finish_reason":"stop"}]}))
+            .unwrap();
+        state.accept(&json!({"choices":[{"delta":{"content":null,"refusal":""},"finish_reason":"stop"}]})).unwrap();
+        assert_eq!(
+            state.complete(&request()).unwrap().message.content,
+            vec![Content::Text("Aa".into()), Content::Text("B".into())]
+        );
+    }
+}
+
+#[test]
 fn chat_content_deltas_retain_one_text_identity() {
     let mut state = ChatState::default();
     for text in ["first", " second"] {

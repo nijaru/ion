@@ -62,6 +62,11 @@ fn decoded_limits_cover_text_arguments_and_both_reasoning_channels() {
     let part = "x".repeat(128 * 1024);
     for (wire, delta) in [
         (HttpWire::ChatCompletions, json!({"content":part})),
+        (HttpWire::ChatCompletions, json!({"refusal":part})),
+        (
+            HttpWire::ChatCompletions,
+            json!({"content":part,"refusal":part}),
+        ),
         (HttpWire::DeepSeekChat, json!({"reasoning_content":part})),
         (
             HttpWire::ChatCompletions,

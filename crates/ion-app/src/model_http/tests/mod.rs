@@ -1596,6 +1596,10 @@ fn chat_rejects_mistyped_semantics_instead_of_discarding_them() {
         json!({"delta":[],"finish_reason":"tool_calls"}),
         json!({"delta":{},"finish_reason":42}),
         json!({"delta":{"content":42}}),
+        json!({"delta":{"refusal":42}}),
+        json!({"delta":{"refusal":false}}),
+        json!({"delta":{"refusal":[]}}),
+        json!({"delta":{"refusal":{}}}),
         json!({"delta":{"content":"answer","tool_calls":{}}}),
         json!({"delta":{"tool_calls":[{"index":0,"id":42}]}}),
         json!({"delta":{"tool_calls":[{"index":0,"function":[]}]}}),
@@ -1635,6 +1639,30 @@ fn chat_tool_continuations_allow_omitted_null_and_empty_metadata() {
             raw_arguments: None,
         })]
     );
+}
+
+#[test]
+fn chat_refusal_does_not_override_incomplete_termination() {
+    for (finish, reason) in [
+        ("length", IncompleteReason::MaxOutputTokens),
+        ("content_filter", IncompleteReason::ContentFilter),
+    ] {
+        let mut state = ChatState::default();
+        state.accept(&json!({"choices":[{"delta":{"refusal":"Cannot help.","tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":finish}]})).unwrap();
+        let response = state.complete(&request()).unwrap();
+        assert_eq!(
+            response.termination,
+            ResponseTermination::Incomplete(reason)
+        );
+        assert_eq!(
+            response.message.content[0],
+            Content::Text("Cannot help.".into())
+        );
+        assert_eq!(
+            response.message.content.len(),
+            if finish == "length" { 2 } else { 1 }
+        );
+    }
 }
 
 #[test]
@@ -1685,17 +1713,21 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
         .unwrap();
     assert_eq!(state.complete(&request).unwrap().usage, Usage::known(8, 3));
 
-    let mut state = ChatState::default();
-    state
-        .accept(&json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}))
-        .unwrap();
-    assert!(
+    for delta in [
+        json!({"content":"late"}),
+        json!({"refusal":"late"}),
+        json!({"refusal":42}),
+    ] {
+        let mut state = ChatState::default();
         state
-            .accept(
-                &json!({"choices":[{"index":0,"delta":{"content":"late"},"finish_reason":"stop"}]})
-            )
-            .is_err()
-    );
+            .accept(&json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}))
+            .unwrap();
+        assert!(
+            state
+                .accept(&json!({"choices":[{"index":0,"delta":delta,"finish_reason":"stop"}]}))
+                .is_err()
+        );
+    }
 }
 
 #[test]

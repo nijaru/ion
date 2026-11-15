@@ -16,7 +16,7 @@ enum ThinkingSource {
 
 pub(super) struct ChatState {
     pub(super) budget: ResponseBudget,
-    text: String,
+    text: Vec<(&'static str, String)>,
     thinking_source: Option<ThinkingSource>,
     // Stream one readable channel so dual fields cannot duplicate provisional
     // output. Completion projects the richer validated structured blocks.
@@ -34,7 +34,7 @@ impl Default for ChatState {
     fn default() -> Self {
         Self {
             budget: ResponseBudget::default(),
-            text: String::new(),
+            text: Vec::new(),
             thinking_source: None,
             thinking_entry: None,
             thinking_blocks: 0,
@@ -156,13 +156,23 @@ impl ChatState {
                 self.push_thinking(0, reasoning, &mut events);
             }
         }
-        if let Some(part) = optional_string(delta, "content")?.filter(|s| !s.is_empty()) {
-            self.budget.retain(part.len())?;
-            self.text.push_str(part);
-            events.push(ModelStreamEvent::TextDelta {
-                block: 0,
-                text: part.into(),
-            });
+        for field in ["content", "refusal"] {
+            if let Some(part) = optional_string(delta, field)?.filter(|s| !s.is_empty()) {
+                self.budget.retain(part.len())?;
+                let block = self
+                    .text
+                    .iter()
+                    .position(|(source, _)| *source == field)
+                    .unwrap_or_else(|| {
+                        self.text.push((field, String::new()));
+                        self.text.len() - 1
+                    });
+                self.text[block].1.push_str(part);
+                events.push(ModelStreamEvent::TextDelta {
+                    block,
+                    text: part.into(),
+                });
+            }
         }
         if let Some(fragments) = delta.get("tool_calls").filter(|value| !value.is_null()) {
             let fragments = fragments
@@ -266,9 +276,7 @@ impl ChatState {
         if content.is_empty() && !self.reasoning_content.is_empty() {
             content.push(Content::Thinking(self.reasoning_content.clone()));
         }
-        if !self.text.is_empty() {
-            content.push(Content::Text(self.text));
-        }
+        content.extend(self.text.into_iter().map(|(_, text)| Content::Text(text)));
         if matches!(
             termination,
             ResponseTermination::Completed
@@ -470,7 +478,7 @@ pub(super) fn empty_post_finish_delta(delta: &Value) -> bool {
     };
     fields.iter().all(|(name, value)| match name.as_str() {
         "role" => value.is_null() || value == "assistant",
-        "content" => value.is_null() || value == "",
+        "content" | "refusal" => value.is_null() || value == "",
         "tool_calls" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
         "reasoning" | "reasoning_content" | "reasoning_text" => value.is_null() || value == "",
         "reasoning_details" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),

@@ -1,4 +1,4 @@
-"""Headless stop signals must settle Core despite stdout/stderr pressure."""
+"""Headless response settlement and stop signals under stdout/stderr pressure."""
 
 import array
 import fcntl
@@ -19,6 +19,8 @@ from itertools import product
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
+refusal_requests = {}
+refusal_text = "I cannot help with that 🦀."
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -36,7 +38,27 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             group_prompt = next((str(message["content"]) for message in body["messages"] if message["role"] == "user" and "GROUP_TIMEOUT" in str(message["content"])), None)
-            if group_prompt is not None:
+            refusal_prompt = next((str(message["content"]) for message in reversed(body["messages"])
+                                   if message["role"] == "user" and str(message["content"]).startswith("CHAT_REFUSAL_")), None)
+            if refusal_prompt is not None:
+                requests = refusal_requests.setdefault(refusal_prompt, [])
+                requests.append(body)
+                if "INTERRUPTED" in refusal_prompt and len(requests) == 1:
+                    event({"refusal": "NO_RETRY 🦀"})
+                    return  # EOF without finish_reason must not hide observed refusal output.
+                if "CORRUPT" in refusal_prompt and body["messages"][-1]["role"] != "tool":
+                    event({"tool_calls": [{"index": 0, "id": "refusal-call", "type": "function", "function": {
+                        "name": "exec", "arguments": json.dumps({"command": "printf ONCE > refusal-effect", "timeout_ms": 5000})}}]})
+                    event({"refusal": 42}, "tool_calls")
+                elif "COMPLETE" in refusal_prompt:
+                    event({"content": None, "refusal": "I cannot "})
+                    event({"refusal": "help with that 🦀."}, "stop")
+                    event({"content": None, "refusal": ""}, "stop")
+                else:
+                    event({"content": "FOLLOWUP_READY"}, "stop")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            elif group_prompt is not None:
                 if body["messages"][-1]["role"] == "tool":
                     event({"content": "Group timeout observed."}, "stop")
                 else:
@@ -142,6 +164,72 @@ def cleanup(child, workspace):
                     pass
 
 
+def exercise_refusals(work, env):
+    # An interrupted readable refusal is observed output, not a pre-output
+    # transport failure eligible for an automatic replacement request.
+    workspace = work / "refusal-interrupted"
+    workspace.mkdir()
+    prompt = "CHAT_REFUSAL_INTERRUPTED"
+    child = subprocess.run([binary, "--cwd", workspace, "--json", "run", prompt], env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+    records = [json.loads(line) for line in child.stdout.splitlines()]
+    assert child.returncode == 1 and len(refusal_requests[prompt]) == 1, (child.returncode, len(refusal_requests[prompt]), child.stdout, child.stderr)
+    assert [record for record in records if record["type"] == "text_delta"] == [
+        dict(type="text_delta", block=0, text="NO_RETRY 🦀")], records
+    facts = entries(session_database(work / "ion", workspace))
+    assert not any(fact["kind"] in ("assistant", "tool_result") for fact in facts), facts
+    assert facts[-1]["kind"] == "turn_ended" and "failed" in facts[-1]["data"]["reason"], facts[-1]
+
+    # Even an already complete provisional call cannot execute if a later
+    # known semantic field is invalid in the same response.
+    workspace = work / "refusal-corrupt"
+    workspace.mkdir()
+    prompt = "CHAT_REFUSAL_CORRUPT"
+    child = subprocess.run([binary, "--cwd", workspace, "--json", "run", prompt], env=env,
+                           stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+    assert child.returncode == 1 and len(refusal_requests[prompt]) == 1, (child.returncode, child.stdout, child.stderr)
+    assert not (workspace / "refusal-effect").exists(), "invalid response admitted a provisional call"
+    facts = entries(session_database(work / "ion", workspace))
+    assert not any(fact["kind"] in ("assistant", "tool_result") for fact in facts), facts
+    assert facts[-1]["kind"] == "turn_ended" and "failed" in facts[-1]["data"]["reason"], facts[-1]
+
+    for json_output in (True, False):
+        workspace = work / f"refusal-complete-{json_output}"
+        workspace.mkdir()
+        prompt = f"CHAT_REFUSAL_COMPLETE_{json_output}"
+        command = [binary, "--cwd", workspace] + (["--json"] if json_output else [])
+        child = subprocess.run(command + ["run", prompt], env=env, stdin=subprocess.DEVNULL,
+                               capture_output=True, text=True, timeout=15)
+        assert child.returncode == 0 and len(refusal_requests[prompt]) == 1, (child.returncode, child.stdout, child.stderr)
+        if json_output:
+            records = [json.loads(line) for line in child.stdout.splitlines()]
+            assert [record for record in records if record["type"] == "text_delta"] == [
+                dict(type="text_delta", block=0, text="I cannot "),
+                dict(type="text_delta", block=0, text="help with that 🦀.")], records
+            assert next(record["text"] for record in records if record["type"] == "final") == refusal_text, records
+            assert records[-1] == dict(type="run_end", status="completed"), records[-1]
+        else:
+            assert child.stdout == refusal_text + "\n", (child.stdout, child.stderr)
+        database = session_database(work / "ion", workspace)
+        snapshot = entries(database)
+        assert [fact["data"]["message"]["content"] for fact in snapshot if fact["kind"] == "assistant"] == [[{"Text": refusal_text}]], snapshot
+        assert not any(fact["kind"] == "tool_result" for fact in snapshot), snapshot
+        inspection = subprocess.run([binary, "--session", database, "inspect"], env=env,
+                                    stdin=subprocess.DEVNULL, capture_output=True, check=True, text=True, timeout=15)
+        assert json.loads(inspection.stdout)["entries"] == snapshot
+        followup = f"CHAT_REFUSAL_REOPEN_{json_output}"
+        reopened = subprocess.run([binary, "--cwd", workspace, "--session", database, "run", followup], env=env,
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=15)
+        assert reopened.returncode == 0 and reopened.stdout == "FOLLOWUP_READY\n", (reopened.stdout, reopened.stderr)
+        assert len(refusal_requests[followup]) == 1, refusal_requests[followup]
+        assistant = [message for message in refusal_requests[followup][0]["messages"] if message["role"] == "assistant"]
+        assert len(assistant) == 1 and assistant[0]["content"] == refusal_text, assistant
+        facts = entries(database)
+        assert facts[:len(snapshot)] == snapshot and sum(fact["kind"] == "turn_started" for fact in facts) == 2, facts
+        assert not any(fact["kind"] == "tool_result" for fact in facts), facts
+    print("Ion headless refusal output, continuation, and response admission: OK")
+
+
 with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
     work = Path(temporary)
     env = {key: os.environ[key] for key in ("PATH", "SHELL", "TMPDIR") if key in os.environ}
@@ -152,6 +240,7 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "headless-smoke", "model", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        exercise_refusals(work, env)
         burst_workspace = work / "burst"
         burst_workspace.mkdir()
         burst = subprocess.run([binary, "--cwd", burst_workspace, "--json", "run", "BURST"], env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=15)
