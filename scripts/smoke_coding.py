@@ -23,6 +23,9 @@ if __name__ == "__main__":
     print(add(2, 3))
 """
 SOURCE_MODE = 0o751
+SOURCE_PATH = "~/calculator.py"
+HOME_RULES = "HOME_SCOPE_RULE: Preserve the calculator's executable mode and verify the workspace tests.\n"
+LITERAL_TRAP = "This literal tilde directory is not the user's home.\n"
 TEST = """import unittest
 from calculator import add
 
@@ -42,13 +45,13 @@ if __name__ == "__main__":
     unittest.main()
 """
 PROMPT = (
-    "Fix the failing calculator test in this workspace. Read the source and test, "
+    "Fix ~/calculator.py so the calculator test in this workspace passes. Read the source and test, "
     "make the smallest correct edit, run the native test suite, and report the result."
 )
 FOLLOWUP = "Describe the verified calculator change without running any tools."
 # The correction keeps the source size unchanged. Disable bytecode caching so
 # same-second writes cannot make a later check import the broken version.
-CHECK_COMMAND = "python3 -B -m unittest -q && ./calculator.py"
+CHECK_COMMAND = 'PYTHONPATH="$HOME" python3 -B -m unittest -q && "$HOME/calculator.py"'
 requests = []
 
 
@@ -86,7 +89,7 @@ class Provider(BaseHTTPRequestHandler):
                     assert "output token limit" in json.dumps(envelope), envelope
                 calls = [
                     tool_call("read-test", "read", {"path": "test_calculator.py"}),
-                    tool_call("read-source", "read", {"path": "calculator.py"}),
+                    tool_call("read-source", "read", {"path": SOURCE_PATH}),
                 ]
                 self.send_calls(calls)
             elif count == 2:
@@ -101,6 +104,8 @@ class Provider(BaseHTTPRequestHandler):
                     assert result["content"] == expected, result
                     assert result["base_digest"] == hashlib.sha256(expected.encode()).hexdigest(), result
                     assert result["start_line"] == 1 and result["has_more"] is False, result
+                observation = reads["read-source"]["result"]["project_instructions"]
+                assert HOME_RULES in observation["text"], observation
                 self.send_calls([tool_call("baseline-tests", "exec", {"command": CHECK_COMMAND})])
             elif count == 3:
                 tool_messages = [m for m in body["messages"] if m["role"] == "tool"]
@@ -121,7 +126,7 @@ class Provider(BaseHTTPRequestHandler):
                         "edit-source",
                         "edit",
                         {
-                            "path": "calculator.py",
+                            "path": SOURCE_PATH,
                             "base_digest": observed_source["base_digest"],
                             "edits": [
                                 {
@@ -241,8 +246,15 @@ def main():
         root = Path(temporary)
         workspace = root / "workspace"
         workspace.mkdir()
-        (workspace / "calculator.py").write_text(SOURCE)
-        (workspace / "calculator.py").chmod(SOURCE_MODE)
+        home = root / "home"
+        home.mkdir()
+        source_path = home / "calculator.py"
+        source_path.write_text(SOURCE)
+        source_path.chmod(SOURCE_MODE)
+        (home / "AGENTS.md").write_text(HOME_RULES)
+        literal = workspace / "~"
+        literal.mkdir()
+        (literal / "calculator.py").write_text(LITERAL_TRAP)
         (workspace / "test_calculator.py").write_text(TEST)
         server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -261,14 +273,14 @@ def main():
             }
         }
         env.update(
-            HOME=str(root / "home"),
+            HOME=str(home),
+            PYTHONPATH=str(home),
             ION_HOME=str(root / "ion"), XDG_CONFIG_HOME=str(root / "config"),
             XDG_STATE_HOME=str(root / "state"),
             TMPDIR=str(root / "tmp"),
             LANG="C.UTF-8",
             LC_ALL="C.UTF-8",
         )
-        (root / "home").mkdir()
         (root / "tmp").mkdir()
         try:
             baseline = subprocess.run(
@@ -308,7 +320,7 @@ def main():
             )
             assert result.returncode == 0, (result.stdout, result.stderr)
             assert result.stdout.strip() == "CODING_SMOKE_OK", result
-            assert stat.S_IMODE((workspace / "calculator.py").stat().st_mode) == SOURCE_MODE
+            assert stat.S_IMODE(source_path.stat().st_mode) == SOURCE_MODE
             first_view = inspect_session(workspace, env)
             assert first_view["unfinished_turn"] is None, first_view
             assert first_view["entries"][-1]["kind"] == "turn_ended", first_view["entries"][-1]
@@ -341,15 +353,18 @@ def main():
             timeout=60,
         )
         assert oracle.returncode == 0, oracle
-        source = (workspace / "calculator.py").read_text()
+        source = source_path.read_text()
         assert source == SOURCE.replace("return a - b", "return a + b"), source
-        assert stat.S_IMODE((workspace / "calculator.py").stat().st_mode) == SOURCE_MODE
-        executable = subprocess.run([str(workspace / "calculator.py")], cwd=workspace, env=env,
+        assert stat.S_IMODE(source_path.stat().st_mode) == SOURCE_MODE
+        executable = subprocess.run([str(source_path)], cwd=workspace, env=env,
                                     capture_output=True, text=True, check=True, timeout=15)
         assert executable.stdout == "5\n" and executable.stderr == "", executable
 
         assert (workspace / "test_calculator.py").read_text() == TEST
-        assert {path.name for path in workspace.iterdir()} == {"calculator.py", "test_calculator.py"}
+        assert {path.name for path in workspace.iterdir()} == {"~", "test_calculator.py"}
+        assert (literal / "calculator.py").read_text() == LITERAL_TRAP
+        assert {path.name for path in literal.iterdir()} == {"calculator.py"}
+        assert {path.name for path in home.iterdir()} == {"AGENTS.md", "calculator.py"}
         view = inspect_session(workspace, env)
         assert view["id"] == first_view["id"], (view["id"], first_view["id"])
         assert view["entries"][:len(first_view["entries"])] == first_view["entries"]
@@ -371,10 +386,15 @@ def main():
         assert results[-1]["outcome"]["output"]["is_error"] is False, results[-1]
         assert results[-1]["outcome"]["output"]["value"]["stdout"] == "5\n", results[-1]
         assistants = [entry["data"] for entry in view["entries"] if entry["kind"] == "assistant"]
+        calls = {part["ToolCall"]["id"]: part["ToolCall"]
+                 for assistant in assistants for part in assistant["message"]["content"]
+                 if "ToolCall" in part}
+        for call_id in ["read-source", "edit-source"]:
+            assert calls[call_id]["arguments"]["path"] == SOURCE_PATH, calls[call_id]
         assert assistants[0]["termination"] == {"Incomplete": "MaxOutputTokens"}, assistants[0]
         reasons = [assistant["execution"]["route"]["reason"] for assistant in assistants]
         assert reasons == ["user_request"] + ["tool_continuation"] * 5 + ["user_request"], reasons
-        print("Ion rejected truncated mutations, repaired and directly ran an executable without changing its mode, and reopened with retained results: OK")
+        print("Ion rejected truncated mutations, reviewed home-scoped rules, repaired and directly ran ~/calculator.py without changing its mode or literal tilde neighbor, and reopened with original arguments and retained results: OK")
 
 
 if __name__ == "__main__":

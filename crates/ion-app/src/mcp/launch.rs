@@ -40,13 +40,9 @@ fn working_directory(
     let Some(directory) = configured else {
         return Ok(cwd.to_owned());
     };
-    if let Ok(relative) = directory.strip_prefix("~") {
-        let home = inherited
-            .get(OsStr::new("HOME"))
-            .filter(|home| !home.is_empty())
-            .context("MCP working directory needs HOME")?;
-        return Ok(cwd.join(Path::new(home).join(relative)));
-    }
+    let home = inherited.get(OsStr::new("HOME")).map(Path::new);
+    let directory =
+        crate::expand_home_path(directory, home).context("cannot expand MCP working directory")?;
     Ok(cwd.join(directory))
 }
 
@@ -62,6 +58,8 @@ mod tests {
             (Some("server data"), "relative-session/server data"),
             (Some("/absolute"), "/absolute"),
             (Some("~/server data"), "/parent-home/server data"),
+            (Some("~//server data"), "/parent-home/server data"),
+            (Some("./~/server data"), "relative-session/~/server data"),
             (Some("~"), "/parent-home"),
             (Some("~someone"), "relative-session/~someone"),
         ] {

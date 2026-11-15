@@ -4,7 +4,7 @@ use std::{
     ffi::OsString,
     fs, io,
     os::unix::{ffi::OsStrExt, fs::PermissionsExt},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
@@ -38,9 +38,10 @@ if [ "$__ion_trace" -eq 1 ]; then set -x; fi
 eval "$__ion_command"
 "#;
 
-/// An immutable local command environment. This is not a sandbox or a durable
-/// grant. Hosts reconstruct it and attest their existing AuthorityScope before
-/// continuation; neither a shell path nor equal tool declarations prove authority.
+/// An immutable local command environment, also binding native filesystem HOME
+/// resolution. This is not a sandbox or a durable grant. Hosts reconstruct it and
+/// attest their existing AuthorityScope before continuation; neither a shell path
+/// nor equal tool declarations prove authority.
 /// Values/setup are deliberately not serializable or Debug output.
 pub struct CommandEnvironment {
     program: PathBuf,
@@ -117,20 +118,19 @@ impl CommandEnvironment {
         Ok(self)
     }
 
+    /// The captured Host home, not a shell setup's later command-local HOME.
+    pub(crate) fn home(&self) -> Option<&Path> {
+        self.variables
+            .get(std::ffi::OsStr::new("HOME"))
+            .map(Path::new)
+    }
+
     pub(crate) fn coding_with_settings(settings: ShellSettings) -> Result<Self> {
         let mut environment = Self::inherited();
         if let Some(program) = settings.path {
-            let program = if program.starts_with("~/") {
-                PathBuf::from(
-                    environment
-                        .variables
-                        .get(std::ffi::OsStr::new("HOME"))
-                        .context("HOME is required to expand shell.path")?,
-                )
-                .join(program.strip_prefix("~/").expect("checked prefix"))
-            } else {
-                program
-            };
+            let program = crate::expand_home_path(&program, environment.home())
+                .context("cannot expand shell.path")?
+                .into_owned();
             environment = Self::new(program, environment.variables)
                 .context("invalid configured Bash-compatible shell")?;
         }

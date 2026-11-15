@@ -3,8 +3,329 @@ use super::*;
 use ion_ai::ToolCall;
 use std::{
     fs::{self, File},
+    os::unix::ffi::OsStringExt,
     time::Duration,
 };
+
+#[tokio::test]
+async fn native_home_paths_use_bound_home_before_scoped_instructions() {
+    let root = std::env::temp_dir().join(format!("ion-home-paths-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let cwd = root.join("workspace");
+    let home = root.join("home");
+    let literal = cwd.join("~");
+    fs::create_dir_all(&literal).unwrap();
+    fs::create_dir(&home).unwrap();
+    fs::write(home.join("settings.txt"), "BOUND_HOME").unwrap();
+    fs::write(home.join("AGENTS.md"), "HOME_SCOPE_RULE").unwrap();
+    fs::write(literal.join("settings.txt"), "LITERAL_TILDE").unwrap();
+    fs::write(literal.join("AGENTS.md"), "LITERAL_SCOPE_RULE").unwrap();
+    let environment = Arc::new(
+        crate::CommandEnvironment::new(
+            "/bin/bash".into(),
+            [("HOME".into(), home.as_os_str().to_owned())].into(),
+        )
+        .unwrap(),
+    );
+    let tools = LocalTools::with_environment(&cwd, environment)
+        .unwrap()
+        .with_project_instructions();
+    let catalog = ion_core::ToolSet::new([Arc::new(tools) as Arc<dyn ToolSource>]).snapshot();
+    let call = ToolCall {
+        id: "home-read".into(),
+        name: "read".into(),
+        arguments: json!({"path":"~/settings.txt"}),
+        raw_arguments: None,
+    };
+    let output = catalog
+        .execute(ion_core::ToolInvocation::untracked(
+            &call,
+            CancellationToken::new(),
+        ))
+        .await;
+    assert!(!output.is_error, "{}", output.value);
+    assert_eq!(
+        output.value["content"], "BOUND_HOME",
+        "home shorthand must not silently read a literal tilde directory in the workspace"
+    );
+    let rules = output.value["project_instructions"]["text"]
+        .as_str()
+        .unwrap();
+    assert!(
+        rules.contains("HOME_SCOPE_RULE") && !rules.contains("LITERAL_SCOPE_RULE"),
+        "{rules}"
+    );
+    assert_eq!(call.arguments["path"], "~/settings.txt");
+
+    // A prior untracked read is not evidence that the model saw these rules.
+    // Expansion must select the same home scope before mutation admission.
+    let mutation = ToolCall {
+        id: "home-write".into(),
+        name: "write".into(),
+        arguments: json!({"path":"~/new/file.txt","content":"must be reviewed"}),
+        raw_arguments: None,
+    };
+    let output = catalog
+        .execute(ion_core::ToolInvocation::untracked(
+            &mutation,
+            CancellationToken::new(),
+        ))
+        .await;
+    assert!(output.is_error, "{}", output.value);
+    assert!(
+        output.value["project_instructions"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("HOME_SCOPE_RULE")
+    );
+    assert!(!home.join("new").exists() && !literal.join("new").exists());
+
+    let literal_read = ToolCall {
+        id: "literal-read".into(),
+        name: "read".into(),
+        arguments: json!({"path":"./~/settings.txt"}),
+        raw_arguments: None,
+    };
+    let output = catalog
+        .execute(ion_core::ToolInvocation::untracked(
+            &literal_read,
+            CancellationToken::new(),
+        ))
+        .await;
+    assert!(!output.is_error, "{}", output.value);
+    assert_eq!(output.value["content"], "LITERAL_TILDE");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn filesystem_tools_share_captured_home_and_refuse_unusable_home() {
+    let root = std::env::temp_dir().join(format!("ion-home-tools-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let cwd = root.join("workspace");
+    let home = root.join("home");
+    fs::create_dir(&cwd).unwrap();
+    fs::create_dir(&home).unwrap();
+    fs::write(cwd.join("local.txt"), "workspace").unwrap();
+    fs::write(home.join("file.txt"), "needle").unwrap();
+    let catalog = ion_core::ToolSet::new([Arc::new(
+        LocalTools::with_environment(
+            &cwd,
+            Arc::new(
+                crate::CommandEnvironment::new(
+                    "/bin/bash".into(),
+                    [("HOME".into(), home.as_os_str().to_owned())].into(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap(),
+    ) as Arc<dyn ToolSource>])
+    .snapshot();
+    let digest = hex_digest(b"needle");
+    for (name, arguments, field, expected) in [
+        (
+            "read",
+            json!({"path":"~/file.txt"}),
+            "content",
+            json!("needle"),
+        ),
+        ("ls", json!({"path":"~"}), "root", json!(home)),
+        (
+            "find",
+            json!({"path":"~//","pattern":"*.txt"}),
+            "root",
+            json!(home),
+        ),
+        (
+            "grep",
+            json!({"path":"~/file.txt","pattern":"needle"}),
+            "root",
+            json!(home.join("file.txt")),
+        ),
+        (
+            "write",
+            json!({"path":"~/new/file.txt","content":"created"}),
+            "created",
+            json!(true),
+        ),
+        (
+            "edit",
+            json!({"path":"~/file.txt","base_digest":digest,"edits":[{"old_text":"needle","new_text":"changed"}]}),
+            "new_digest",
+            json!(hex_digest(b"changed")),
+        ),
+    ] {
+        let call = ToolCall {
+            id: name.into(),
+            name: name.into(),
+            arguments,
+            raw_arguments: None,
+        };
+        let output = catalog
+            .execute(ion_core::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await;
+        assert!(!output.is_error, "{name}: {}", output.value);
+        assert_eq!(output.value[field], expected, "{name}: {}", output.value);
+    }
+    assert_eq!(fs::read(home.join("new/file.txt")).unwrap(), b"created");
+    assert_eq!(fs::read(home.join("file.txt")).unwrap(), b"changed");
+    assert!(!cwd.join("~").exists());
+
+    fs::create_dir(cwd.join("~")).unwrap();
+    fs::write(cwd.join("~/file.txt"), "literal").unwrap();
+    for (value, reason) in [
+        (None, "HOME"),
+        (Some(std::ffi::OsString::new()), "HOME"),
+        (Some("relative".into()), "HOME"),
+        (
+            Some(std::ffi::OsString::from_vec(b"/home/\xff".to_vec())),
+            "UTF-8",
+        ),
+    ] {
+        let variables = value
+            .as_ref()
+            .map(|value| ("HOME".into(), value.clone()))
+            .into_iter()
+            .collect();
+        let catalog = ion_core::ToolSet::new([Arc::new(
+            LocalTools::with_environment(
+                &cwd,
+                Arc::new(crate::CommandEnvironment::new("/bin/bash".into(), variables).unwrap()),
+            )
+            .unwrap()
+            .with_project_instructions(),
+        ) as Arc<dyn ToolSource>])
+        .snapshot();
+        for (name, arguments) in [
+            ("read", json!({"path":"~/file.txt"})),
+            ("ls", json!({"path":"~"})),
+            ("find", json!({"path":"~/","pattern":"*"})),
+            ("grep", json!({"path":"~/file.txt","pattern":"literal"})),
+            ("write", json!({"path":"~/new/file.txt","content":"wrong"})),
+            (
+                "edit",
+                json!({"path":"~/file.txt","base_digest":hex_digest(b"literal"),"edits":[{"old_text":"literal","new_text":"wrong"}]}),
+            ),
+        ] {
+            let call = ToolCall {
+                id: name.into(),
+                name: name.into(),
+                arguments,
+                raw_arguments: None,
+            };
+            let output = catalog
+                .execute(ion_core::ToolInvocation::untracked(
+                    &call,
+                    CancellationToken::new(),
+                ))
+                .await;
+            assert!(output.is_error, "{name}, HOME={value:?}: {}", output.value);
+            assert!(
+                output.value["error"].as_str().unwrap().contains(reason),
+                "{}",
+                output.value
+            );
+            assert!(output.value.get("project_instructions").is_none());
+        }
+        let call = ToolCall {
+            id: "relative".into(),
+            name: "read".into(),
+            arguments: json!({"path":"local.txt"}),
+            raw_arguments: None,
+        };
+        let output = catalog
+            .execute(ion_core::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await;
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["content"], "workspace");
+        assert_eq!(fs::read(cwd.join("~/file.txt")).unwrap(), b"literal");
+        assert!(!cwd.join("~/new").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn home_paths_keep_directory_syntax_and_physical_parent_resolution() {
+    let root = std::env::temp_dir().join(format!("ion-home-syntax-{}", uuid::Uuid::now_v7()));
+    fs::create_dir(&root).unwrap();
+    let root = root.canonicalize().unwrap();
+    let home = root.join("home");
+    let cwd = root.join("workspace");
+    let other = root.join("other");
+    fs::create_dir_all(other.join("child")).unwrap();
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&cwd).unwrap();
+    fs::write(home.join("file.txt"), "lexical target").unwrap();
+    fs::write(other.join("file.txt"), "physical target").unwrap();
+    fs::write(other.join("AGENTS.md"), "PHYSICAL_SCOPE_RULE").unwrap();
+    std::os::unix::fs::symlink(other.join("child"), home.join("link")).unwrap();
+    let catalog = ion_core::ToolSet::new([Arc::new(
+        LocalTools::with_environment(
+            &cwd,
+            Arc::new(
+                crate::CommandEnvironment::new(
+                    "/bin/bash".into(),
+                    [("HOME".into(), home.as_os_str().to_owned())].into(),
+                )
+                .unwrap(),
+            ),
+        )
+        .unwrap()
+        .with_project_instructions(),
+    ) as Arc<dyn ToolSource>])
+    .snapshot();
+    let call = ToolCall {
+        id: "physical".into(),
+        name: "read".into(),
+        arguments: json!({"path":"~/link/../file.txt"}),
+        raw_arguments: None,
+    };
+    let output = catalog
+        .execute(ion_core::ToolInvocation::untracked(
+            &call,
+            CancellationToken::new(),
+        ))
+        .await;
+    assert!(!output.is_error, "{}", output.value);
+    assert_eq!(output.value["content"], "physical target");
+    assert!(
+        output.value["project_instructions"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("PHYSICAL_SCOPE_RULE")
+    );
+    for path in [
+        "~/missing/",
+        "~/missing/.",
+        "~/missing/sub/..",
+        "missing/sub/..",
+    ] {
+        let call = ToolCall {
+            id: "directory".into(),
+            name: "write".into(),
+            arguments: json!({"path":path,"content":"not a file path"}),
+            raw_arguments: None,
+        };
+        let output = catalog
+            .execute(ion_core::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await;
+        assert!(output.is_error, "{path}: {}", output.value);
+        assert!(!home.join("missing").exists());
+        assert!(!cwd.join("missing").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
 
 #[tokio::test]
 async fn optional_native_inputs_reject_null_before_effects() {

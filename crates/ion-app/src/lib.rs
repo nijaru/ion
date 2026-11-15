@@ -29,6 +29,8 @@ mod diagnostics;
 pub use diagnostics::{ConfigurationCheck, ConfigurationStatus};
 mod edit_diff;
 pub mod file_io;
+mod file_paths;
+pub use file_paths::expand_home_path;
 pub mod image_input;
 mod local_tools;
 pub mod mcp;

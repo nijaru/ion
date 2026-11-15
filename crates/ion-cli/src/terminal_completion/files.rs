@@ -34,15 +34,10 @@ impl Prefix {
         let Some((directory, _)) = self.directory_parts() else {
             return FileScope::Project(cwd.to_owned());
         };
-        let path = if let Some(relative) = directory.strip_prefix("~/") {
-            let Some(home) = home.filter(|home| home.is_absolute()) else {
-                return FileScope::HomeUnavailable;
-            };
-            home.join(relative)
-        } else {
-            cwd.join(directory)
-        };
-        FileScope::Directory(path)
+        match ion_app::expand_home_path(Path::new(&directory), home) {
+            Ok(path) => FileScope::Directory(cwd.join(path)),
+            Err(_) => FileScope::HomeUnavailable,
+        }
     }
 
     pub(super) fn suggestions(&self, paths: &[String]) -> Vec<Suggestion> {
@@ -323,6 +318,18 @@ mod tests {
                 "~/main.rs",
             ),
             (
+                "~//ma",
+                false,
+                FileScope::Directory(home.into()),
+                "~//main.rs",
+            ),
+            (
+                "./~/ma",
+                false,
+                FileScope::Directory(cwd.join("~")),
+                "./~/main.rs",
+            ),
+            (
                 "../ma",
                 false,
                 FileScope::Directory(cwd.join("../")),
@@ -376,6 +383,10 @@ mod tests {
         }
         let token = path_prefix("~/", 2, false).unwrap();
         assert_eq!(token.scope(cwd, None), FileScope::HomeUnavailable);
+        assert_eq!(
+            token.scope(cwd, Some(Path::new("relative"))),
+            FileScope::HomeUnavailable
+        );
     }
 
     #[test]

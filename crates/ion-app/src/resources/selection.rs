@@ -42,13 +42,9 @@ impl ResourcePaths {
                     !path.as_os_str().is_empty(),
                     "resource path must not be empty"
                 );
-                let path = if let Ok(suffix) = path.strip_prefix("~") {
-                    home.as_ref()
-                        .context("HOME is not set for resource path")?
-                        .join(suffix)
-                } else {
-                    path
-                };
+                let path = crate::expand_home_path(&path, home.as_deref())
+                    .context("cannot expand resource path")?
+                    .into_owned();
                 Ok(if path.is_absolute() {
                     path
                 } else {

@@ -585,18 +585,14 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 stop.child_token(),
             )
             .await?;
+            let home = std::env::var_os("HOME").map(PathBuf::from);
             let paths = match &action {
                 Action::Run { input } | Action::Chat { input } => input
                     .files()
                     .map(|path| {
-                        let path = if let Some(rest) =
-                            path.to_str().and_then(|value| value.strip_prefix("~/"))
-                        {
-                            PathBuf::from(std::env::var_os("HOME").context("@~/ requires HOME")?)
-                                .join(rest)
-                        } else {
-                            path.to_path_buf()
-                        };
+                        let path = ion_app::expand_home_path(path, home.as_deref())
+                            .context("cannot expand @file path")?
+                            .into_owned();
                         Ok(if path.is_absolute() {
                             path
                         } else {
