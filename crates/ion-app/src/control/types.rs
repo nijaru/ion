@@ -1,5 +1,5 @@
 //! Public control contracts and bounded passive observation.
-use crate::image_input::ImageSource;
+use crate::attachments::AttachmentSource;
 use anyhow::Result;
 use ion_ai::Message;
 use ion_core::{AgentError, AgentEvent, InputReservation, SessionError, ToolOutput};
@@ -76,8 +76,7 @@ pub struct StopTarget {
 pub enum UserInput {
     Prompt {
         text: String,
-        images: Vec<ImageSource>,
-        files: Vec<crate::prompt_files::TextFile>,
+        attachments: Vec<AttachmentSource>,
     },
     Message(Message),
 }

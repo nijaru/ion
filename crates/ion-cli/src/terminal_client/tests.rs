@@ -66,7 +66,9 @@ async fn preparation_without_an_operation_restores_the_retained_status() {
         program.settle(resting);
         let mut ui = Frontend {
             editor: Editor {
-                images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+                attachments: vec![AttachmentSource::ImageFile(
+                    fixture.root.join("missing.png"),
+                )],
                 ..Editor::default()
             },
             ..Frontend::default()
@@ -178,7 +180,7 @@ fn command_actions_own_exact_editor_sources() {
             editor: Editor {
                 draft: literal.into(),
                 cursor,
-                images: vec![image("attached")],
+                attachments: vec![image("attached")],
                 ..Editor::default()
             },
             ..Frontend::default()
@@ -192,8 +194,8 @@ fn command_actions_own_exact_editor_sources() {
         assert_eq!(source.cursor, cursor);
         assert!(ui.editor.draft.is_empty());
         assert_eq!(ui.editor.cursor, 0);
-        assert_eq!(ui.editor.images.len(), 1);
-        assert_note(&ui.editor.images[0], "attached");
+        assert_eq!(ui.editor.attachments.len(), 1);
+        assert_note(&ui.editor.attachments[0], "attached");
         ui.restore_editor(source);
         assert_eq!(ui.editor.draft, literal);
         assert_eq!(ui.editor.cursor, cursor);
@@ -225,7 +227,7 @@ fn command_shortcuts_leave_editor_text_cursor_and_attachments_owned_by_editor() 
             editor: Editor {
                 draft: "unsent 🦀 draft".into(),
                 cursor: 3,
-                images: vec![image("unsent")],
+                attachments: vec![image("unsent")],
                 ..Editor::default()
             },
             ..Frontend::default()
@@ -236,8 +238,8 @@ fn command_shortcuts_leave_editor_text_cursor_and_attachments_owned_by_editor() 
         ));
         assert_eq!(ui.editor.draft, "unsent 🦀 draft");
         assert_eq!(ui.editor.cursor, 3);
-        assert_eq!(ui.editor.images.len(), 1);
-        assert_note(&ui.editor.images[0], "unsent");
+        assert_eq!(ui.editor.attachments.len(), 1);
+        assert_note(&ui.editor.attachments[0], "unsent");
     }
 }
 
@@ -456,18 +458,20 @@ pub(super) async fn settle_io(control: &mut SessionControl<EditorDraft>, ui: &mu
     .unwrap();
 }
 
-fn image(note: &str) -> ImageSource {
+fn image(note: &str) -> AttachmentSource {
     let mut image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
     image.note = Some(note.into());
     image.into()
 }
-fn assert_note(image: &ImageSource, expected: &str) {
-    assert!(matches!(image, ImageSource::Normalized { note: Some(note), .. } if note == expected));
+fn assert_note(image: &AttachmentSource, expected: &str) {
+    assert!(
+        matches!(image, AttachmentSource::Image(ion_ai::LoadedImage { note: Some(note), .. }) if note == expected)
+    );
 }
 
 #[test]
 fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
-    let file = |name: &str| ion_app::prompt_files::TextFile {
+    let file = |name: &str| ion_app::attachments::TextFile {
         name: name.into(),
         text: format!("context for {name}"),
     };
@@ -475,8 +479,7 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
         editor: Editor {
             draft: "unsent".into(),
             cursor: 2,
-            images: vec![image("unsent")],
-            files: vec![file("unsent")],
+            attachments: vec![image("unsent"), AttachmentSource::Text(file("unsent"))],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -486,16 +489,14 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
             literal: "  same\n".into(),
             cursor: 1,
         },
-        vec![image("first")],
-        vec![file("first")],
+        vec![image("first"), AttachmentSource::Text(file("first"))],
     );
     ui.return_draft(
         EditorDraft {
             literal: "  same\n".into(),
             cursor: 4,
         },
-        vec![image("second")],
-        vec![file("second")],
+        vec![image("second"), AttachmentSource::Text(file("second"))],
     );
     assert_eq!(
         (
@@ -512,11 +513,11 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
     ] {
         ui.recover_draft();
         assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (text, cursor));
-        assert_eq!(ui.editor.images.len(), 1);
-        assert_note(&ui.editor.images[0], note);
-        assert_eq!(ui.editor.files.len(), 1);
-        assert_eq!(ui.editor.files[0].name, note);
-        assert_eq!(ui.editor.files[0].text, file(note).text);
+        assert_eq!(ui.editor.attachments.len(), 2);
+        assert_note(&ui.editor.attachments[0], note);
+        assert!(
+            matches!(&ui.editor.attachments[1], AttachmentSource::Text(retained) if retained.name == note && retained.text == file(note).text)
+        );
     }
     assert_eq!(ui.editor.recovered.len(), 2);
 }
@@ -565,7 +566,7 @@ fn returned_draft_ends_history_browsing_without_losing_unsent_input() {
         ..Frontend::default()
     };
     ui.editor.history_previous();
-    ui.return_draft(EditorDraft::at_end("returned".into()), vec![], Vec::new());
+    ui.return_draft(EditorDraft::at_end("returned".into()), vec![]);
     ui.editor.history_next();
     assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("unsent", 2));
     ui.recover_draft();
@@ -725,7 +726,7 @@ async fn host_rejection_restores_exact_editor_and_images() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend {
         editor: Editor {
-            images: vec![image("coordinates")],
+            attachments: vec![image("coordinates")],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -746,7 +747,7 @@ async fn host_rejection_restores_exact_editor_and_images() {
         },
     );
     assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (literal, 3));
-    assert_note(&ui.editor.images[0], "coordinates");
+    assert_note(&ui.editor.attachments[0], "coordinates");
     assert!(ui.editor.recovered.is_empty());
     assert!(ui.status.contains("not queued"));
     fixture.control.shutdown().await;
@@ -761,11 +762,13 @@ async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_ta
     let before = fixture.control.session().view().unwrap().entries.len();
     let mut ui = Frontend {
         editor: Editor {
-            images: vec![image("first image")],
-            files: vec![ion_app::prompt_files::TextFile {
-                name: "frozen.md".into(),
-                text: "/check literal 🦀".into(),
-            }],
+            attachments: vec![
+                image("first image"),
+                AttachmentSource::Text(ion_app::attachments::TextFile {
+                    name: "frozen.md".into(),
+                    text: "/check literal 🦀".into(),
+                }),
+            ],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -777,8 +780,10 @@ async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_ta
         vec![String::new(), malformed.into(), "/help".into()],
     );
     assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("", 0));
-    assert_note(&ui.editor.images[0], "first image");
-    assert_eq!(ui.editor.files[0].text, "/check literal 🦀");
+    assert_note(&ui.editor.attachments[0], "first image");
+    assert!(
+        matches!(&ui.editor.attachments[1], AttachmentSource::Text(file) if file.text == "/check literal 🦀")
+    );
     assert_eq!(
         ui.editor
             .recovered
@@ -792,7 +797,7 @@ async fn rejected_launch_batch_keeps_empty_attached_first_and_ordered_literal_ta
         ui.editor
             .recovered
             .iter()
-            .all(|draft| draft.images.is_empty() && draft.files.is_empty())
+            .all(|draft| draft.attachments.is_empty())
     );
     assert!(ui.status.contains("not queued"));
     assert!(!fixture.control.is_busy());
@@ -813,7 +818,9 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
     let literal = "  /check café 🦀\n";
     let mut ui = Frontend {
         editor: Editor {
-            images: vec![ImageSource::Path(fixture.root.join("missing.png"))],
+            attachments: vec![AttachmentSource::ImageFile(
+                fixture.root.join("missing.png"),
+            )],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -827,14 +834,14 @@ async fn asynchronous_preparation_return_retains_raw_source_and_other_edits() {
             cursor: 2,
         },
     );
-    assert!(ui.editor.images.is_empty());
+    assert!(ui.editor.attachments.is_empty());
     ui.insert("typed while preparing");
     drain(&mut fixture.control, &mut ui).await;
     assert_eq!(ui.editor.draft, "typed while preparing");
     ui.recover_draft();
     assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (literal, 2));
     assert!(
-        matches!(&ui.editor.images[0], ImageSource::Path(path) if path.ends_with("missing.png"))
+        matches!(&ui.editor.attachments[0], AttachmentSource::ImageFile(path) if path.ends_with("missing.png"))
     );
     // A path may cross a display-row boundary (notably with /tmp on Linux).
     let notice = ui
@@ -935,8 +942,8 @@ async fn ordinary_paths_complete_in_place_without_submitting() {
         ("Read m".to_owned(), "Read main.rs ".to_owned(), true),
         ("Read ./ma".to_owned(), "Read ./main.rs ".to_owned(), false),
         (
-            "/image ./ma".to_owned(),
-            "/image ./main.rs ".to_owned(),
+            "/file ./ma".to_owned(),
+            "/file ./main.rs ".to_owned(),
             false,
         ),
         (
@@ -1031,7 +1038,7 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
         fs::write(fixture.root.join("file.rs"), "owned fixture").unwrap();
         let mut ui = Frontend {
             editor: Editor {
-                images: vec![ImageSource::Path(fixture.root.join("absent.png"))],
+                attachments: vec![AttachmentSource::ImageFile(fixture.root.join("absent.png"))],
                 ..Editor::default()
             },
             cwd: fixture.root.clone(),
@@ -1056,7 +1063,7 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
             (literal, literal.len())
         );
         assert!(
-            matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path.ends_with("absent.png"))
+            matches!(&ui.editor.attachments[..], [AttachmentSource::ImageFile(path)] if path.ends_with("absent.png"))
         );
         assert!(
             !ui.editor.completion.active(),
@@ -1072,7 +1079,7 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
 
         ui.recover_draft();
         assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("x @", 3));
-        assert!(ui.editor.images.is_empty());
+        assert!(ui.editor.attachments.is_empty());
         assert!(
             matches!(ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None), Action::Submit(text) if text.literal == "x @")
         );
@@ -1236,7 +1243,7 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
     let mut ui = Frontend::default();
     apply_clipboard(&mut ui, prepared).unwrap();
     assert!(
-        matches!(&ui.editor.images[..], [ImageSource::Normalized { content, note: Some(note) }] if content == &loaded.content && note == "clipboard coordinates")
+        matches!(&ui.editor.attachments[..], [AttachmentSource::Image(ion_ai::LoadedImage { content, note: Some(note) })] if content == &loaded.content && note == "clipboard coordinates")
     );
     assert!(
         prepare_clipboard(
@@ -1249,7 +1256,7 @@ async fn clipboard_image_keeps_typed_coordinates_and_refuses_unsupported_routes(
         )
         .is_err()
     );
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     fixture.control.shutdown().await;
 }
 
@@ -1298,7 +1305,7 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
     assert!(ui.pending_history_rows(80).is_empty());
     ui.editor.draft = "unsent draft".into();
     ui.editor.cursor = 4;
-    ui.editor.images = vec![image("unsent tree image")];
+    ui.editor.attachments = vec![image("unsent tree image")];
     view.entries
         .push(SessionEntry::ContextSelected { head_entry: 0 });
     view.context_path.clear();
@@ -1316,7 +1323,7 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("unsent draft", 4)
     );
-    assert_note(&ui.editor.images[0], "unsent tree image");
+    assert_note(&ui.editor.attachments[0], "unsent tree image");
     assert!(
         last_committed_answer(&view).is_err(),
         "copy cannot leak an unselected answer"
@@ -1343,7 +1350,7 @@ fn fork_selection_preserves_unsent_literal_input_and_typed_images() {
         editor: Editor {
             draft: "  unsent\n".into(),
             cursor: 3,
-            images: vec![image("unsent")],
+            attachments: vec![image("unsent")],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -1353,13 +1360,13 @@ fn fork_selection_preserves_unsent_literal_input_and_typed_images() {
     ui.restore_input(Message::user_input("selected input".into(), [selected]))
         .unwrap();
     assert_eq!(ui.editor.draft, "selected input");
-    assert_note(&ui.editor.images[0], "selected");
+    assert_note(&ui.editor.attachments[0], "selected");
     ui.recover_draft();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("  unsent\n", 3)
     );
-    assert_note(&ui.editor.images[0], "unsent");
+    assert_note(&ui.editor.attachments[0], "unsent");
 }
 
 #[test]
@@ -1406,7 +1413,7 @@ fn tool_expansion_preserves_composer_and_restores_its_viewport() {
             editor: Editor {
                 draft: "draft 🦀\nnext".into(),
                 cursor: 6,
-                images: vec![ImageSource::Path("attached.png".into())],
+                attachments: vec![AttachmentSource::ImageFile("attached.png".into())],
                 ..Editor::default()
             },
             ..Frontend::default()
@@ -1438,7 +1445,7 @@ fn tool_expansion_preserves_composer_and_restores_its_viewport() {
         assert_eq!(ui.editor.draft, "draft X🦀\nnext");
         assert_eq!(ui.editor.cursor, 7);
         assert!(
-            matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("attached.png"))
+            matches!(&ui.editor.attachments[..], [AttachmentSource::ImageFile(path)] if path == std::path::Path::new("attached.png"))
         );
     }
 }
@@ -1502,7 +1509,7 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
         editor: Editor {
             draft: "unsent 🦀".into(),
             cursor: 3,
-            images: vec![image("attached")],
+            attachments: vec![image("attached")],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -1528,7 +1535,7 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
             (ui.editor.draft.as_str(), ui.editor.cursor),
             ("unsent 🦀", 3)
         );
-        assert_note(&ui.editor.images[0], "attached");
+        assert_note(&ui.editor.attachments[0], "attached");
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
         assert!(!fixture.control.is_busy());
     }
@@ -1565,7 +1572,7 @@ async fn configuration_selectors_preserve_unsent_input_without_admission() {
             (ui.editor.draft.as_str(), ui.editor.cursor),
             ("unsent 🦀", 3)
         );
-        assert_note(&ui.editor.images[0], "attached");
+        assert_note(&ui.editor.attachments[0], "attached");
         assert!(fixture.control.session().view().unwrap().entries.is_empty());
     }
     fixture.control.shutdown().await;
@@ -1629,7 +1636,7 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         editor: Editor {
             draft: "unsent 🦀".into(),
             cursor: 3,
-            images: vec![image("attached")],
+            attachments: vec![image("attached")],
             ..Editor::default()
         },
         ..Frontend::default()
@@ -1710,7 +1717,7 @@ async fn model_picker_scope_keeps_order_query_draft_and_visible_selection_author
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("unsent 🦀", 3)
     );
-    assert_note(&ui.editor.images[0], "attached");
+    assert_note(&ui.editor.attachments[0], "attached");
     assert_eq!(fs::read(path).unwrap(), original);
     assert!(fixture.control.session().view().unwrap().entries.is_empty());
     assert_eq!(fixture.control.agent().model().provider, "fixture");
@@ -1918,7 +1925,7 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
         editor: Editor {
             draft: "literal draft".into(),
             cursor: "literal draft".len(),
-            images: vec![ImageSource::Path(PathBuf::from("missing.png"))],
+            attachments: vec![AttachmentSource::ImageFile(PathBuf::from("missing.png"))],
             ..Editor::default()
         },
         question: Some(QuestionModal::new(request, questions)),
@@ -1945,7 +1952,7 @@ fn question_modal_preserves_composer_draft_images_and_defers_to_other_views() {
     ));
     assert_eq!(ui.editor.draft, "literal draft");
     assert_eq!(ui.editor.cursor, "literal draft".len());
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     ui.pickers.open(Picker {
         title: "Existing view",
         query: String::new(),

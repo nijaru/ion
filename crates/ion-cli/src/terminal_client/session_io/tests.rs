@@ -1,3 +1,4 @@
+use ion_app::attachments::AttachmentSource;
 use std::sync::{Arc, mpsc};
 
 use ion_app::{BindingChange, ControlUpdate, Delivery, OperationOutcome, ReturnReason, UserInput};
@@ -82,10 +83,9 @@ async fn delayed_session_read_leaves_stop_and_reliable_returns_responsive() {
             Delivery::Start,
             UserInput::Prompt {
                 text: literal.into(),
-                images: vec![ion_app::image_input::ImageSource::Path(
+                attachments: vec![ion_app::attachments::AttachmentSource::ImageFile(
                     fixture.root.join("missing.png"),
                 )],
-                files: vec![],
             },
             EditorDraft {
                 literal: literal.into(),
@@ -117,7 +117,7 @@ async fn delayed_session_read_leaves_stop_and_reliable_returns_responsive() {
     .unwrap();
     assert!(returned);
     assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (literal, 2));
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     assert!(
         fixture
             .control
@@ -243,14 +243,16 @@ async fn committed_context_refresh_fault_blocks_prompt_with_attachments_until_re
             .contains("prompts blocked")
     );
     ui.editor
-        .images
-        .push(ion_app::image_input::ImageSource::Path(
+        .attachments
+        .push(ion_app::attachments::AttachmentSource::ImageFile(
             fixture.root.join("attached.png"),
         ));
-    ui.editor.files.push(ion_app::prompt_files::TextFile {
-        name: "context.txt".into(),
-        text: "context".into(),
-    });
+    ui.editor
+        .attachments
+        .push(AttachmentSource::Text(ion_app::attachments::TextFile {
+            name: "context.txt".into(),
+            text: "context".into(),
+        }));
     interaction::submit_editor(
         &mut fixture.control,
         &mut ui,
@@ -264,8 +266,7 @@ async fn committed_context_refresh_fault_blocks_prompt_with_attachments_until_re
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("unsent 🦀", 3)
     );
-    assert_eq!(ui.editor.images.len(), 1);
-    assert_eq!(ui.editor.files.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 2);
     assert!(!fixture.control.is_busy());
     sql(
         fixture.control.session(),
@@ -284,8 +285,7 @@ async fn committed_context_refresh_fault_blocks_prompt_with_attachments_until_re
     assert!(!ui.session_io.blocked);
     assert!(ui.session_io.refresh_error.is_none());
     assert_eq!(ui.editor.draft, "unsent 🦀");
-    assert_eq!(ui.editor.images.len(), 1);
-    assert_eq!(ui.editor.files.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 2);
     assert_eq!(
         fixture
             .control
@@ -352,8 +352,8 @@ async fn binding_preflight_does_not_admit_a_prompt_on_the_old_model() {
     .unwrap();
     assert!(ui.session_io.blocks_input());
     ui.editor
-        .images
-        .push(ion_app::image_input::ImageSource::Path(
+        .attachments
+        .push(ion_app::attachments::AttachmentSource::ImageFile(
             fixture.root.join("unsent.png"),
         ));
     interaction::submit_editor(
@@ -370,7 +370,7 @@ async fn binding_preflight_does_not_admit_a_prompt_on_the_old_model() {
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("new route prompt", 3)
     );
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     let finished = ui.session_io.complete().await;
     assert!(
         apply(&mut fixture.control, &mut ui, finished)
@@ -550,7 +550,7 @@ async fn failed_inspection_keeps_new_input_and_retains_its_command_separately() 
     ui.session_io.retain_source(Some(source));
     ui.insert("new unsent 雪");
     ui.editor.cursor = "new ".len();
-    ui.attach_image(ion_app::image_input::ImageSource::Path(
+    ui.attach(ion_app::attachments::AttachmentSource::ImageFile(
         fixture.root.join("new.png"),
     ));
     release.send(()).unwrap();
@@ -568,7 +568,7 @@ async fn failed_inspection_keeps_new_input_and_retains_its_command_separately() 
         ("new unsent 雪", "new ".len())
     );
     assert!(
-        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+        matches!(&ui.editor.attachments[..], [ion_app::attachments::AttachmentSource::ImageFile(path)] if path == &fixture.root.join("new.png"))
     );
     assert!(
         ui.pending_history_rows(100)
@@ -580,14 +580,14 @@ async fn failed_inspection_keeps_new_input_and_retains_its_command_separately() 
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("  /session 🦀\n", 3)
     );
-    assert!(ui.editor.images.is_empty());
+    assert!(ui.editor.attachments.is_empty());
     ui.recover_draft();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("new unsent 雪", "new ".len())
     );
     assert!(
-        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+        matches!(&ui.editor.attachments[..], [ion_app::attachments::AttachmentSource::ImageFile(path)] if path == &fixture.root.join("new.png"))
     );
     assert!(
         fixture
@@ -614,7 +614,7 @@ async fn not_dispatched_retains_new_input_and_returns_only_its_command_text() {
     fixture.control.compact(None, source).unwrap();
     ui.insert("new unsent 雪");
     ui.editor.cursor = "new ".len();
-    ui.attach_image(ion_app::image_input::ImageSource::Path(
+    ui.attach(ion_app::attachments::AttachmentSource::ImageFile(
         fixture.root.join("new.png"),
     ));
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -639,21 +639,21 @@ async fn not_dispatched_retains_new_input_and_returns_only_its_command_text() {
         ("new unsent 雪", "new ".len())
     );
     assert!(
-        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+        matches!(&ui.editor.attachments[..], [ion_app::attachments::AttachmentSource::ImageFile(path)] if path == &fixture.root.join("new.png"))
     );
     ui.recover_draft();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("  /command:check 🦀\n", 3)
     );
-    assert!(ui.editor.images.is_empty());
+    assert!(ui.editor.attachments.is_empty());
     ui.recover_draft();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("new unsent 雪", "new ".len())
     );
     assert!(
-        matches!(&ui.editor.images[..], [ion_app::image_input::ImageSource::Path(path)] if path == &fixture.root.join("new.png"))
+        matches!(&ui.editor.attachments[..], [ion_app::attachments::AttachmentSource::ImageFile(path)] if path == &fixture.root.join("new.png"))
     );
     assert!(
         fixture
@@ -680,8 +680,8 @@ async fn only_not_dispatched_settlement_returns_exact_direct_source() {
     fixture.control.compact(None, source).unwrap();
     let mut ui = Frontend::default();
     ui.editor
-        .images
-        .push(ion_app::image_input::ImageSource::Path(
+        .attachments
+        .push(ion_app::attachments::AttachmentSource::ImageFile(
             fixture.root.join("unsent.png"),
         ));
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -707,7 +707,7 @@ async fn only_not_dispatched_settlement_returns_exact_direct_source() {
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("  /command:check 🦀\n", 3)
     );
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     assert!(
         fixture
             .control

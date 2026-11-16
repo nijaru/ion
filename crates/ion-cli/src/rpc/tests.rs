@@ -1,6 +1,7 @@
 use super::*;
 use crate::publication::ReplyCredits;
 use ion_app::{ControlUpdate, Host, SavedSelection, Wire};
+use std::path::PathBuf;
 use std::{
     fs,
     pin::Pin,
@@ -428,9 +429,8 @@ async fn original_typed_input_and_protocol_id_survive_clear_queue() {
     let credit = ReplyCredits::new(1).acquire().unwrap();
     let id = Some(json!("literal"));
     let input = UserInput::Prompt {
-        files: Vec::new(),
         text: "/do not re-expand".into(),
-        images: vec![],
+        attachments: vec![],
     };
     let host_id = control
         .host

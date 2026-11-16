@@ -49,12 +49,7 @@ struct Delta {
     inserted: String,
     cursor_before: usize,
     cursor_after: usize,
-    attachments: Option<Attachments>,
-}
-
-struct Attachments {
-    images: Vec<ion_app::image_input::ImageSource>,
-    files: Vec<ion_app::prompt_files::TextFile>,
+    attachments: Option<Vec<ion_app::attachments::AttachmentSource>>,
 }
 
 impl Delta {
@@ -68,8 +63,7 @@ impl Delta {
                 literal: self.removed,
                 cursor: self.cursor_before,
             },
-            images: attachments.images,
-            files: attachments.files,
+            attachments,
         })
     }
 }
@@ -429,7 +423,7 @@ impl Editor {
         self.break_edit_focus();
         self.browsing = None;
         self.completion.clear();
-        let (images, files) = self.take_attachments();
+        let attachments = self.take_attachments();
         self.recovered.extend(self.recovery.record(
             Delta {
                 start: 0,
@@ -437,7 +431,7 @@ impl Editor {
                 inserted: String::new(),
                 cursor_before: std::mem::take(&mut self.cursor),
                 cursor_after: 0,
-                attachments: Some(Attachments { images, files }),
+                attachments: Some(attachments),
             },
             Group::Other,
         ));
@@ -466,8 +460,7 @@ impl Editor {
         self.draft.replace_range(entry.start..end, replacement);
         self.cursor = cursor_after;
         if let Some(attachments) = &mut entry.attachments {
-            std::mem::swap(&mut self.images, &mut attachments.images);
-            std::mem::swap(&mut self.files, &mut attachments.files);
+            std::mem::swap(&mut self.attachments, attachments);
         }
     }
 
@@ -598,7 +591,9 @@ mod tests {
             let mut ui = Frontend::default();
             ui.insert(literal);
             ui.editor.cursor = cursor;
-            ui.attach_image(ion_app::image_input::ImageSource::Path("kept.png".into()));
+            ui.attach(ion_app::attachments::AttachmentSource::ImageFile(
+                "kept.png".into(),
+            ));
             let source = match ui.key(key(KeyCode::Enter, modifiers), None, None) {
                 Action::Submit(source) if modifiers == Modifiers::NONE => source,
                 Action::Queue(source) if modifiers == Modifiers::ALT => source,
@@ -607,7 +602,7 @@ mod tests {
             assert_eq!((source.literal.as_str(), source.cursor), (literal, cursor));
             assert!(ui.editor.draft.is_empty());
             assert_eq!(ui.editor.cursor, 0);
-            assert_eq!(ui.editor.images.len(), 1);
+            assert_eq!(ui.editor.attachments.len(), 1);
             assert!(ui.editor.recovery.undo.is_empty());
             ui.restore_editor(source);
             assert!(composer_key(
@@ -618,7 +613,7 @@ mod tests {
                 (ui.editor.draft.as_str(), ui.editor.cursor),
                 (literal, cursor)
             );
-            assert_eq!(ui.editor.images.len(), 1);
+            assert_eq!(ui.editor.attachments.len(), 1);
         }
     }
 
@@ -1006,7 +1001,9 @@ mod tests {
         ui.editor.cursor = ui.editor.draft.len();
         composer_key(&mut ui, key(KeyCode::Char('w'), Modifiers::CONTROL));
         assert!(ui.editor.recovery.kills.newest() == Some("typed"));
-        ui.attach_image(super::super::ImageSource::Path("/tmp/not-read.png".into()));
+        ui.attach(super::super::AttachmentSource::ImageFile(
+            "/tmp/not-read.png".into(),
+        ));
         assert!(ui.editor.recovery.undo.is_empty());
         assert!(composer_key(
             &mut ui,
@@ -1018,7 +1015,7 @@ mod tests {
         ui.restore_editor(EditorDraft::at_end("host returned".into()));
         assert!(ui.editor.recovery.undo.is_empty());
         assert_eq!(ui.editor.draft, "host returned");
-        assert_eq!(ui.editor.images.len(), 1);
+        assert_eq!(ui.editor.attachments.len(), 1);
         ui.editor.cursor = ui.editor.draft.len();
         composer_key(&mut ui, key(KeyCode::Char('y'), Modifiers::CONTROL));
         assert_eq!(ui.editor.draft, "host returnedtyped");
@@ -1111,7 +1108,7 @@ mod tests {
     fn trimming_clear_history_retains_the_original_rich_draft_once() {
         let mut ui = Frontend::default();
         ui.insert("cleared α");
-        ui.attach_image(ion_app::image_input::ImageSource::Path(
+        ui.attach(ion_app::attachments::AttachmentSource::ImageFile(
             "retained.png".into(),
         ));
         ui.editor.clear_draft();
@@ -1121,7 +1118,7 @@ mod tests {
         assert_eq!(ui.editor.recovered.len(), 1);
         ui.recover_draft();
         assert_eq!(ui.editor.draft, "cleared α");
-        assert_eq!(ui.editor.images.len(), 1);
+        assert_eq!(ui.editor.attachments.len(), 1);
         assert_eq!(
             ui.editor.recovered.len(),
             1,
@@ -1133,14 +1130,14 @@ mod tests {
     fn undone_clear_is_not_duplicated_when_a_new_baseline_is_taken() {
         let mut ui = Frontend::default();
         ui.insert("restored α");
-        ui.attach_image(ion_app::image_input::ImageSource::Path(
+        ui.attach(ion_app::attachments::AttachmentSource::ImageFile(
             "retained.png".into(),
         ));
         ui.editor.clear_draft();
         composer_key(&mut ui, key(KeyCode::Char('_'), Modifiers::CONTROL));
         let source = ui.editor.take_literal();
         assert_eq!(source.literal, "restored α");
-        assert_eq!(ui.editor.images.len(), 1);
+        assert_eq!(ui.editor.attachments.len(), 1);
         assert!(ui.editor.recovered.is_empty());
     }
 

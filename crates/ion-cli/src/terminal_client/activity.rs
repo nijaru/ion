@@ -122,8 +122,8 @@ pub(super) fn apply(
             Err(rejected) => {
                 let rejected = *rejected;
                 ui.status = format!("Request was not accepted: {:#}", rejected.reason);
-                if let UserInput::Prompt { images, files, .. } = rejected.input {
-                    ui.return_draft(rejected.metadata, images, files);
+                if let UserInput::Prompt { attachments, .. } = rejected.input {
+                    ui.return_draft(rejected.metadata, attachments);
                 } else {
                     // A prepared SDK Message is not an editor draft. Keep the
                     // entire input, including media, rather than reconstruct it.
@@ -231,18 +231,17 @@ pub(super) fn apply(
             ui.session_io.request_refresh();
         }
         ControlUpdate::Returned(returned) => {
-            let UserInput::Prompt { images, files, .. } = returned.input else {
+            let UserInput::Prompt { attachments, .. } = returned.input else {
                 unreachable!("terminal submits only raw prompts")
             };
             let withdrawn = matches!(returned.reason, ReturnReason::Cleared);
             if withdrawn {
                 ui.show_draft(super::RecoveredDraft {
                     source: returned.metadata,
-                    images,
-                    files,
+                    attachments,
                 });
             } else {
-                ui.return_draft(returned.metadata, images, files);
+                ui.return_draft(returned.metadata, attachments);
             }
             let retention = if !withdrawn && ui.clipboard_pending() {
                 ui.status = "Returned draft retained separately".into();
@@ -390,8 +389,7 @@ mod tests {
                 Delivery::Start,
                 UserInput::Prompt {
                     text: literal.into(),
-                    images: Vec::new(),
-                    files: Vec::new(),
+                    attachments: Vec::new(),
                 },
                 EditorDraft::at_end(literal.into()),
             )
@@ -645,9 +643,8 @@ mod tests {
             .submit(
                 Delivery::Start,
                 UserInput::Prompt {
-                    files: Vec::new(),
                     text: "initial".into(),
-                    images: vec![ion_app::image_input::ImageSource::Path(
+                    attachments: vec![ion_app::attachments::AttachmentSource::ImageFile(
                         fixture.root.join("missing.png"),
                     )],
                 },
@@ -690,8 +687,7 @@ mod tests {
                 Delivery::Start,
                 UserInput::Prompt {
                     text: "request".into(),
-                    files: vec![],
-                    images: vec![],
+                    attachments: vec![],
                 },
                 EditorDraft::at_end("request".into()),
             )

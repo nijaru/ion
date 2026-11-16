@@ -133,9 +133,9 @@ def until_all(child, *predicates):
     return records
 
 
-def returned_prompt(record, text, images=()):
+def returned_prompt(record, text, attachments=()):
     # Host returns the literal editor input, not its expanded/prepared Message.
-    assert record["input"] == {"Prompt": {"text": text, "images": list(images), "files": []}}, record
+    assert record["input"] == {"Prompt": {"text": text, "attachments": list(attachments)}}, record
 
 
 def chunk(kind, data):
@@ -254,12 +254,16 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert resources["id"] == "resources" and resources["success"]
         assert resources["data"]["prompts"][0]["name"] == "check"
 
-        send(child, {"id": "missing-image", "type": "prompt", "message": "Look", "images": ["missing.png"]})
+        send(child, {"id": "obsolete-images", "type": "prompt", "message": "Never silently drop", "images": ["private.png"]})
+        obsolete = read_response(child)
+        assert obsolete["id"] == "obsolete-images" and not obsolete["success"] and "unknown field" in obsolete["error"], obsolete
+
+        send(child, {"id": "missing-image", "type": "prompt", "message": "Look", "attachments": [{"type": "image_file", "path": "missing.png"}]})
         rejected = read_response(child)
         assert rejected["id"] == "missing-image" and rejected["success"] is False
         returned = read(child)
         assert returned["type"] == "uncommitted_prompt" and returned["id"] == "missing-image", returned
-        returned_prompt(returned, "Look", [{"Path": "missing.png"}])
+        returned_prompt(returned, "Look", [{"ImageFile": "missing.png"}])
         send(child, {"id": "empty-state", "type": "get_state"})
         assert read_response(child)["data"]["entries"] == 0
 
@@ -382,11 +386,11 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
                    for request in summary_requests), summary_requests
         assert requests[-1]["reasoning_effort"] == "high" and not requests[-1].get("tools"), requests[-1]
 
-        inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
-        send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "images": [{**inline, "mime_type": "image/jpeg"}]})
+        inline = {"type": "image", "mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
+        send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "attachments": [{**inline, "mime_type": "image/jpeg"}]})
         rejected = read_response(child)
         assert rejected["id"] == "bad-inline" and rejected["success"] is False
-        send(child, {"id": "inline", "type": "prompt", "message": "", "images": [inline]})
+        send(child, {"id": "inline", "type": "prompt", "message": "", "attachments": [inline]})
         records = until(child, lambda r: r["type"] == "turn_end")
         assert records[-1]["status"] == "completed", records
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
@@ -398,7 +402,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
 
         send(child, {"id": "follow-parent", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "follow-parent")
-        send(child, {"id": "follow-child", "type": "follow_up", "message": "AFTER", "images": [inline]})
+        send(child, {"id": "follow-child", "type": "follow_up", "message": "AFTER", "attachments": [inline]})
         queued = until(child, lambda r: r.get("id") == "follow-child")[-1]
         assert queued["success"] and queued["data"]["disposition"] == "queued", queued
         parent_records = until(child, lambda r: r["type"] == "turn_end")
@@ -447,7 +451,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             time.sleep(0.01)
         assert len(requests) == before_parent + 1
         before_abort = len(requests)
-        send(child, {"id": "after-abort", "type": "follow_up", "message": "AFTER_ABORT", "images": [inline]})
+        send(child, {"id": "after-abort", "type": "follow_up", "message": "AFTER_ABORT", "attachments": [inline]})
         assert until(child, lambda r: r.get("id") == "after-abort")[-1]["success"]
         send(child, {"id": "cancel-parent-now", "type": "abort"})
         parent_records = until_all(child, lambda r: r["type"] == "turn_end", lambda r: r["type"] == "uncommitted_follow_up")
@@ -455,19 +459,19 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert next(r for r in parent_records if r["type"] == "turn_end")["status"] == "cancelled", parent_records
         returned = next(r for r in parent_records if r["type"] == "uncommitted_follow_up")
         assert returned["id"] == "after-abort", returned
-        returned_prompt(returned, "AFTER_ABORT", [{"Encoded": inline}])
+        returned_prompt(returned, "AFTER_ABORT", [{"ImageBytes": {"bytes": inline["data"], "mime_type": inline["mime_type"]}}])
         send(child, {"id": "after-abort-state", "type": "get_state"})
         state_records = until(child, lambda r: r.get("id") == "after-abort-state")
         assert not any(r["type"] == "follow_up_started" for r in state_records), state_records
         assert not state_records[-1]["data"]["busy"] and state_records[-1]["data"]["follow_ups"] == 0, state_records
         assert len(requests) == before_abort, "abort dispatched returned input"
-        send(child, {"id": "resubmit-after-abort", "type": "prompt", "message": "AFTER_ABORT", "images": [inline]})
+        send(child, {"id": "resubmit-after-abort", "type": "prompt", "message": "AFTER_ABORT", "attachments": [inline]})
         assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
         assert len(requests) == before_abort + 1, "explicit resubmission did not dispatch exactly once"
 
         send(child, {"id": "vision-turn", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "vision-turn")
-        send(child, {"id": "vision-steer", "type": "steer", "message": "Inspect the image", "images": ["pixel.png"]})
+        send(child, {"id": "vision-steer", "type": "steer", "message": "Inspect the image", "attachments": [{"type": "image_file", "path": "pixel.png"}]})
         steered = until(child, lambda r: r.get("id") == "vision-steer")[-1]
         assert steered["success"], steered
         records = until(child, lambda r: r["type"] == "turn_end")
@@ -485,7 +489,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             assert "Inspect the image" in str(commits[1]), commits
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
         assert latest[0] == {"type": "text", "text": "Inspect the image"}, latest
-        assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest
+        pictures = [part for part in latest if part["type"] == "image_url"]
+        assert len(pictures) == 1 and pictures[0]["image_url"]["url"] == "data:image/png;base64," + inline["data"], latest
+        assert {"type": "text", "text": "Attached image file: " + json.dumps(str(workspace.resolve() / "pixel.png"))} in latest, latest
         send(child, {"id": "vision-inspect", "type": "inspect"})
         inspected = read_response(child)
         assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])
@@ -695,7 +701,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             assert (fault_workspace / "io.ready").exists(), "input-fault native call did not start"
             native_pid = int((fault_workspace / "io.pid").read_text())
             for kind, message in (("steer", "RETAIN_STEERING"), ("follow_up", "RETAIN_FOLLOW_UP")):
-                stream_send({"id": kind, "type": kind, "message": message, "images": [inline]})
+                stream_send({"id": kind, "type": kind, "message": message, "attachments": [inline]})
                 assert until(input_fault, lambda record: record.get("id") == kind)[-1]["success"]
             feeder.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
             feeder.close()
@@ -709,7 +715,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
             returned = next(record for record in records if record["type"] == "uncommitted_follow_up")
             assert returned["id"] == "follow_up", returned
             for record, message in ((steering[0], "RETAIN_STEERING"), (returned, "RETAIN_FOLLOW_UP")):
-                returned_prompt(record, message, [{"Encoded": inline}])
+                returned_prompt(record, message, [{"ImageBytes": {"bytes": inline["data"], "mime_type": inline["mime_type"]}}])
             assert len(requests) == before + 1, "input failure admitted queued work"
             view = json.loads(subprocess.run([binary, "--cwd", fault_workspace, "--session", fault_session, "inspect"], env=env, capture_output=True, check=True).stdout)
             outcomes = {entry["data"]["result"]["call_id"]: entry["data"]["result"]["outcome"] for entry in view["entries"] if entry["kind"] == "tool_result"}

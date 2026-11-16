@@ -130,7 +130,8 @@ def user_image_request(request, expected_text):
     users = [message for message in request["messages"] if message["role"] == "user"]
     first = users[0]["content"]
     assert first[0] == {"type": "text", "text": expected_text}, first
-    assert first[1]["type"] == "image_url" and first[1]["image_url"]["url"].startswith("data:image/png;base64,"), first
+    images = [part for part in first if part["type"] == "image_url"]
+    assert images and all(part["image_url"]["url"].startswith("data:image/png;base64,") for part in images), first
     return users
 
 
@@ -174,7 +175,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         assert resumed.stdout.strip() == "IMAGE_OK", resumed
         assert len(requests) == 2
         initial = user_image_request(requests[0], "Inspect the picture.")[0]["content"]
-        pixels = [image_pixel(part) for part in initial[1:]]
+        pixels = [image_pixel(part) for part in initial if part["type"] == "image_url"]
         assert pixels == [(255, 0, 0, 255), (0, 0, 255, 255), (0, 255, 0, 255)], pixels
         users = user_image_request(requests[1], "Inspect the picture.")
         assert users[0]["content"] == initial, users
@@ -209,6 +210,8 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
+        native_text = home / "literal context.md"
+        native_text.write_text("/not-a-template {{ARG}}\n</file> 🦀\n")
         terminal_session = work / "terminal.sqlite"
         child = subprocess.Popen([binary, "--cwd", workspace, "--session", terminal_session, "--image", "red.png", "--tui-mode", "fullscreen", "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
         os.close(slave)
@@ -230,9 +233,9 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                     os.write(master, b"Inspect in terminal.\r")
                     sent_first = True
                 if sent_first and len(requests) >= 3 and b"IMAGE_OK" in output and not attached_second:
-                    os.write(master, ("/image " + json.dumps(image_reference, ensure_ascii=False) + "\r").encode())
+                    os.write(master, ("/file " + json.dumps(image_reference, ensure_ascii=False) + "\r/file " + json.dumps(str(native_text), ensure_ascii=False) + "\r").encode())
                     attached_second = True
-                if attached_second and b"image(s) attached to the next prompt" in output and not sent_second:
+                if attached_second and b"2 attachment(s) attached to the next prompt" in output and not sent_second:
                     if not release_terminal_request.is_set():
                         assert not program_ready(output), "attachment did not exercise the busy Turn"
                         release_terminal_request.set()
@@ -268,9 +271,16 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             user_image_request(requests[2], "Inspect in terminal.")
             user_image_request(requests[3], "Inspect in terminal.")
             last_user = [message for message in requests[3]["messages"] if message["role"] == "user"][-1]["content"]
-            assert last_user[0] == {"type": "text", "text": "Inspect again."}
-            assert last_user[1]["type"] == "image_url"
-            assert image_pixel(last_user[1]) == (255, 0, 0, 255), last_user
+            text = last_user[0]["text"]
+            frame = text.removeprefix("Attached file (UTF-8, JSON encoded):\n").removesuffix("\nInspect again.")
+            snapshot = json.loads(frame)
+            assert snapshot == {"name": str(native_text), "text": native_text.read_text()}, last_user
+            pictures = [part for part in last_user if part["type"] == "image_url"]
+            assert len(pictures) == 1 and image_pixel(pictures[0]) == (255, 0, 0, 255), last_user
+            native_text.unlink()
+            saved = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", terminal_session, "inspect"], env=env, check=True, capture_output=True, text=True).stdout)
+            saved_prompt = [entry["data"]["input"]["content"][0]["Text"] for entry in saved["entries"] if entry["kind"] == "turn_started"][-1]
+            assert snapshot["text"] in json.loads(saved_prompt.removeprefix("Attached file (UTF-8, JSON encoded):\n").removesuffix("\nInspect again."))["text"]
             with sqlite3.connect(terminal_session) as connection:
                 facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
             assert [fact["data"]["reason"] for fact in facts if fact["kind"] == "turn_ended"] == ["completed", "completed"]
@@ -439,36 +449,37 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
 
         def returned_image(record, text, source):
             assert record["reason"] == "cleared", record
-            assert record["input"] == {"Prompt": {"text": text, "images": [source], "files": []}}, record
+            assert record["input"] == {"Prompt": {"text": text, "attachments": [source]}}, record
 
         try:
             rpc_session = rpc_read()["session"]
             before_rpc = len(requests)
-            rpc_send({"id": "picture", "type": "prompt", "message": "RPC_IMAGE_HOLD", "images": ["red.png"]})
+            rpc_send({"id": "picture", "type": "prompt", "message": "RPC_IMAGE_HOLD", "attachments": [{"type": "image_file", "path": "red.png"}]})
             assert rpc_until(lambda record: record.get("id") == "picture")["success"]
             assert rpc_request_entered.wait(8), "RPC image never reached the captured route"
             assert len(requests) == before_rpc + 1
             user_image_request(requests[-1], "RPC_IMAGE_HOLD")
-            inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
-            rpc_send({"id": "bad-picture", "type": "steer", "message": "REJECTED_PICTURE", "images": [inline, {**inline, "mime_type": "image/jpeg"}]})
+            inline = {"type": "image", "mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
+            rpc_send({"id": "bad-picture", "type": "steer", "message": "REJECTED_PICTURE", "attachments": [inline, {**inline, "mime_type": "image/jpeg"}]})
             rejected = rpc_until(lambda record: record.get("id") == "bad-picture")
             assert not rejected["success"] and "MIME type" in rejected["error"], rejected
-            for command, text, source in (("steer", "RETURNED_STEERING_PICTURE", inline), ("follow_up", "RETURNED_FOLLOW_UP_PICTURE", "red.png")):
-                rpc_send({"id": command, "type": command, "message": text, "images": [source]})
+            for command, text, source in (("steer", "RETURNED_STEERING_PICTURE", inline), ("follow_up", "RETURNED_FOLLOW_UP_PICTURE", {"type": "image_file", "path": "red.png"})):
+                rpc_send({"id": command, "type": command, "message": text, "attachments": [source]})
                 assert rpc_until(lambda record: record.get("id") == command)["success"]
             rpc_send({"id": "clear", "type": "clear_queue"})
             assert rpc_until(lambda record: record.get("id") == "clear")["success"]
             returned = [rpc_read(), rpc_read()]
             assert {(record["type"], record["id"]) for record in returned} == {("uncommitted_steering", "steer"), ("uncommitted_follow_up", "follow_up")}, returned
             by_id = {record["id"]: record for record in returned}
-            returned_image(by_id["steer"], "RETURNED_STEERING_PICTURE", {"Encoded": inline})
-            returned_image(by_id["follow_up"], "RETURNED_FOLLOW_UP_PICTURE", {"Path": "red.png"})
+            returned_image(by_id["steer"], "RETURNED_STEERING_PICTURE", {"ImageBytes": {"bytes": inline["data"], "mime_type": inline["mime_type"]}})
+            returned_image(by_id["follow_up"], "RETURNED_FOLLOW_UP_PICTURE", {"ImageFile": "red.png"})
             rpc_send({"id": "stop-picture", "type": "abort"})
             assert rpc_until(lambda record: record.get("id") == "stop-picture")["success"]
             assert rpc_until(lambda record: record["type"] == "turn_end")["status"] == "cancelled"
             release_rpc_request.set()
-            rpc_send({"id": "recover-picture", "type": "prompt", "message": "RPC_IMAGE_RECOVERY", "images": ["red.png"]})
-            assert rpc_until(lambda record: record.get("id") == "recover-picture")["success"]
+            rpc_send({"id": "recover-picture", "type": "prompt", "message": "RPC_IMAGE_RECOVERY", "attachments": [{"type": "image_file", "path": "red.png"}]})
+            recovery_reply = rpc_until(lambda record: record.get("id") == "recover-picture")
+            assert recovery_reply["success"], recovery_reply
             assert rpc_until(lambda record: record["type"] == "turn_end")["status"] == "completed"
             assert len(requests) == before_rpc + 2
             rpc.stdin.close()
@@ -490,7 +501,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         subprocess.run([binary, "--cwd", rpc_work, "--session", rpc_session, "run", "RPC_IMAGE_REOPEN"], env=env, check=True, capture_output=True)
         replay_users = user_image_request(requests[-1], "RPC_IMAGE_HOLD")
         assert replay_users[1]["content"][0] == {"type": "text", "text": "RPC_IMAGE_RECOVERY"}, replay_users
-        assert replay_users[1]["content"][1]["type"] == "image_url", replay_users
+        assert sum(part["type"] == "image_url" for part in replay_users[1]["content"]) == 1, replay_users
         assert not any(marker in json.dumps(requests[-1]) for marker in ("REJECTED_PICTURE", "RETURNED_STEERING_PICTURE", "RETURNED_FOLLOW_UP_PICTURE"))
         # Real attachments and image-shaped raw values coexist in one Session.
         # CLI/RPC inspection must omit only the former, including after reopen.
@@ -507,7 +518,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         assert result["outcome"]["output"]["value"]["result"] == raw_inspection_json, result
         tool_message = next(message for message in cli_inspection["messages"] if message["role"] == "Tool")
         assert tool_message["content"][0]["ToolResult"]["result"]["result"] == raw_inspection_json, tool_message
-        typed_image = next(entry["data"]["input"]["content"][1]["Image"] for entry in cli_inspection["entries"] if entry["kind"] == "turn_started")
+        typed_image = next(part["Image"] for entry in cli_inspection["entries"] if entry["kind"] == "turn_started" for part in entry["data"]["input"]["content"] if "Image" in part)
         assert typed_image["mime_type"] == "image/png" and typed_image["data"].startswith("[base64 image data omitted:"), typed_image
         assert "iVBORw0KGgo" not in json.dumps(cli_inspection)
         rpc = subprocess.Popen([binary, "--cwd", raw_work, "--session", raw_session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)

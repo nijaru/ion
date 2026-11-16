@@ -4,16 +4,16 @@ use std::collections::VecDeque;
 
 use super::editor_recovery::EditorRecovery;
 use crate::{terminal_completion::Completion, terminal_input::EditorVisualMap};
+use ion_ai::LoadedImage;
 use ion_ai::{Content, Message};
-use ion_app::image_input::{ImageSource, LoadedImage};
+use ion_app::attachments::AttachmentSource;
 
 #[derive(Default)]
 pub(super) struct Editor {
     pub(super) draft: String,
     pub(super) baseline: u64,
     pub(super) cursor: usize,
-    pub(super) images: Vec<ImageSource>,
-    pub(super) files: Vec<ion_app::prompt_files::TextFile>,
+    pub(super) attachments: Vec<AttachmentSource>,
     pub(super) completion: Completion,
     pub(super) recovered: VecDeque<RecoveredDraft>,
     pub(super) prompt_history: Vec<String>,
@@ -67,8 +67,7 @@ impl EditorDraft {
 // retains its own literal editor text, cursor and attachment associations.
 pub(super) struct RecoveredDraft {
     pub(super) source: EditorDraft,
-    pub(super) images: Vec<ImageSource>,
-    pub(super) files: Vec<ion_app::prompt_files::TextFile>,
+    pub(super) attachments: Vec<AttachmentSource>,
 }
 
 impl Editor {
@@ -86,18 +85,13 @@ impl Editor {
         true
     }
 
-    pub(super) fn attach_image(&mut self, image: ImageSource) {
+    pub(super) fn attach(&mut self, attachment: AttachmentSource) {
         self.reset_edit_baseline();
-        self.images.push(image);
+        self.attachments.push(attachment);
     }
 
-    pub(super) fn take_attachments(
-        &mut self,
-    ) -> (Vec<ImageSource>, Vec<ion_app::prompt_files::TextFile>) {
-        (
-            std::mem::take(&mut self.images),
-            std::mem::take(&mut self.files),
-        )
+    pub(super) fn take_attachments(&mut self) -> Vec<AttachmentSource> {
+        std::mem::take(&mut self.attachments)
     }
 
     pub(super) fn publish_editor_width(&mut self, width: usize) {

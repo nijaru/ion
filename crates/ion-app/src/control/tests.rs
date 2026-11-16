@@ -118,9 +118,8 @@ impl Serialize for InterleavingMetadata {
 }
 fn prompt(text: &str) -> UserInput {
     UserInput::Prompt {
-        files: Vec::new(),
         text: text.into(),
-        images: Vec::new(),
+        attachments: Vec::new(),
     }
 }
 

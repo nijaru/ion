@@ -142,8 +142,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
             Delivery::Start,
             UserInput::Prompt {
                 text,
-                images: Vec::new(),
-                files: Vec::new(),
+                attachments: Vec::new(),
             },
             (),
         )

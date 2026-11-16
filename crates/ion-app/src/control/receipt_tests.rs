@@ -39,8 +39,8 @@ async fn uncertain_input_commit_hands_off_exact_custody_without_claiming_rejecti
     assert_eq!(unresolved.session, session);
     assert_eq!(unresolved.operation, settlement.operation);
     assert!(
-        matches!(unresolved.input, UserInput::Prompt { text, images, files }
-        if text == original && images.is_empty() && files.is_empty())
+        matches!(unresolved.input, UserInput::Prompt { text, attachments }
+        if text == original && attachments.is_empty())
     );
     assert_eq!(unresolved.metadata.literal, "exact metadata");
     assert_eq!(unresolved.metadata.marker.get(), 7);

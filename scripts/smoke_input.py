@@ -526,7 +526,8 @@ def exercise_launch(work, base_env, endpoint):
             terminal.wait(lambda: len(requests) == before + 3 and b"state=done" in terminal.output)
             content = requests[-1]["messages"][-1]["content"]
             assert content[0] == {"type": "text", "text": "RESTORED_🦀"}, content
-            assert len(content) == 2 and content[1]["image_url"]["url"].startswith("data:image/png;base64,"), content
+            images = [part for part in content if part["type"] == "image_url"]
+            assert len(images) == 1 and images[0]["image_url"]["url"].startswith("data:image/png;base64,"), content
             terminal.send(b"\x04\x04")
             terminal.wait_exit()
         finally:

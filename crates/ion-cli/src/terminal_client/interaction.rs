@@ -91,11 +91,10 @@ pub(super) fn submit_editor(
             "Terminal commands cannot be queued; submit a prompt or resource command".into();
         return;
     }
-    let (images, files) = ui.editor.take_attachments();
+    let attachments = ui.editor.take_attachments();
     let input = UserInput::Prompt {
         text: source.literal.clone(),
-        images,
-        files,
+        attachments,
     };
     match runtime.submit(delivery, input, source) {
         Ok(_) => {
@@ -104,12 +103,11 @@ pub(super) fn submit_editor(
         }
         Err(rejected) => {
             let rejected = *rejected;
-            let UserInput::Prompt { images, files, .. } = rejected.input else {
+            let UserInput::Prompt { attachments, .. } = rejected.input else {
                 unreachable!("terminal submits only raw prompts")
             };
             ui.restore_editor(rejected.metadata);
-            ui.editor.images = images;
-            ui.editor.files = files;
+            ui.editor.attachments = attachments;
             ui.status = format!("Input was not queued: {:#}", rejected.reason);
         }
     }
@@ -124,11 +122,10 @@ pub(super) fn submit_initial_prompts(
         return;
     }
     if ui.session_io.blocks_input() {
-        let (mut images, mut files) = ui.editor.take_attachments();
+        let mut attachments = ui.editor.take_attachments();
         let mut drafts = prompts.into_iter().map(|literal| super::RecoveredDraft {
             source: EditorDraft::at_end(literal),
-            images: std::mem::take(&mut images),
-            files: std::mem::take(&mut files),
+            attachments: std::mem::take(&mut attachments),
         });
         if let Some(first) = drafts.next() {
             ui.show_draft(first);
@@ -137,15 +134,14 @@ pub(super) fn submit_initial_prompts(
         ui.status = "Session display is stale; launch prompts retained, not submitted".into();
         return;
     }
-    let (mut images, mut files) = ui.editor.take_attachments();
+    let mut attachments = ui.editor.take_attachments();
     let inputs = prompts
         .into_iter()
         .map(|literal| {
             let source = EditorDraft::at_end(literal);
             let input = UserInput::Prompt {
                 text: source.literal.clone(),
-                images: std::mem::take(&mut images),
-                files: std::mem::take(&mut files),
+                attachments: std::mem::take(&mut attachments),
             };
             (input, source)
         })
@@ -158,13 +154,12 @@ pub(super) fn submit_initial_prompts(
         Err(rejected) => {
             let ion_app::RejectedBatch { inputs, reason } = *rejected;
             let mut drafts = inputs.into_iter().map(|(input, source)| {
-                let UserInput::Prompt { images, files, .. } = input else {
+                let UserInput::Prompt { attachments, .. } = input else {
                     unreachable!("terminal launch submits raw prompts")
                 };
                 super::RecoveredDraft {
                     source,
-                    images,
-                    files,
+                    attachments,
                 }
             });
             if let Some(first) = drafts.next() {

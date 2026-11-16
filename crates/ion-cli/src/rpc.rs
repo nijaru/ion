@@ -1,10 +1,8 @@
 //! JSONL translation over the sole shared Host input and execution owner.
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use ion_app::{
-    Delivery, InputId, InputPhase, OperationId, SessionControl, SessionSetup, UserInput,
-};
+use ion_app::{Delivery, InputId, InputPhase, OperationId, SessionControl, SessionSetup};
 use ion_core::ForkPoint;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -17,6 +15,7 @@ use crate::{
 };
 
 mod access;
+mod attachments;
 mod bindings;
 mod connection;
 mod input;
@@ -26,6 +25,8 @@ mod requests;
 #[cfg(test)]
 mod tests;
 use input::CommandReader;
+#[cfg(test)]
+use ion_app::UserInput;
 
 /// Host retains this until return/settlement. The credit also outlives any
 /// queued acknowledgement; neither protocol IDs nor reply leases own input.
@@ -272,25 +273,7 @@ impl Control {
             "follow_up" => ("follow_up", Delivery::FollowUp),
             _ => unreachable!("input command"),
         };
-        let text = required_string(value, "message")?.to_owned();
-        let images = value.get("images").map_or(Ok(Vec::new()), |images| {
-            use ion_app::image_input::ImageSource;
-            images
-                .as_array()
-                .context("images must be an array of local paths or inline images")?
-                .iter()
-                .map(|image| {
-                    if let Some(path) = image.as_str() {
-                        Ok(ImageSource::Path(PathBuf::from(path)))
-                    } else {
-                        Ok(ImageSource::Encoded {
-                            mime_type: required_string(image, "mime_type")?.to_owned(),
-                            data: required_string(image, "data")?.to_owned(),
-                        })
-                    }
-                })
-                .collect::<Result<Vec<_>>>()
-        })?;
+        let input = attachments::prompt(value)?;
         let position = self.host.state().pending_follow_ups + 1;
         let metadata = RpcMetadata {
             id: id.clone(),
@@ -299,15 +282,7 @@ impl Control {
         };
         let input = self
             .host
-            .submit(
-                delivery,
-                UserInput::Prompt {
-                    text,
-                    images,
-                    files: Vec::new(),
-                },
-                metadata,
-            )
+            .submit(delivery, input, metadata)
             .map_err(|rejected| rejected.reason)?;
         self.correlations.insert(
             input,

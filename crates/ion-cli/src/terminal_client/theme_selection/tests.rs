@@ -21,7 +21,7 @@ impl Root {
             editor: Editor {
                 draft: "unsent 🦀".into(),
                 cursor: 3,
-                images: vec![
+                attachments: vec![
                     ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
                         .unwrap()
                         .into(),
@@ -147,7 +147,7 @@ async fn rendered_theme_preview_cancel_and_failed_save_preserve_input_and_public
         (
             ui.editor.draft.as_str(),
             ui.editor.cursor,
-            ui.editor.images.len()
+            ui.editor.attachments.len()
         ),
         ("unsent 🦀", 3, 1)
     );
@@ -225,7 +225,7 @@ async fn automatic_theme_slots_are_unsaved_drafts_until_apply() {
         (
             ui.editor.draft.as_str(),
             ui.editor.cursor,
-            ui.editor.images.len()
+            ui.editor.attachments.len()
         ),
         ("unsent 🦀", 3, 1)
     );

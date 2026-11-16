@@ -58,7 +58,7 @@ fn catalogue_and_preview_wait_for_native_capacity_without_consuming_editor_input
             (
                 ui.editor.draft.as_str(),
                 ui.editor.cursor,
-                ui.editor.images.len()
+                ui.editor.attachments.len()
             ),
             ("unsent 🦀", 3, 1)
         );
@@ -169,7 +169,7 @@ fn queued_confirmation_survives_escape_and_a_cancelled_shutdown_wait() {
             (
                 ui.editor.draft.as_str(),
                 ui.editor.cursor,
-                ui.editor.images.len()
+                ui.editor.attachments.len()
             ),
             ("unsent 🦀", 3, 1)
         );

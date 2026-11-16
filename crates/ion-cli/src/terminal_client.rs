@@ -14,7 +14,8 @@ use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::kind_label;
 use anyhow::{Context, Result};
 use ion_ai::{Content, ModelRef};
-use ion_app::image_input::{ImageSource, LoadedImage};
+use ion_app::attachments::AttachmentSource;
+
 use ion_app::{CredentialStore, Delivery, QuestionResponder, Resources};
 #[cfg(test)]
 use ion_core::Session;
@@ -173,8 +174,7 @@ struct Frontend {
 pub struct ChatInit {
     pub services: std::sync::Arc<ion_app::Host>,
     pub setup: ion_app::SessionSetup,
-    pub images: Vec<LoadedImage>,
-    pub files: Vec<ion_app::prompt_files::TextFile>,
+    pub attachments: Vec<AttachmentSource>,
     pub startup_diagnostics: Vec<String>,
     pub initial_prompts: Vec<String>,
     pub tui_mode: TuiMode,
@@ -195,8 +195,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut completion_revision = 0;
     let mut ui = Frontend {
         editor: Editor {
-            images: init.images.into_iter().map(Into::into).collect(),
-            files: init.files,
+            attachments: init.attachments,
             ..Editor::default()
         },
         termination: init.termination,
@@ -924,12 +923,12 @@ impl Frontend {
                 .is_some_and(|question| !question.is_collapsed())
     }
 
-    fn attach_image(&mut self, image: ImageSource) {
+    fn attach(&mut self, attachment: AttachmentSource) {
         self.gestures.invalidate();
-        self.editor.attach_image(image);
+        self.editor.attach(attachment);
         self.status = format!(
-            "{} image(s) attached to the next prompt",
-            self.editor.images.len()
+            "{} attachment(s) attached to the next prompt",
+            self.editor.attachments.len()
         );
     }
 
@@ -1119,9 +1118,7 @@ impl Frontend {
         }
         let action = match input {
             Some(KeyAction::Interrupt | KeyAction::Cancel) => {
-                let empty = self.editor.draft.is_empty()
-                    && self.editor.images.is_empty()
-                    && self.editor.files.is_empty();
+                let empty = self.editor.draft.is_empty() && self.editor.attachments.is_empty();
                 if empty && input == Some(KeyAction::Cancel) {
                     return Action::None;
                 }
@@ -1148,9 +1145,7 @@ impl Frontend {
                 }
             }
             Some(KeyAction::Exit)
-                if self.editor.draft.is_empty()
-                    && self.editor.images.is_empty()
-                    && self.editor.files.is_empty() =>
+                if self.editor.draft.is_empty() && self.editor.attachments.is_empty() =>
             {
                 if self
                     .gestures
@@ -1186,10 +1181,7 @@ impl Frontend {
                 Action::None
             }
             Some(KeyAction::FollowUp) => {
-                if self.editor.draft.trim().is_empty()
-                    && self.editor.images.is_empty()
-                    && self.editor.files.is_empty()
-                {
+                if self.editor.draft.trim().is_empty() && self.editor.attachments.is_empty() {
                     Action::None
                 } else {
                     Action::Queue(self.editor.take_literal())
@@ -1210,10 +1202,7 @@ impl Frontend {
                 } else {
                     None
                 };
-                if syntax.is_empty()
-                    && self.editor.images.is_empty()
-                    && self.editor.files.is_empty()
-                {
+                if syntax.is_empty() && self.editor.attachments.is_empty() {
                     Action::None
                 } else if let Some(status) = invalid_shell {
                     self.status = status.into();
@@ -1516,17 +1505,12 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
         .flatten();
     let notice = editor_error.as_deref().unwrap_or(&ui.status);
     let idle = notice.is_empty();
-    let mut attachment = if ui.editor.images.is_empty() {
+    let attachment = if ui.editor.attachments.is_empty() {
         String::new()
     } else {
-        format!(" · {} image(s) attached", ui.editor.images.len())
+        format!(" · {} attachment(s) attached", ui.editor.attachments.len())
     };
-    if !ui.editor.files.is_empty() {
-        attachment.push_str(&format!(
-            " · {} text file(s) attached",
-            ui.editor.files.len()
-        ));
-    }
+
     let recovery = if ui.editor.recovered.is_empty() {
         String::new()
     } else {

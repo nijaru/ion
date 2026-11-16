@@ -62,7 +62,7 @@ impl Completion {
             .split_whitespace()
             .next()
             .and_then(Builtin::parse)
-            .is_some_and(|command| !matches!(command, Builtin::Image | Builtin::Export))
+            .is_some_and(|command| !matches!(command, Builtin::File | Builtin::Export))
         {
             return None;
         }

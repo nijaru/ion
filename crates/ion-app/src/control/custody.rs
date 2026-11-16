@@ -58,7 +58,7 @@ pub(super) struct PendingInput {
 }
 
 pub(super) enum InputContent {
-    Images(Message),
+    Attachments(String),
     Ready(PreparedInput<InputId>),
     Transferred {
         receipt: InputReceipt,

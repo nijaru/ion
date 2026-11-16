@@ -42,7 +42,13 @@ ion --continue compact               # request context summary
 
 Run `ion --help` and `ion COMMAND --help` for complete supported options. The current CLI supports `@file` context arguments, images, explicit model and reasoning selection, and tool include/exclude filters. Headless/RPC mode needs an already configured model and credentials.
 
-Attach pictures with `ion --image "~/Pictures/screenshot.png" run "Explain this"` or `/image "~/Pictures/screenshot.png"` in chat. Both resolve `~/…` from the client's `HOME`; use `./~/…` for a literal tilde directory. Chat accepts an unquoted path (including spaces) or a JSON-quoted path, matching file completion; it does not evaluate shell expressions. Pictures in accepted messages are saved in the Session, so reopening does not reread their source files.
+Attach UTF-8 text files or pictures with `ion run @notes.md @screenshot.png "Explain this"` or `/file PATH` in chat. Use `--image PATH` when the operand must be an image. These client inputs resolve `~/…` from `HOME`; use `./~/…` for a literal tilde directory. Chat accepts an unquoted path (including spaces) or a JSON-quoted path, matching completion; it does not evaluate shell expressions or read paths mentioned in ordinary prose. Accepted messages save complete text/image snapshots, so reopening does not reread their source files.
+
+RPC `prompt`, `steer` and `follow_up` commands take an optional typed `attachments` array:
+```json
+{"type":"prompt","id":"review","message":"Explain this","attachments":[{"type":"file","path":"notes.md"},{"type":"image","mime_type":"image/png","data":"BASE64"}]}
+```
+Use `{"type":"image_file","path":"screenshot.png"}` to require an image from a local file. RPC paths are literal and relative to the Session directory; RPC does not expand `~`. Each LF-terminated command, including JSON and base64, is limited to 8 MiB. Malformed sources and unknown fields, including the obsolete `images` field, are rejected rather than silently ignored. Preparation is atomic: an invalid attachment does not submit the rest of the prompt.
 
 Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use `/reasoning` to change the preference.
 
@@ -103,6 +109,8 @@ scripts/smoke.sh
 ```
 
 Rust application entry points and examples live in `crates/ion-cli/examples/`. `CodingApplication` and `SessionControl` embed the same execution engine; APIs may change before release. `AGENTS.md` contains project-specific development checks.
+
+Application input uses `UserInput::Prompt { text, attachments }` and `ion_app::attachments::AttachmentSource`: automatic files, image-only files, owned image bytes, prepared images and literal text snapshots. `AttachmentSource::image_bytes(bytes)` avoids base64 in Rust callers. Custom runtimes default to no filesystem attachment access; explicitly set `ApplicationRuntime::allow_file_attachments` to permit file sources. In-memory sources need no filesystem permission. Core receives only prepared typed `Message` content, never source paths. The direct `prepare_attachments` helper requires absolute paths; `SessionControl` resolves relative sources against its Session. Pending sources and prepared messages share a 32 MiB encoded custody budget; a locally queued input can still be returned if preparation exceeds that budget or the model's limits.
 
 `Session::create/open` and `SessionSetup::new` are blocking factory operations. Async coding clients use retained `CodingApplication::prepare_setup`, Session I/O and reader capabilities. Keep `setup.retirements()` outside the controller: after controller shutdown, drain reliable updates, release every Session/read capability, then await the retirement scope's `join()`. Shutdown preserves read-only access; retirement separately joins native SQLite close and writer-lease release. Cancelling a borrowed wait does not cancel or discard its native work.
 

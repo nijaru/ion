@@ -75,7 +75,7 @@ fn composer_activations_ignore_repeats_without_typing_a_remapped_shortcut() {
         };
         ui.insert(literal);
         ui.editor.cursor = cursor;
-        ui.attach_image(ImageSource::Path("retained.png".into()));
+        ui.attach(AttachmentSource::ImageFile("retained.png".into()));
         for _ in 0..3 {
             assert!(matches!(
                 ui.key(
@@ -92,7 +92,7 @@ fn composer_activations_ignore_repeats_without_typing_a_remapped_shortcut() {
                 (ui.editor.draft.as_str(), ui.editor.cursor),
                 (literal, cursor)
             );
-            assert_eq!(ui.editor.images.len(), 1);
+            assert_eq!(ui.editor.attachments.len(), 1);
         }
         let action = ui.key(key, None, None);
         assert!(match activation {
@@ -149,7 +149,7 @@ fn model_cycle_keys_and_rebinding_retain_the_editor_and_attachments() {
             editor: Editor {
                 draft: "left 🦀 right".into(),
                 cursor: "left ".len(),
-                images: vec![ImageSource::Path(PathBuf::from("retained.png"))],
+                attachments: vec![AttachmentSource::ImageFile(PathBuf::from("retained.png"))],
                 ..Editor::default()
             },
             keys,
@@ -167,7 +167,7 @@ fn model_cycle_keys_and_rebinding_retain_the_editor_and_attachments() {
             assert_eq!(ui.editor.draft, "left 🦀 right");
             assert_eq!(ui.editor.cursor, "left ".len());
             assert!(
-                matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("retained.png"))
+                matches!(&ui.editor.attachments[..], [AttachmentSource::ImageFile(path)] if path == std::path::Path::new("retained.png"))
             );
         }
     }
@@ -380,7 +380,7 @@ async fn presentation_reload_revokes_a_completed_old_theme_poll() {
 fn custom_actions_preserve_literal_case_recovery_and_disabled_shortcuts() {
     let mut ui = Frontend {
         editor: Editor {
-            images: vec![ImageSource::Path(PathBuf::from("retained.png"))],
+            attachments: vec![AttachmentSource::ImageFile(PathBuf::from("retained.png"))],
             ..Editor::default()
         },
         keys: KeyBindings::parse(
@@ -437,7 +437,7 @@ fn custom_actions_preserve_literal_case_recovery_and_disabled_shortcuts() {
         None,
     );
     assert_eq!(ui.editor.draft, "Ab🦀");
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
 }
 
 #[tokio::test]

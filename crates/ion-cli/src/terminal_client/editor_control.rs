@@ -1,7 +1,7 @@
 //! Coordinate editor replacement with independent foreground discovery.
 use super::{EditorDraft, Frontend, RecoveredDraft};
 use ion_ai::Message;
-use ion_app::image_input::ImageSource;
+use ion_app::attachments::AttachmentSource;
 
 impl Frontend {
     pub(super) fn insert(&mut self, text: &str) {
@@ -38,20 +38,12 @@ impl Frontend {
         ));
     }
 
-    pub(super) fn return_draft(
-        &mut self,
-        source: EditorDraft,
-        images: Vec<ImageSource>,
-        files: Vec<ion_app::prompt_files::TextFile>,
-    ) {
+    pub(super) fn return_draft(&mut self, source: EditorDraft, attachments: Vec<AttachmentSource>) {
         self.gestures.invalidate();
         // Acquisition reserves the composer before its bytes arrive. Automatic
         // returns must not become the prefix or attachment owner of that paste.
         let replace_empty = !self.clipboard_pending();
-        if self
-            .editor
-            .return_draft(source, images, files, replace_empty)
-        {
+        if self.editor.return_draft(source, attachments, replace_empty) {
             self.pickers.close();
         }
     }

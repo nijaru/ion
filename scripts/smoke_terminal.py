@@ -471,7 +471,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if sent_compact and b"Context summarized; raw history retained" in output and not sent_preparation:
                     preparation_start = len(output)
                     preparation_requests = trace.read_bytes()
-                    os.write(master, b"/image missing.png\rstatus probe\r")
+                    os.write(master, b"/file missing.png\rstatus probe\r")
                     sent_preparation = True
                 if sent_preparation and b"Prompt returned: preparation failed" in output[preparation_start:] and b"\x1b]7501;state=done:app=ion\x1b\\" in output[preparation_start:] and not sent_clone:
                     assert trace.read_bytes() == preparation_requests, "failed preparation reached the model"

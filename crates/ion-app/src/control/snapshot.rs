@@ -281,7 +281,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     }
                     InputState::Pending(pending) => (
                         match pending.content {
-                            InputContent::Images(_) => InputCustodyPhase::PendingPreparation,
+                            InputContent::Attachments(_) => InputCustodyPhase::PendingPreparation,
                             InputContent::Ready(_) => InputCustodyPhase::Prepared,
                             InputContent::Transferred { .. } => InputCustodyPhase::InFlight,
                         },

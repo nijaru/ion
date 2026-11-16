@@ -187,7 +187,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         if self.preparing.is_none()
             && let Some((id, pending, message)) = custody.inputs.iter().find_map(|(&id, input)| {
                 let pending = input.pending()?;
-                let InputContent::Images(message) = &pending.content else {
+                let InputContent::Attachments(message) = &pending.content else {
                     return None;
                 };
                 pending
@@ -196,23 +196,23 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     .then_some((id, pending, message))
             })
         {
-            let UserInput::Prompt { images, .. } = &pending.original else {
+            let UserInput::Prompt { attachments, .. } = &pending.original else {
                 unreachable!("only raw prompts need preparation")
             };
-            let mut sources = images.clone();
+            let mut sources = attachments.clone();
             for source in &mut sources {
-                if let ImageSource::Path(path) = source
+                if let AttachmentSource::File(path) | AttachmentSource::ImageFile(path) = source
                     && !path.is_absolute()
                 {
                     *path = self
                         .setup
                         .session
                         .cwd()
-                        .expect("relative image admission requires a workspace")
+                        .expect("relative attachment admission requires a workspace")
                         .join(&*path);
                 }
             }
-            let mut message = message.clone();
+            let text = message.clone();
             let model = self.setup.runtime.agent.model().clone();
             let limits = self.setup.runtime.agent.limits();
             self.preparing = Some((
@@ -220,7 +220,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 crate::preparation::Preparation::start(
                     CancellationToken::new(),
                     move |stop| async move {
-                        let images = crate::image_input::prepare_images(
+                        let prepared = crate::attachments::prepare_attachments(
                             &model,
                             limits.image_input,
                             sources,
@@ -228,10 +228,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                             stop,
                         )
                         .await?;
-                        message
-                            .content
-                            .extend(images.into_iter().flat_map(ion_ai::LoadedImage::into_parts));
-                        Ok(message)
+                        Ok(crate::attachments::compose_prompt(
+                            text,
+                            &prepared.text,
+                            prepared.images,
+                        ))
                     },
                 ),
             ));

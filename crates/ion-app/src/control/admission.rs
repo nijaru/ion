@@ -64,7 +64,7 @@ struct Admission {
 }
 
 enum AdmissionContent {
-    Images(Message),
+    Attachments(String),
     Ready(Message),
 }
 
@@ -140,8 +140,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 // Identity order is admission order, not validation start order.
                 let id = InputId(identity());
                 let (content, phase) = match content {
-                    AdmissionContent::Images(message) => {
-                        (InputContent::Images(message), InputPhase::Preparing)
+                    AdmissionContent::Attachments(message) => {
+                        (InputContent::Attachments(message), InputPhase::Preparing)
                     }
                     AdmissionContent::Ready(message) => {
                         let prepared =
@@ -837,34 +837,33 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             }
         }
         let limits = self.setup.runtime.agent.limits();
-        let (message, image_message) = match input {
+        let (message, attachment_text) = match input {
             UserInput::Message(message) => (message.clone(), None),
-            UserInput::Prompt {
-                text,
-                images,
-                files,
-            } => {
+            UserInput::Prompt { text, attachments } => {
                 ensure!(
-                    !text.trim().is_empty() || !images.is_empty() || !files.is_empty(),
+                    !text.trim().is_empty() || !attachments.is_empty(),
                     "prompt is empty"
                 );
-                if !images.is_empty() {
-                    crate::image_input::require_image_input(
+                crate::attachments::validate_sources(attachments, limits.max_request_bytes)?;
+                if attachments.iter().any(AttachmentSource::is_image) {
+                    crate::attachments::require_image_input(
                         self.setup.runtime.agent.model(),
                         limits.image_input,
                     )?;
-                    for source in images {
-                        if let ImageSource::Path(path) = source {
-                            ensure!(
-                                self.setup.runtime.local_images,
-                                "local image inputs are not enabled by this application"
-                            );
-                            ensure!(
-                                path.is_absolute() || self.setup.session.cwd().is_some(),
-                                "relative image input requires a working directory"
-                            );
-                        }
+                }
+                for source in attachments {
+                    if let Some(path) = source.path() {
+                        ensure!(
+                            self.setup.runtime.allow_file_attachments,
+                            "file attachments are not enabled by this application"
+                        );
+                        ensure!(
+                            path.is_absolute() || self.setup.session.cwd().is_some(),
+                            "relative attachment requires a working directory"
+                        );
                     }
+                }
+                if !attachments.is_empty() {
                     tokio::runtime::Handle::try_current()?;
                 }
                 let expanded = self
@@ -873,26 +872,23 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     .expand_command(text, limits.max_request_bytes)
                     .transpose()?
                     .unwrap_or_else(|| text.clone());
-                // The placeholder only reserves/validates raw image-only inputs;
-                // it is never used as model content.
-                let reserve_text =
-                    if expanded.trim().is_empty() && files.is_empty() && !images.is_empty() {
-                        "[image]".into()
-                    } else {
-                        expanded.clone()
-                    };
+                // Only admission's reservation uses the placeholder, never the model.
+                let reserve_text = if expanded.trim().is_empty() && !attachments.is_empty() {
+                    "[attachment]".into()
+                } else {
+                    expanded.clone()
+                };
                 (
-                    crate::prompt_files::compose_prompt(reserve_text, files, []),
-                    (!images.is_empty())
-                        .then(|| crate::prompt_files::compose_prompt(expanded, files, [])),
+                    Message::user_input(reserve_text, []),
+                    (!attachments.is_empty()).then_some(expanded),
                 )
             }
         };
         let reservation = self.budget.reserve(&message, &(input, metadata), limits)?;
         Ok(Admission {
             reservation,
-            content: match image_message {
-                Some(message) => AdmissionContent::Images(message),
+            content: match attachment_text {
+                Some(message) => AdmissionContent::Attachments(message),
                 None => AdmissionContent::Ready(message),
             },
         })

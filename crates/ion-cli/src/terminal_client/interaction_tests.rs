@@ -30,44 +30,47 @@ fn clear_restores_rich_draft_cursor_and_survives_an_undo_baseline_change() {
     let mut ui = Frontend::default();
     ui.insert("α\n🦀 end");
     ui.editor.cursor = "α\n".len();
-    ui.attach_image(ImageSource::Path("retained.png".into()));
-    ui.editor.files.push(ion_app::prompt_files::TextFile {
-        name: "context.txt".into(),
-        text: "literal α\r\n".into(),
-    });
+    ui.attach(AttachmentSource::ImageFile("retained.png".into()));
+    ui.editor
+        .attachments
+        .push(AttachmentSource::Text(ion_app::attachments::TextFile {
+            name: "context.txt".into(),
+            text: "literal α\r\n".into(),
+        }));
     let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
     let undo = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL);
     let redo = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT);
     ui.key(escape, None, None);
-    assert_eq!(ui.editor.images.len(), 1);
-    assert_eq!(ui.editor.files.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 2);
     ui.key(escape, None, None);
-    assert!(
-        ui.editor.draft.is_empty() && ui.editor.images.is_empty() && ui.editor.files.is_empty()
-    );
+    assert!(ui.editor.draft.is_empty() && ui.editor.attachments.is_empty());
     ui.key(undo, None, None);
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("α\n🦀 end", "α\n".len())
     );
     assert!(
-        matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("retained.png"))
+        matches!(&ui.editor.attachments[..], [AttachmentSource::ImageFile(path), AttachmentSource::Text(_)] if path == std::path::Path::new("retained.png"))
     );
-    assert_eq!(ui.editor.files[0].text, "literal α\r\n");
+    assert!(
+        matches!(&ui.editor.attachments[1], AttachmentSource::Text(file) if file.text == "literal α\r\n")
+    );
     ui.key(redo, None, None);
-    assert!(ui.editor.images.is_empty() && ui.editor.files.is_empty());
+    assert!(ui.editor.attachments.is_empty());
     // A later attachment ends text undo history, but cannot discard the
     // cleared draft. It moves into the existing local recovery custody.
-    ui.attach_image(ImageSource::Path("new.png".into()));
+    ui.attach(AttachmentSource::ImageFile("new.png".into()));
     assert_eq!(ui.editor.recovered.len(), 1);
     ui.recover_draft();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("α\n🦀 end", "α\n".len())
     );
-    assert_eq!(ui.editor.files[0].text, "literal α\r\n");
     assert!(
-        matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("retained.png"))
+        matches!(&ui.editor.attachments[1], AttachmentSource::Text(file) if file.text == "literal α\r\n")
+    );
+    assert!(
+        matches!(&ui.editor.attachments[..], [AttachmentSource::ImageFile(path), AttachmentSource::Text(_)] if path == std::path::Path::new("retained.png"))
     );
     assert_eq!(
         ui.editor.recovered.len(),
@@ -149,10 +152,10 @@ fn exit_is_guarded_but_forward_delete_and_confirmation_dismissal_are_not() {
     assert_eq!(ui.editor.draft, "🦀");
     ui.key(exit, None, None);
     assert!(ui.editor.draft.is_empty());
-    ui.attach_image(ImageSource::Path("image-only.png".into()));
+    ui.attach(AttachmentSource::ImageFile("image-only.png".into()));
     assert!(matches!(ui.key(exit, None, None), Action::None));
     assert!(matches!(ui.key(exit, None, None), Action::None));
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     ui.editor.take_attachments();
     assert!(matches!(ui.key(exit, None, None), Action::None));
     assert!(matches!(ui.key(exit, None, None), Action::Quit));
@@ -227,8 +230,7 @@ async fn escape_stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_
                 Delivery::FollowUp,
                 ion_app::UserInput::Prompt {
                     text: "queued".into(),
-                    images: vec![],
-                    files: vec![]
+                    attachments: vec![],
                 },
                 EditorDraft::at_end("queued".into())
             )
@@ -449,7 +451,7 @@ fn held_picker_key_cannot_submit_the_underlying_draft_after_a_new_paint() {
                 ui.editor.insert(literal);
                 ui.editor.cursor = literal.find('🦀').unwrap_or(0);
                 let cursor = ui.editor.cursor;
-                ui.attach_image(ImageSource::Path("retained.png".into()));
+                ui.attach(AttachmentSource::ImageFile("retained.png".into()));
                 let picker = Dock::prepare(&mut ui, None, None, 80, 20);
                 publish_to(&mut ui, picker, (80, 20), &mut Vec::new()).unwrap();
                 assert!(matches!(ui.key(confirm, None, None), Action::Pick(_)));
@@ -471,7 +473,7 @@ fn held_picker_key_cannot_submit_the_underlying_draft_after_a_new_paint() {
                         (ui.editor.draft.as_str(), ui.editor.cursor),
                         (literal, cursor)
                     );
-                    assert_eq!(ui.editor.images.len(), 1);
+                    assert_eq!(ui.editor.attachments.len(), 1);
                 }
                 let action = ui.key(confirm, None, None);
                 assert!(if let Some(command) = literal.strip_prefix('!') {

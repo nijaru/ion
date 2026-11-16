@@ -64,9 +64,9 @@ pub type PreparedShell = Box<
 pub struct ApplicationRuntime {
     pub agent: Arc<Agent>,
     pub shell: Option<Arc<dyn UserShell>>,
-    /// Allow trusted client input to read local image paths. This is not an OS
-    /// sandbox or a path allowlist. Encoded/normalized images need no file access.
-    pub local_images: bool,
+    /// Allow explicit client attachments to read local files. This is not an OS
+    /// sandbox or a path allowlist. In-memory content needs no file authority.
+    pub allow_file_attachments: bool,
     /// Process supervision captured by this runtime, not a tool grant. Managed
     /// delegation joins/releases this child's scope before returning its result.
     pub processes: Option<Arc<crate::ProcessOwner>>,
@@ -78,7 +78,7 @@ impl ApplicationRuntime {
         Self {
             agent,
             shell: None,
-            local_images: false,
+            allow_file_attachments: false,
             processes: None,
         }
     }
@@ -353,7 +353,7 @@ impl CodingApplication {
         Ok(ApplicationRuntime {
             agent,
             shell: Some(native),
-            local_images: true,
+            allow_file_attachments: true,
             processes: Some(self.processes.clone()),
         })
     }

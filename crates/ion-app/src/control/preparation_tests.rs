@@ -1,13 +1,13 @@
 use super::*;
+use base64::{Engine, engine::general_purpose::STANDARD};
 
 const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
 fn image_prompt() -> UserInput {
     UserInput::Prompt {
-        files: Vec::new(),
         text: "  original image\n".into(),
-        images: vec![ImageSource::Encoded {
-            mime_type: "image/png".into(),
-            data: PNG.into(),
+        attachments: vec![AttachmentSource::ImageBytes {
+            mime_type: Some(ion_ai::ImageMime::Png),
+            bytes: STANDARD.decode(PNG).unwrap(),
         }],
     }
 }
@@ -18,13 +18,13 @@ const FILE_SNAPSHOT: &str = "const note = \"keep 🦀\";\r\n/next literal $ARGUM
 async fn file_image_prompt(root: &std::path::Path) -> UserInput {
     let path = root.join("snapshot.ts");
     fs::write(&path, FILE_SNAPSHOT).unwrap();
-    let prepared = crate::prompt_files::prepare_files(
-        vec![path.clone()],
-        ion_ai::ModelRef {
+    let prepared = crate::attachments::prepare_attachments(
+        &ion_ai::ModelRef {
             provider: "fixture".into(),
             model: "fixture".into(),
         },
         true,
+        vec![AttachmentSource::File(path.clone())],
         1024 * 1024,
         CancellationToken::new(),
     )
@@ -32,21 +32,156 @@ async fn file_image_prompt(root: &std::path::Path) -> UserInput {
     .unwrap();
     fs::remove_file(path).unwrap();
     let mut input = image_prompt();
-    let UserInput::Prompt { files, .. } = &mut input else {
+    let UserInput::Prompt { attachments, .. } = &mut input else {
         unreachable!()
     };
-    *files = prepared.text;
+    attachments.extend(prepared.into_sources());
     input
 }
 
 fn assert_file_snapshot(input: &UserInput, root: &std::path::Path) {
-    let UserInput::Prompt { files, .. } = input else {
+    let UserInput::Prompt { attachments, .. } = input else {
         panic!("prompt snapshot")
     };
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].name, root.join("snapshot.ts").to_str().unwrap());
-    assert_eq!(files[0].text, FILE_SNAPSHOT);
+    let [
+        AttachmentSource::ImageBytes { .. },
+        AttachmentSource::Text(file),
+    ] = &attachments[..]
+    else {
+        panic!("image and file snapshot")
+    };
+    assert_eq!(file.name, root.join("snapshot.ts").to_str().unwrap());
+    assert_eq!(file.text, FILE_SNAPSHOT);
     assert!(!root.join("snapshot.ts").exists());
+}
+
+#[tokio::test]
+async fn local_files_use_session_cwd_and_text_only_batches_fail_atomically() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    fixture.control.setup.runtime.allow_file_attachments = true;
+    fs::write(fixture.root.join("context.md"), "/not-a-command literal 🦀").unwrap();
+    fs::create_dir(fixture.root.join("~")).unwrap();
+    fs::write(
+        fixture.root.join("~/ion-sdk-literal.md"),
+        "SESSION_LITERAL_TILDE",
+    )
+    .unwrap();
+    fs::write(
+        fixture.root.join("picture.png"),
+        STANDARD.decode(PNG).unwrap(),
+    )
+    .unwrap();
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "prompt".into(),
+                attachments: vec![
+                    AttachmentSource::File("context.md".into()),
+                    AttachmentSource::File("~/ion-sdk-literal.md".into()),
+                ],
+            },
+            meta("prompt"),
+        )
+        .unwrap();
+    model.release();
+    let (_, result) = settle(&mut fixture.control).await;
+    assert!(matches!(result.outcome, OperationOutcome::Turn(Ok(_))));
+    {
+        let requests = model.requests.lock().unwrap();
+        assert!(requests[0].messages.iter().any(|message| message.content.iter().any(|part|
+            matches!(part, Content::Text(text) if text.contains("/not-a-command literal 🦀") && text.contains("context.md")))));
+    }
+    assert!(
+        model.requests.lock().unwrap()[0]
+            .messages
+            .iter()
+            .any(|message| message.content.iter().any(
+                |part| matches!(part, Content::Text(text) if text.contains("SESSION_LITERAL_TILDE"))
+            ))
+    );
+    fs::remove_file(fixture.root.join("context.md")).unwrap();
+    let entries = fixture.control.session().view().unwrap().entries;
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "never partly accepted".into(),
+                attachments: vec![
+                    AttachmentSource::Text(crate::attachments::TextFile {
+                        name: "memory.md".into(),
+                        text: "retained literal".into(),
+                    }),
+                    AttachmentSource::File("picture.png".into()),
+                ],
+            },
+            meta("original draft"),
+        )
+        .unwrap();
+    let mut returned = None;
+    loop {
+        match fixture.control.next().await {
+            ControlUpdate::Returned(input) => returned = Some(input),
+            ControlUpdate::Idle => break,
+            _ => {}
+        }
+    }
+    let returned = returned.expect("unsupported detected image returns the whole input");
+    assert_eq!(returned.metadata.literal, "original draft");
+    assert!(
+        matches!(returned.input, UserInput::Prompt { text, attachments }
+        if text == "never partly accepted" && matches!(&attachments[..],
+            [AttachmentSource::Text(file), AttachmentSource::File(path)]
+            if file.text == "retained literal" && path == std::path::Path::new("picture.png")))
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.control.session().view().unwrap().entries, entries);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn prepared_snapshots_exhausting_custody_budget_return_the_original_file_source() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    fixture.control.setup.runtime.allow_file_attachments = true;
+    fixture.control.budget = ion_core::InputBudget::new(2048);
+    fs::write(fixture.root.join("large.md"), "x".repeat(2048)).unwrap();
+    let entries = fixture.control.session().view().unwrap().entries;
+    fixture
+        .control
+        .submit(
+            Delivery::Start,
+            UserInput::Prompt {
+                text: "retain literal".into(),
+                attachments: vec![AttachmentSource::File("large.md".into())],
+            },
+            meta("caret and draft"),
+        )
+        .unwrap();
+    let mut returned = None;
+    loop {
+        match fixture.control.next().await {
+            ControlUpdate::Returned(input) => returned = Some(input),
+            ControlUpdate::Idle => break,
+            _ => {}
+        }
+    }
+    let returned = returned.expect("prepared custody must fit alongside the original");
+    assert!(
+        matches!(returned.reason, ReturnReason::Preparation(ref error)
+        if matches!(error.downcast_ref::<ion_core::AgentError>(), Some(ion_core::AgentError::InputQueueFull {max_encoded_bytes:2048})))
+    );
+    assert_eq!(returned.metadata.literal, "caret and draft");
+    assert!(
+        matches!(returned.input, UserInput::Prompt { text, attachments }
+        if text == "retain literal" && matches!(&attachments[..], [AttachmentSource::File(path)] if path == std::path::Path::new("large.md")))
+    );
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.control.session().view().unwrap().entries, entries);
+    fixture.control.shutdown().await;
 }
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -95,16 +230,19 @@ async fn literal_files_survive_expansion_image_preparation_and_rejected_input() 
     fs::create_dir_all(&prompts).unwrap();
     fs::write(prompts.join("next.md"), "EXPANDED $1").unwrap();
     fixture.control.reload_resources().await.unwrap();
-    let file = || crate::prompt_files::TextFile {
+    let file = || crate::attachments::TextFile {
         name: "source.md".into(),
         text: "/next dangerous\n{{ARG}}\n".into(),
     };
     let mut input = image_prompt();
-    let UserInput::Prompt { text, files, .. } = &mut input else {
+    let UserInput::Prompt {
+        text, attachments, ..
+    } = &mut input
+    else {
         unreachable!()
     };
     *text = "/next one".into();
-    files.push(file());
+    attachments.push(AttachmentSource::Text(file()));
     fixture
         .control
         .submit(Delivery::Start, input, meta("/next one"))
@@ -138,17 +276,21 @@ async fn literal_files_survive_expansion_image_preparation_and_rejected_input() 
             Delivery::Start,
             UserInput::Prompt {
                 text: "/next '".into(),
-                images: Vec::new(),
-                files: vec![file()],
+                attachments: vec![AttachmentSource::Text(file())],
             },
             meta("/next '"),
         )
         .unwrap_err();
-    let UserInput::Prompt { text, files, .. } = rejected.input else {
+    let UserInput::Prompt {
+        text, attachments, ..
+    } = rejected.input
+    else {
         panic!("original")
     };
     assert_eq!(text, "/next '");
-    assert_eq!(files[0].text, file().text);
+    assert!(
+        matches!(&attachments[0], AttachmentSource::Text(retained) if retained.text == file().text)
+    );
     assert_eq!(rejected.metadata.literal, "/next '");
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
     fixture.control.shutdown().await;
@@ -163,9 +305,8 @@ async fn failed_initial_preparation_returns_queued_work_without_starting_it() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
-                files: Vec::new(),
                 text: "root".into(),
-                images: vec![ImageSource::Path("absent.png".into())],
+                attachments: vec![AttachmentSource::ImageFile("absent.png".into())],
             },
             meta("original root"),
         )
@@ -235,9 +376,8 @@ async fn normalized_attachments_keep_notes_while_prompt_resources_expand() {
         .submit(
             Delivery::Start,
             UserInput::Prompt {
-                files: Vec::new(),
                 text: "/check ARG".into(),
-                images: vec![image.into()],
+                attachments: vec![image.into()],
             },
             meta("  literal /check ARG\n"),
         )
@@ -271,9 +411,8 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
         .submit(
             Delivery::Start,
             UserInput::Prompt {
-                files: Vec::new(),
                 text: "literal".into(),
-                images: vec![ImageSource::Path("missing image.png".into())],
+                attachments: vec![AttachmentSource::ImageFile("missing image.png".into())],
             },
             meta("original"),
         )
@@ -299,7 +438,7 @@ async fn preparation_refusal_retains_exact_input_and_blocks_silent_replacement()
             assert_eq!(input.metadata.literal, "original");
             assert!(matches!(input.reason, ReturnReason::Preparation(_)));
             assert!(
-                matches!(input.input, UserInput::Prompt { text, images, .. } if text == "literal" && matches!(&images[..], [ImageSource::Path(path)] if path == std::path::Path::new("missing image.png")))
+                matches!(input.input, UserInput::Prompt { text, attachments, .. } if text == "literal" && matches!(&attachments[..], [AttachmentSource::ImageFile(path)] if path == std::path::Path::new("missing image.png")))
             );
         }
         _ => panic!("preparation refusal must return input"),
@@ -322,8 +461,8 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         let input = snapshot.inputs.iter().find(|input| input.id == steer).unwrap();
         assert_eq!(input.phase, InputCustodyPhase::PendingPreparation);
         assert_file_snapshot(input.original.as_ref().unwrap(), &fixture.root);
-        assert!(matches!(&input.original, Some(UserInput::Prompt { text, images, .. })
-            if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { data, .. }] if data == PNG)));
+        assert!(matches!(&input.original, Some(UserInput::Prompt { text, attachments, .. })
+            if text == "  original image\n" && matches!(&attachments[..], [AttachmentSource::ImageBytes { bytes, .. }, AttachmentSource::Text(_)] if bytes == &STANDARD.decode(PNG).unwrap())));
         fixture.control.submit(Delivery::FollowUp, prompt("explicit next"), meta("followup")).unwrap();
         model.release();
         let (_, first) = settle(&mut fixture.control).await;
@@ -351,7 +490,7 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
         assert_eq!(returned.metadata.literal, "  literal 🦀\n");
         assert!(matches!(returned.reason, ReturnReason::TurnEnded));
         assert_file_snapshot(&returned.input, &fixture.root);
-        assert!(matches!(returned.input, UserInput::Prompt { text, images, .. } if text == "  original image\n" && matches!(&images[..], [ImageSource::Encoded { mime_type, data }] if mime_type == "image/png" && data == PNG)));
+        assert!(matches!(returned.input, UserInput::Prompt { text, attachments, .. } if text == "  original image\n" && matches!(&attachments[..], [AttachmentSource::ImageBytes { mime_type: Some(ion_ai::ImageMime::Png), bytes }, AttachmentSource::Text(_)] if bytes == &STANDARD.decode(PNG).unwrap())));
         assert!(model.requests.lock().unwrap().iter().flat_map(|request| &request.messages).flat_map(|message| &message.content).all(|part| !matches!(part, Content::Image(_)) && !matches!(part, Content::Text(text) if text.contains("/next literal $ARGUMENTS"))));
         assert_eq!(model.calls.load(Ordering::SeqCst), 2);
     });
@@ -403,7 +542,7 @@ fn clear_preserves_initial_preparation_and_abandoned_shutdown_joins_it() {
         assert_eq!(returned[0].metadata.literal, "initial");
         assert!(matches!(returned[0].reason, ReturnReason::Stopped));
         assert!(
-            matches!(&returned[0].input, UserInput::Prompt { images, .. } if images.len() == 1)
+            matches!(&returned[0].input, UserInput::Prompt { attachments, .. } if attachments.len() == 1)
         );
         assert_eq!(model.calls.load(Ordering::SeqCst), 0);
         assert!(report.cleanup_errors.is_empty());
@@ -474,8 +613,8 @@ fn joining_preparation_preserves_the_first_withdrawal_cause() {
             assert_eq!(input.metadata.literal, "original draft");
             assert_file_snapshot(&input.input, &fixture.root);
             assert!(
-                matches!(&input.input, UserInput::Prompt { text, images, .. }
-                if text == "  original image\n" && images.len() == 1)
+                matches!(&input.input, UserInput::Prompt { text, attachments, .. }
+                if text == "  original image\n" && attachments.len() == 2)
             );
             assert!(matches!(
                 (cause, &input.reason),

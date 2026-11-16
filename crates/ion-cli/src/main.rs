@@ -564,13 +564,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             ensure!(!stop.is_cancelled(), "application startup interrupted");
             selected.require_access(credentials)?;
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            let sources = cli
+            let mut sources = cli
                 .image
                 .iter()
                 .map(|path| {
                     let path = ion_app::expand_home_path(path, home.as_deref())
                         .context("cannot expand image path")?;
-                    Ok(ion_app::image_input::ImageSource::Path(
+                    Ok(ion_app::attachments::AttachmentSource::ImageFile(
                         session_cwd.join(path),
                     ))
                 })
@@ -578,14 +578,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // Startup has not admitted a Session operation or taken terminal
             // custody. Preserve default SIGINT here; registering Tokio's handler
             // would also change the later interactive terminal's signal behavior.
-            let mut images = ion_app::image_input::prepare_images(
-                &selected.identity(),
-                selected.image_input,
-                sources,
-                ion_core::AgentLimits::default().max_request_bytes,
-                stop.child_token(),
-            )
-            .await?;
+
             let paths = match &action {
                 Action::Run { input } | Action::Chat { input } => input
                     .files()
@@ -602,16 +595,16 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     .collect::<Result<Vec<_>>>()?,
                 _ => Vec::new(),
             };
-            let prepared = ion_app::prompt_files::prepare_files(
-                paths,
-                selected.identity(),
+            sources.extend(paths.into_iter().map(ion_app::attachments::AttachmentSource::File));
+            let prepared = ion_app::attachments::prepare_attachments(
+                &selected.identity(),
                 selected.image_input,
+                sources,
                 ion_core::AgentLimits::default().max_request_bytes,
                 stop.child_token(),
             )
             .await?;
-            images.extend(prepared.images);
-            let files = prepared.text;
+
             // Freeze resources and validate the complete launch before creating a
             // Session or starting MCP. Terminal resource errors still belong to
             // ordinary recoverable editor admission, not a second submission path.
@@ -621,8 +614,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Rpc,
                 Terminal {
                     prompts: Vec<String>,
-                    images: Vec<ion_ai::LoadedImage>,
-                    files: Vec<ion_app::prompt_files::TextFile>,
+                    attachments: ion_app::attachments::PreparedAttachments,
                 },
             }
             let client = match action {
@@ -636,7 +628,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                         )?,
                         cli.piped_input,
                     );
-                    let first = ion_app::prompt_files::compose_prompt(first, &files, images);
+                    let first = ion_app::attachments::compose_prompt(first, &prepared.text, prepared.images);
                     let messages = std::iter::once(Ok(first)).chain(prompts.map(|prompt| {
                         expand_input(
                             &resources,
@@ -662,8 +654,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     }
                     Client::Terminal {
                         prompts,
-                        images,
-                        files,
+                        attachments: prepared,
                     }
                 }
                 Action::Compact { instructions } => {
@@ -674,14 +665,13 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             };
             if let Client::Terminal {
                 prompts,
-                files,
-                images,
+                attachments,
             } = &client
             {
-                validate_launch_size(&ion_app::prompt_files::compose_prompt(
+                validate_launch_size(&ion_app::attachments::compose_prompt(
                     prompts.first().cloned().unwrap_or_default(),
-                    files,
-                    images.clone(),
+                    &attachments.text,
+                    attachments.images.clone(),
                 ))?;
                 for prompt in prompts.iter().skip(1) {
                     validate_launch_size(&ion_ai::Message::user_input(prompt.clone(), []))?;
@@ -819,14 +809,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     Client::Rpc => rpc::run(setup, host, interrupt, terminated.clone()).await,
                     Client::Terminal {
                         prompts,
-                        images,
-                        files,
+                        attachments,
                     } => {
                         terminal_client::chat(terminal_client::ChatInit {
                             setup,
                             services: host,
-                            images,
-                            files,
+                            attachments: attachments.into_sources(),
                             startup_diagnostics,
                             initial_prompts: prompts,
                             tui_mode: cli.tui_mode,

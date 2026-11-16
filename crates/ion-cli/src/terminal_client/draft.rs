@@ -4,7 +4,7 @@
 //! discovery remains owned by Pickers until joined, but cannot publish into the
 //! replacement draft.
 use ion_ai::Message;
-use ion_app::image_input::ImageSource;
+use ion_app::attachments::AttachmentSource;
 
 use super::{
     MAX_DRAFT,
@@ -98,8 +98,7 @@ impl Editor {
         } else {
             self.recovered.push_back(RecoveredDraft {
                 source,
-                images: Vec::new(),
-                files: Vec::new(),
+                attachments: Vec::new(),
             });
             restored
         }
@@ -108,22 +107,18 @@ impl Editor {
     pub(super) fn return_draft(
         &mut self,
         source: EditorDraft,
-        images: Vec<ImageSource>,
-        files: Vec<ion_app::prompt_files::TextFile>,
+        attachments: Vec<AttachmentSource>,
         replace_empty: bool,
     ) -> bool {
         let restored = replace_empty && self.restore_browsed_draft();
-        if replace_empty && self.draft.is_empty() && self.images.is_empty() && self.files.is_empty()
-        {
+        if replace_empty && self.draft.is_empty() && self.attachments.is_empty() {
             self.restore_editor(source);
-            self.images = images;
-            self.files = files;
+            self.attachments = attachments;
             true
         } else {
             self.recovered.push_back(RecoveredDraft {
                 source,
-                images,
-                files,
+                attachments,
             });
             restored
         }
@@ -131,19 +126,17 @@ impl Editor {
 
     pub(super) fn show_draft(&mut self, recovered: RecoveredDraft) {
         self.restore_browsed_draft();
-        if !self.draft.is_empty() || !self.images.is_empty() || !self.files.is_empty() {
+        if !self.draft.is_empty() || !self.attachments.is_empty() {
             self.recovered.push_back(RecoveredDraft {
                 source: EditorDraft {
                     literal: std::mem::take(&mut self.draft),
                     cursor: self.cursor,
                 },
-                images: std::mem::take(&mut self.images),
-                files: std::mem::take(&mut self.files),
+                attachments: std::mem::take(&mut self.attachments),
             });
         }
         self.restore_editor(recovered.source);
-        self.images = recovered.images;
-        self.files = recovered.files;
+        self.attachments = recovered.attachments;
     }
 
     pub(super) fn recover_draft(&mut self) {
@@ -160,8 +153,7 @@ impl Editor {
         }
         self.show_draft(RecoveredDraft {
             source: EditorDraft::at_end(draft),
-            images: images.into_iter().map(Into::into).collect(),
-            files: Vec::new(),
+            attachments: images.into_iter().map(Into::into).collect(),
         });
         Ok(())
     }

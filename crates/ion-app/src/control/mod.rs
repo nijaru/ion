@@ -17,7 +17,7 @@ use serde::Serialize;
 use tokio::sync::{broadcast, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::{SessionSetup, image_input::ImageSource, question::TurnStopScope};
+use crate::{SessionSetup, attachments::AttachmentSource, question::TurnStopScope};
 
 mod admission;
 pub use admission::preflight_messages;

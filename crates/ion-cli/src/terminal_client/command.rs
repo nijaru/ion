@@ -16,19 +16,19 @@ use super::{
     interaction::{editor_delivery, submit_editor},
     login_in_terminal, navigation, tasks, tools,
 };
-use ion_app::image_input::ImageSource;
+use ion_app::attachments::AttachmentSource;
 
 /// Completion spells quoted paths as JSON, not shell words. An unquoted tail
 /// remains one literal path, including spaces; only its home prefix is expanded.
-fn image_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
+fn attachment_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let path = if args.starts_with('"') {
-        Cow::Owned(serde_json::from_str::<String>(args).context("invalid quoted image path")?)
+        Cow::Owned(serde_json::from_str::<String>(args).context("invalid quoted attachment path")?)
     } else {
         Cow::Borrowed(args)
     };
-    anyhow::ensure!(!path.is_empty(), "use /image PATH");
+    anyhow::ensure!(!path.is_empty(), "use /file PATH");
     let path = ion_app::expand_home_path(Path::new(path.as_ref()), home)
-        .context("cannot expand image path")?;
+        .context("cannot expand attachment path")?;
     Ok(cwd.join(path))
 }
 
@@ -414,14 +414,10 @@ pub(super) fn handle_builtin(
             }
             _ => anyhow::bail!("use /tui inline or /tui fullscreen"),
         },
-        Builtin::Image => {
-            anyhow::ensure!(!args.is_empty(), "use /image PATH");
-            ion_app::image_input::require_image_input(
-                runtime.agent().model(),
-                runtime.agent().limits().image_input,
-            )?;
+        Builtin::File => {
+            anyhow::ensure!(!args.is_empty(), "use /file PATH");
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            ui.attach_image(ImageSource::Path(image_path(
+            ui.attach(AttachmentSource::File(attachment_path(
                 args,
                 &ui.cwd,
                 home.as_deref(),
@@ -665,10 +661,13 @@ mod tests {
             let raw = format!("~/{name}");
             let quoted = serde_json::to_string(&raw).unwrap();
             assert_eq!(
-                image_path(&quoted, cwd, Some(home)).unwrap(),
+                attachment_path(&quoted, cwd, Some(home)).unwrap(),
                 home.join(name)
             );
-            assert_eq!(image_path(&raw, cwd, Some(home)).unwrap(), home.join(name));
+            assert_eq!(
+                attachment_path(&raw, cwd, Some(home)).unwrap(),
+                home.join(name)
+            );
         }
         for literal in [
             "./~/shot.png",
@@ -678,11 +677,11 @@ mod tests {
             "two pictures.png",
         ] {
             assert_eq!(
-                image_path(literal, cwd, Some(home)).unwrap(),
+                attachment_path(literal, cwd, Some(home)).unwrap(),
                 cwd.join(literal)
             );
         }
-        assert_eq!(image_path("~", cwd, Some(home)).unwrap(), home);
+        assert_eq!(attachment_path("~", cwd, Some(home)).unwrap(), home);
     }
 
     #[test]
@@ -696,18 +695,18 @@ mod tests {
             "\"bad\\q.png\"",
         ] {
             assert!(
-                image_path(invalid, cwd, Some(Path::new("/home/user"))).is_err(),
+                attachment_path(invalid, cwd, Some(Path::new("/home/user"))).is_err(),
                 "{invalid:?}"
             );
         }
         for home in [None, Some(Path::new("")), Some(Path::new("relative"))] {
-            assert!(image_path("~/shot.png", cwd, home).is_err());
+            assert!(attachment_path("~/shot.png", cwd, home).is_err());
             assert_eq!(
-                image_path("shot.png", cwd, home).unwrap(),
+                attachment_path("shot.png", cwd, home).unwrap(),
                 cwd.join("shot.png")
             );
             assert_eq!(
-                image_path("/shots/one.png", cwd, home).unwrap(),
+                attachment_path("/shots/one.png", cwd, home).unwrap(),
                 Path::new("/shots/one.png")
             );
         }

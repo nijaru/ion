@@ -1,6 +1,7 @@
 //! One application-owned binding operation, correlated until physical reply delivery.
 use super::*;
 use ion_app::{BindingChange, BindingFinished, BindingOperationId, BindingResult};
+use std::path::PathBuf;
 
 pub(super) struct BindingReply {
     operation: BindingOperationId,

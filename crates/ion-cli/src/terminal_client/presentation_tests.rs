@@ -275,7 +275,7 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
         editor: Editor {
             draft: "unsent 🦀 draft".into(),
             cursor: "unsent ".len(),
-            images: vec![
+            attachments: vec![
                 ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
                     .unwrap()
                     .into(),
@@ -330,7 +330,7 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("unsent 🦀 draft", "unsent ".len())
     );
-    assert_eq!(ui.editor.images.len(), 1);
+    assert_eq!(ui.editor.attachments.len(), 1);
     assert_eq!(ui.conversation.items().count(), 2);
     assert_eq!(ui.status, "inspector ready");
     let view = ui.details.as_mut().unwrap();
@@ -762,7 +762,7 @@ async fn clipboard_cancel_is_immediate_without_applying_input_or_clearing_the_dr
         };
         ui.insert("keep 🦀");
         ui.editor.cursor = "keep ".len();
-        ui.attach_image(ImageSource::Path("retained.png".into()));
+        ui.attach(AttachmentSource::ImageFile("retained.png".into()));
         let repeat = KeyEvent {
             repeat: true,
             ..key
@@ -794,7 +794,7 @@ async fn clipboard_cancel_is_immediate_without_applying_input_or_clearing_the_dr
             (ui.editor.draft.as_str(), ui.editor.cursor),
             ("keep 🦀", "keep ".len())
         );
-        assert_eq!(ui.editor.images.len(), 1);
+        assert_eq!(ui.editor.attachments.len(), 1);
         fixture.control.shutdown().await;
     }
 }
@@ -867,11 +867,13 @@ async fn returned_input_cannot_claim_a_composer_with_pending_clipboard_input() {
                         literal: "  queued 雪\n".into(),
                         cursor: 2,
                     },
-                    vec![ImageSource::Path("queued.png".into())],
-                    vec![ion_app::prompt_files::TextFile {
-                        name: "queued.rs".into(),
-                        text: "queued context".into(),
-                    }],
+                    vec![
+                        AttachmentSource::ImageFile("queued.png".into()),
+                        AttachmentSource::Text(ion_app::attachments::TextFile {
+                            name: "queued.rs".into(),
+                            text: "queued context".into(),
+                        }),
+                    ],
                 );
             };
             if join_first {
@@ -886,8 +888,7 @@ async fn returned_input_cannot_claim_a_composer_with_pending_clipboard_input() {
                     ui.editor.draft.is_empty(),
                     "a pending paste already occupies the composer"
                 );
-                assert!(ui.editor.images.is_empty());
-                assert!(ui.editor.files.is_empty());
+                assert!(ui.editor.attachments.is_empty());
                 assert_eq!(ui.editor.recovered.len(), 1);
                 release
                     .send(paste)
@@ -895,29 +896,33 @@ async fn returned_input_cannot_claim_a_composer_with_pending_clipboard_input() {
                 finish_clipboard_paste(&mut ui).await.unwrap();
             }
             assert_eq!(ui.editor.draft, expected);
-            assert_eq!(ui.editor.images.len(), image_count);
-            assert!(ui.editor.files.is_empty());
+            assert_eq!(ui.editor.attachments.len(), image_count);
             ui.recover_draft();
             assert_eq!(
                 (ui.editor.draft.as_str(), ui.editor.cursor),
                 ("  queued 雪\n", 2)
             );
             assert!(
-                matches!(&ui.editor.images[..], [ImageSource::Path(path)] if path == std::path::Path::new("queued.png"))
+                matches!(&ui.editor.attachments[..], [AttachmentSource::ImageFile(path), AttachmentSource::Text(_)] if path == std::path::Path::new("queued.png"))
             );
-            assert_eq!(ui.editor.files[0].name, "queued.rs");
-            assert_eq!(ui.editor.files[0].text, "queued context");
+            assert!(
+                matches!(&ui.editor.attachments[1], AttachmentSource::Text(file) if file.name == "queued.rs")
+            );
+            assert!(
+                matches!(&ui.editor.attachments[1], AttachmentSource::Text(file) if file.text == "queued context")
+            );
             ui.recover_draft();
             assert_eq!(ui.editor.draft, expected);
             assert_eq!(ui.editor.cursor, expected.len());
-            assert_eq!(ui.editor.images.len(), image_count);
+            assert_eq!(ui.editor.attachments.len(), image_count);
             if let Some(expected) = pasted_image {
-                let [ImageSource::Normalized { content, .. }] = &ui.editor.images[..] else {
+                let [AttachmentSource::Image(ion_ai::LoadedImage { content, .. })] =
+                    &ui.editor.attachments[..]
+                else {
                     panic!("new image must retain its own typed content");
                 };
                 assert_eq!(content, &expected);
             }
-            assert!(ui.editor.files.is_empty());
         }
     }
 }
@@ -946,11 +951,7 @@ async fn clipboard_completion_without_input_does_not_promote_a_returned_draft() 
         };
         // Even a finished worker retains custody until its publication is handled.
         let joined = (&mut ui.clipboard_job.as_mut().unwrap().task).await;
-        ui.return_draft(
-            EditorDraft::at_end("returned".into()),
-            Vec::new(),
-            Vec::new(),
-        );
+        ui.return_draft(EditorDraft::at_end("returned".into()), Vec::new());
         assert!(ui.editor.draft.is_empty());
         assert_eq!(ui.editor.recovered.len(), 1);
         let result = clipboard_input::finish_joined_clipboard_paste(&mut ui, joined);
@@ -960,7 +961,7 @@ async fn clipboard_completion_without_input_does_not_promote_a_returned_draft() 
         }
         assert!(!ui.clipboard_pending());
         assert!(ui.editor.draft.is_empty());
-        assert!(ui.editor.images.is_empty());
+        assert!(ui.editor.attachments.is_empty());
         ui.recover_draft();
         assert_eq!(ui.editor.draft, "returned");
     }
@@ -981,11 +982,7 @@ async fn returned_input_does_not_move_a_pending_paste_out_of_browsed_history() {
         ..Frontend::default()
     };
     ui.editor.history_previous();
-    ui.return_draft(
-        EditorDraft::at_end("returned".into()),
-        Vec::new(),
-        Vec::new(),
-    );
+    ui.return_draft(EditorDraft::at_end("returned".into()), Vec::new());
     assert_eq!(ui.editor.draft, "history target");
     release
         .send(PreparedPaste::Text(" + paste".into()))
@@ -1096,11 +1093,13 @@ async fn pending_clipboard_stays_with_composer_when_settings_opens() {
         };
         ui.insert("before after");
         ui.editor.cursor = "before ".len();
-        ui.attach_image(ImageSource::Path("retained.png".into()));
-        ui.editor.files.push(ion_app::prompt_files::TextFile {
-            name: "retained.rs".into(),
-            text: "literal file contents".into(),
-        });
+        ui.attach(AttachmentSource::ImageFile("retained.png".into()));
+        ui.editor
+            .attachments
+            .push(AttachmentSource::Text(ion_app::attachments::TextFile {
+                name: "retained.rs".into(),
+                text: "literal file contents".into(),
+            }));
         // /settings is intentionally allowed during clipboard acquisition.
         ui.open_settings(ion_core::CompletionDelivery::Inbox);
         ui.key(
@@ -1115,8 +1114,10 @@ async fn pending_clipboard_stays_with_composer_when_settings_opens() {
         finish_clipboard_paste(&mut ui).await.unwrap();
         assert_eq!(ui.editor.draft, expected);
         assert_eq!(ui.editor.cursor, expected.len() - "after".len());
-        assert_eq!(ui.editor.images.len(), 1 + added_image);
-        assert_eq!(ui.editor.files[0].text, "literal file contents");
+        assert_eq!(ui.editor.attachments.len(), 2 + added_image);
+        assert!(
+            matches!(&ui.editor.attachments[1], AttachmentSource::Text(file) if file.text == "literal file contents")
+        );
         let picker = ui.pickers.active().expect("paste must not close Settings");
         assert_eq!(
             (picker.title, picker.query.as_str(), picker.selected),
@@ -1180,7 +1181,7 @@ fn fork_restore_refuses_lossy_shapes_without_discarding_editor() {
             editor: Editor {
                 draft: "keep unsent".into(),
                 cursor: 4,
-                images: vec![
+                attachments: vec![
                     ion_ai::normalize_rgba(1, 1, vec![0, 255, 0, 255])
                         .unwrap()
                         .into(),
@@ -1192,7 +1193,7 @@ fn fork_restore_refuses_lossy_shapes_without_discarding_editor() {
         assert!(ui.restore_input(input).is_err());
         assert_eq!(ui.editor.draft, "keep unsent");
         assert_eq!(ui.editor.cursor, 4);
-        assert_eq!(ui.editor.images.len(), 1);
+        assert_eq!(ui.editor.attachments.len(), 1);
     }
 }
 

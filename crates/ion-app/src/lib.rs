@@ -31,7 +31,7 @@ mod edit_diff;
 pub mod file_io;
 mod file_paths;
 pub use file_paths::expand_home_path;
-pub mod image_input;
+pub mod attachments;
 mod local_tools;
 pub mod mcp;
 mod model_http;
@@ -39,7 +39,7 @@ pub mod model_setup;
 mod preparation;
 mod process;
 mod project_instructions;
-pub mod prompt_files;
+
 mod question;
 mod question_tool;
 pub mod resources;

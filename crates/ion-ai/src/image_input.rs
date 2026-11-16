@@ -26,7 +26,7 @@ pub enum ImagePreparationError {
     Encode(#[from] image::ImageError),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct LoadedImage {
     pub content: ImageContent,
     /// Coordinates in a model response must refer to the image actually sent.

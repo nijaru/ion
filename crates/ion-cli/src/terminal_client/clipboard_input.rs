@@ -2,7 +2,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, ensure};
-use ion_app::image_input::LoadedImage;
+use ion_ai::LoadedImage;
 use ion_core::Agent;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -109,7 +109,7 @@ pub(super) fn prepare_clipboard(
     match content {
         crate::clipboard_reader::PasteContent::Files(paths) => Ok(PreparedPaste::Files(paths)),
         crate::clipboard_reader::PasteContent::Image { content, note } => {
-            ion_app::image_input::require_image_input(model, image_input)?;
+            ion_app::attachments::require_image_input(model, image_input)?;
             Ok(PreparedPaste::Image(LoadedImage { content, note }))
         }
         crate::clipboard_reader::PasteContent::Text(text) => Ok(PreparedPaste::Text(text)),
@@ -128,7 +128,7 @@ pub(super) fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Resu
             format!("{prefix}{text}{suffix}")
         }
         PreparedPaste::Image(image) => {
-            ui.attach_image(image.into());
+            ui.attach(image.into());
             return Ok(());
         }
         PreparedPaste::Text(text) => text,

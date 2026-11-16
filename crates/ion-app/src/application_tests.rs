@@ -15,7 +15,7 @@ use serde_json::json;
 
 use crate::{
     Application, ApplicationRuntime, CommandCatalog, ControlUpdate, Delivery, OperationOutcome,
-    Resources, SessionCatalog, SessionSetup, UserInput, image_input::ImageSource,
+    Resources, SessionCatalog, SessionSetup, UserInput, attachments::AttachmentSource,
 };
 
 struct Restricted {
@@ -154,27 +154,49 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
         .unwrap_err();
     assert_eq!(refused.0, "literal shell");
     assert!(control.session().view().unwrap().entries.is_empty());
-    let input = UserInput::Prompt {
-        files: Vec::new(),
-        text: "retain original".into(),
-        images: vec![ImageSource::Path(root.join("must-not-read.png"))],
-    };
-    let refused = control
-        .submit(Delivery::Start, input, "literal image".into())
-        .unwrap_err();
-    assert_eq!(refused.metadata, "literal image");
-    assert!(
-        matches!(refused.input, UserInput::Prompt { text, images, .. } if text == "retain original" && matches!(&images[..], [ImageSource::Path(path)] if path == &root.join("must-not-read.png")))
-    );
-    assert!(!control.is_busy());
+    for source in [
+        AttachmentSource::ImageFile(root.join("must-not-read.png")),
+        AttachmentSource::File(root.join("must-not-read.txt")),
+    ] {
+        let input = UserInput::Prompt {
+            text: "retain original".into(),
+            attachments: vec![source.clone()],
+        };
+        let refused = control
+            .submit(Delivery::Start, input, "literal attachment".into())
+            .unwrap_err();
+        assert_eq!(refused.metadata, "literal attachment");
+        assert!(
+            refused
+                .reason
+                .to_string()
+                .contains("file attachments are not enabled")
+        );
+        assert!(
+            matches!(refused.input, UserInput::Prompt { text, attachments }
+            if text == "retain original" && serde_json::to_value(&attachments).unwrap() == serde_json::to_value([source]).unwrap())
+        );
+        assert!(!control.is_busy());
+    }
     let image = ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap();
     control
         .submit(
             Delivery::Start,
             UserInput::Prompt {
-                files: Vec::new(),
                 text: "/unknown is literal".into(),
-                images: vec![image.into()],
+                attachments: vec![
+                    AttachmentSource::image_bytes({
+                        use base64::Engine;
+                        base64::engine::general_purpose::STANDARD
+                            .decode(image.content.data())
+                            .unwrap()
+                    }),
+                    image.into(),
+                    AttachmentSource::Text(crate::attachments::TextFile {
+                        name: "memory.md".into(),
+                        text: "/literal file data".into(),
+                    }),
+                ],
             },
             "accepted literal".into(),
         )
