@@ -195,8 +195,9 @@ class Handler(BaseHTTPRequestHandler):
         inputs = body["input"]
         if step == 1:
             user = next(item for item in inputs if item.get("role") == "user")
-            assert user["content"][1]["type"] == "input_image"
-            assert base64.b64decode(user["content"][1]["image_url"].split(",", 1)[1]) == png()
+            images = [part for part in user["content"] if part["type"] == "input_image"]
+            assert len(images) == 1, user
+            assert base64.b64decode(images[0]["image_url"].split(",", 1)[1]) == png()
             reasoning = dict(id="rs_1", type="reasoning", summary=[])
             write = call(dict(path="created.txt", content="INDEPENDENT_EFFECT\n"))
             commentary = message("msg_prepare", "Preparing the file.", phase="commentary")
