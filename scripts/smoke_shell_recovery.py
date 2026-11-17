@@ -16,6 +16,8 @@ import termios
 import time
 from pathlib import Path
 
+from terminal_style import program_ready
+
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
@@ -73,7 +75,9 @@ def qualify(case, excluded=False):
         child = launch()
         shell_pid = None
         try:
-            wait_until(lambda: "›".encode() in output)
+            # A visible composer precedes the initial canonical Session refresh.
+            # Do not confuse a retained command with the injected storage fault.
+            wait_until(lambda: "›".encode() in output and program_ready(output))
             if case != "crash":
                 kind = "user_shell_admitted" if case == "admission" else "user_shell_settled"
                 with sqlite3.connect(session) as connection:
@@ -122,7 +126,8 @@ def qualify(case, excluded=False):
             output.clear()
             if case == "crash":
                 child = launch()
-                wait_until(lambda: "›".encode() in output and b"external effect unknown" in output)
+                wait_until(lambda: "›".encode() in output and b"external effect unknown" in output
+                           and program_ready(output))
             # Explicit NEW shell admission closes the interruption, not replays it.
             # Result-write faults recover in the same UI; crash cases reopen.
             # Successful stdout is folded in compact mode. Exercise actual
