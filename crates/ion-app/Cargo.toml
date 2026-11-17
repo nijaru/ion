@@ -17,7 +17,6 @@ ignore = "0.4.33"
 indexmap = { version = "2.14.2", features = ["serde"] }
 httpdate = "1.0.3"
 html5ever = "0.39"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 ion-ai.workspace = true
 ion-core.workspace = true
 jsonschema = { version = "0.60.2", default-features = false }
@@ -40,6 +39,7 @@ uuid = { version = "1.24.1", features = ["v7"] }
 vt100 = "0.16.2"
 
 [dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 rusqlite = "0.41.1"
 tokio = { workspace = true, features = ["test-util"] }
 
