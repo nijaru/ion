@@ -199,6 +199,81 @@ class Terminal:
         self.child.wait(timeout=5)
 
 
+def exercise_recovery_sources(work, env):
+    """Unknown commit custody stays reviewable without becoming retry authority."""
+    for mode in ("inline", "fullscreen"):
+        cwd = work / (mode + "-uncertain-custody")
+        cwd.mkdir()
+        database = cwd / "session.sqlite"
+        attachment = cwd / "context café🦀.txt"
+        attachment.write_text("literal attachment, not a command\n")
+        terminal = Terminal(cwd, env, mode, [
+            "--cwd", str(cwd), "--tui-mode", mode, "--session", str(database), "chat",
+        ])
+
+        def command(text):
+            terminal.output.clear()
+            terminal.send(b"\x15\x1b[200~" + text.encode() + b"\x1b[201~\r")
+
+        def painted_contains(text):
+            # Soft wrapping can split a word at any terminal column.
+            return "".join(text.split()) in "".join(painted_text(terminal.lifecycle_output).split())
+
+        try:
+            terminal.wait_ready(lambda: "›" in terminal.text())
+            before = len(requests)
+            command("/file " + json.dumps(str(attachment), ensure_ascii=False))
+            terminal.wait(lambda: "1 attachment(s) attached" in terminal.text())
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript(
+                    "CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);"
+                    "CREATE TABLE commit_child (parent INTEGER REFERENCES commit_parent(id) "
+                    "DEFERRABLE INITIALLY DEFERRED);"
+                    "CREATE TRIGGER uncertain_commit AFTER INSERT ON entries "
+                    "BEGIN INSERT INTO commit_child(parent) VALUES (999); END;"
+                )
+            literal = "  original café 🦀\nkeep"
+            terminal.output.clear()
+            terminal.send(b"\x1b[200~" + literal.encode() + b"\x1b[201~" + b"\x1b[D" * 4 + b"\r")
+            terminal.wait(lambda: "Session refresh failed" in terminal.text())
+            assert len(requests) == before, "uncertain admission dispatched a model request"
+            attachment.unlink()  # Review/save must not reopen the original file.
+            command("/recovery")
+            terminal.wait(lambda: "input quarantined" in terminal.text())
+            command("/recovery 1")
+            terminal.wait(lambda: "Caret (UTF-8 byte offset)" in terminal.text())
+            assert "Attachments: 1" in terminal.text(), terminal.text()
+            backup = cwd / "recovery café🦀 backup.json"
+            command("/recovery save 1 " + json.dumps(str(backup), ensure_ascii=False))
+            terminal.wait(lambda: backup.exists() and painted_contains("inspection backup saved"))
+            saved = json.loads(backup.read_text())
+            assert saved["format"] == "ion-recovery-inspection-v1", saved
+            assert saved["origin"]["path"] == str(database.resolve()), saved
+            assert saved["status"] == {"state": "unresolved"}, saved
+            assert saved["source"]["editor"] == {
+                "literal": literal, "cursor": len(literal[:-4].encode()),
+            }, saved
+            assert saved["source"]["input"]["Prompt"] == {
+                "text": literal, "attachments": [{"File": str(attachment)}],
+            }, saved
+            assert backup.stat().st_mode & 0o777 == 0o600
+            command("/recovery discard 1")
+            terminal.wait(lambda: "local source discarded" in terminal.text())
+            command("/recovery")
+            terminal.wait(lambda: painted_contains("source discarded; fence retained"))
+            command("DO_NOT_REPLAY_AFTER_DISCARD")
+            terminal.send("x")  # Processing acknowledgement, not a sleep oracle.
+            terminal.wait(lambda: "DO_NOT_REPLAY_AFTER_DISCARDx" in terminal.text())
+            assert len(requests) == before, "discard granted replay/admission authority"
+            # The deliberately faulted Store still reports failure on final refresh.
+            terminal.send(b"\x15\x04\x04")
+            terminal.wait_exit(expected=1)
+            assert termios.tcgetattr(terminal.master) == terminal.original_modes
+        finally:
+            terminal.close()
+        print(f"Ion {mode} uncertain custody inspect/save/discard/no replay: OK", flush=True)
+
+
 def exercise_editor_tty(work, base_env, endpoint):
     for mode in ("inline", "fullscreen"):
         sandbox = work / f"editor-tty-{mode}"
@@ -1695,6 +1770,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_slash_input(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_editor_tty(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        exercise_recovery_sources(work, env)
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
