@@ -35,6 +35,9 @@ pub use lease::{
 };
 use ring::Ring;
 
+// Human and model writes share the same bounded driver input queue.
+const MAX_INPUT_BYTES: usize = 65_536;
+
 /// One application-lifetime live supervisor. It is not a daemon, durable job
 /// store or process-resurrection mechanism.
 pub struct ProcessOwner {

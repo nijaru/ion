@@ -18,14 +18,13 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use super::{
-    Backend, Capture, Entry, JoinGate, ProcessOwner,
+    Backend, Capture, Entry, JoinGate, MAX_INPUT_BYTES, ProcessOwner,
     driver::{self, InputRequest, ProcessState, ResizeRequest, StartReceipt, StatusView},
     screen::{Dimensions, MAX_ROWS, MAX_SCREEN_PAGE_ROWS},
     unavailable,
 };
 
 const MAX_COMMAND_BYTES: usize = 65_536;
-const MAX_INPUT_BYTES: usize = 65_536;
 const DEFAULT_READ_BYTES: usize = 16_384;
 const MAX_READ_BYTES: usize = 65_536;
 const DEFAULT_WAIT_MS: u64 = 1_000;
@@ -76,7 +75,7 @@ impl ToolSource for ProcessTools {
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"read"},"id":{"type":"string","format":"uuid"},"stream":{"enum":["stdout","stderr","terminal"]},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536},"encoding":{"enum":["utf8","base64"]}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"screen"},"id":{"type":"string","format":"uuid"},"row":{"type":"integer","minimum":0,"maximum":199},"rows":{"type":"integer","minimum":1,"maximum":64}}},
                         {"type":"object","additionalProperties":false,"required":["action","id","rows","columns"],"properties":{"action":{"const":"resize"},"id":{"type":"string","format":"uuid"},"rows":{"type":"integer","minimum":1,"maximum":200},"columns":{"type":"integer","minimum":1,"maximum":400}}},
-                        {"type":"object","additionalProperties":false,"required":["action","id","data"],"properties":{"action":{"const":"write"},"id":{"type":"string","format":"uuid"},"data":{"type":"string","maxLength":65536}}},
+                        {"type":"object","additionalProperties":false,"required":["action","id","data"],"properties":{"action":{"const":"write"},"id":{"type":"string","format":"uuid"},"data":{"type":"string","maxLength":MAX_INPUT_BYTES}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"eof"},"id":{"type":"string","format":"uuid"}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"close"},"id":{"type":"string","format":"uuid"}}},
                         {"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":"acknowledge"},"id":{"type":"string","format":"uuid"}}}
@@ -164,7 +163,7 @@ impl ToolExecutor for ProcessTools {
                 }
                 Action::Write { id, data } => {
                     if data.len() > MAX_INPUT_BYTES {
-                        return error("write data exceeds 65536 UTF-8 bytes");
+                        return error(format!("write data exceeds {MAX_INPUT_BYTES} UTF-8 bytes"));
                     }
                     self.input(origin, id, Some(data.into_bytes()), stop).await
                 }

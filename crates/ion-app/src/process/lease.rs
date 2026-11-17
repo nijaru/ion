@@ -17,15 +17,11 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use super::{
-    Backend, Capture, ProcessOwner,
+    Backend, Capture, MAX_INPUT_BYTES, ProcessOwner,
     driver::{InputRequest, ProcessState},
     screen::Dimensions,
 };
 use tokio_util::sync::CancellationToken;
-
-/// Bound mirrors the model-facing write limit; human input is chunked by the
-/// caller rather than silently truncated inside the driver.
-const MAX_INPUT_BYTES: usize = 65_536;
 
 pub(super) enum LeaseRequest {
     Acquire {
