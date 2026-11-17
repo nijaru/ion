@@ -41,7 +41,7 @@ Ask the agent to use the existing process actions:
 | `close` | Request a process-group stop and join the driver. |
 | `acknowledge` | Release a retained slot after it has joined. |
 
-For example: “Stop that server with `process.close`, inspect its result, then acknowledge its handle.” Detaching alone does none of these actions. PTY EOF is terminal input: Ctrl-D may signal EOF depending on the program; the `eof` action is for pipes only.
+For example: “Use the `process` tool's `close` action to stop that server, inspect its result, then acknowledge its handle.” Detaching alone does none of these actions. PTY EOF is terminal input: Ctrl-D may signal EOF depending on the program; the `eof` action is for pipes only.
 
 ## Limits and lifetime
 

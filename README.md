@@ -1,104 +1,78 @@
 # Ion
 
-Ion is an **experimental Rust agent harness and coding application**. It shares one agent/session engine across headless CLI, terminal chat, stdio RPC and Rust embedding. Coding tools include files, search, guarded edits, native shell execution, web access and optional MCP/Code Mode. Sessions are stored in SQLite. The core is intended to support non-coding hosts as well.
+Ion is an experimental Rust agent engine and coding application. One agent/Session engine serves headless CLI, terminal chat, stdio RPC and Rust hosts, including non-coding applications. The coding application provides filesystem, search, guarded editing, shell and web tools, with optional MCP and Code Mode. Conversations are saved in SQLite.
 
-The target is Pi-like coding capabilities and interaction, with compact fx-like terminal styling, implemented idiomatically in Rust rather than copying either implementation.
+**Status:** unreleased v0. Everyday coding reliability and native terminal usability are not yet qualified; the TUI is not a recommended daily driver. Ion targets Pi-like capabilities and interaction with compact fx-like terminal styling. Source defines implemented behavior, not planned features.
 
-**Status:** unreleased v0. Everyday coding reliability and native terminal usability are not yet qualified; the TUI is not a recommended daily driver. Implemented behavior is defined by source, not planned features.
-
-## Build
+## Build or install
 
 Use the toolchain in `rust-toolchain.toml`:
 
 ```sh
 cargo build --locked -p ion
-target/debug/ion models
+target/debug/ion --help
 ```
 
-Or install with `cargo install --locked --path crates/ion-cli`.
-
-For Rust embedding, see the [core API example](crates/ion-core/src/lib.rs). Generate its reference with `cargo doc --locked -p ion-core --no-deps`.
-
-## Basic usage
+To install `ion` on your Cargo binary path:
 
 ```sh
-ion                                  # interactive terminal chat (experimental)
-ion run 'Inspect and fix a failing test'
-ion -p 'Summarize the changes'
-ion --json run 'Review this project'  # machine-readable events
-ion rpc                              # stdio JSONL control
-ion models                           # available models
-ion use PROVIDER MODEL               # select default model
-ion login PROVIDER                   # masked API key entry
-ion auth                             # credential sources
-ion doctor                           # offline configuration diagnostics
-ion --continue                       # resume latest session in this directory
-ion -r                               # choose a saved session
-ion sessions                         # list saved sessions
-ion --continue turns                 # recorded turns
-ion --continue usage                 # recorded token usage
-ion --continue compact               # request context summary
+cargo install --locked --path crates/ion-cli
 ```
 
-Run `ion --help` and `ion COMMAND --help` for complete supported options. The current CLI supports `@file` context arguments, images, explicit model and reasoning selection, and tool include/exclude filters. Headless/RPC mode needs an already configured model and credentials.
+The examples below use the installed `ion`. For a build-only checkout, replace it with `target/debug/ion` when running from the repository root.
 
-Attach UTF-8 text files or pictures with `ion run @notes.md @screenshot.png "Explain this"` or `/file PATH` in chat. Use `--image PATH` when the operand must be an image. These client inputs resolve `~/…` from `HOME`; use `./~/…` for a literal tilde directory. Chat accepts an unquoted path (including spaces) or a JSON-quoted path, matching completion; it does not evaluate shell expressions or read paths mentioned in ordinary prose. Accepted messages save complete text/image snapshots, so reopening does not reread their source files.
+## Set up a model
 
-RPC `prompt`, `steer` and `follow_up` commands take an optional typed `attachments` array:
-```json
-{"type":"prompt","id":"review","message":"Explain this","attachments":[{"type":"file","path":"notes.md"},{"type":"image","mime_type":"image/png","data":"BASE64"}]}
+First inspect the local model catalog and credential sources:
+
+```sh
+ion models
+ion auth
 ```
-Use `{"type":"image_file","path":"screenshot.png"}` to require an image from a local file. RPC paths are literal and relative to the Session directory; RPC does not expand `~`. Each LF-terminated command, including JSON and base64, is limited to 8 MiB. Malformed sources and unknown fields, including the obsolete `images` field, are rejected rather than silently ignored. Preparation is atomic: an invalid attachment does not submit the rest of the prompt.
 
-Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use `/reasoning` to change the preference.
+Choose a provider ID and model ID from the catalog that you are authorized to use. Replace `PROVIDER` and `MODEL` below; catalog inclusion does not guarantee account access.
 
-JSONL `text_delta` and `thinking_delta` events carry a zero-based `block` index, numbered independently within each response. Append each delta to its own block, not to one shared string; updates can interleave. `assistant_committed` replaces provisional content, including text not streamed earlier; `response_restarted` discards it. These block indices are not durable Session coordinates.
+```sh
+ion use PROVIDER MODEL
+ion login PROVIDER
+ion doctor
+```
 
-Terminal chat temporarily enables grapheme clustering (mode 2027) when the terminal reports it as supported and currently off, and restores the prior setting when yielding the terminal. Without reported support, rendering stays best-effort; complex emoji alignment depends on the terminal and its Unicode width tables.
+`login` takes an API key at a masked terminal prompt. Skip it if the route already has credentials through its supported environment variable or needs no key. `auth` shows sources without displaying secrets; `doctor` checks configuration offline. These setup commands do not send model requests. For a custom compatible endpoint, see `ion use --help`; supply the endpoint and wire format for your actual service rather than a catalog route.
 
-Ctrl-C stops running work immediately, including unanswered questions, except while attached to a program, where it is forwarded to that program. External editors share Ion's controlling-terminal input, handle their own Ctrl-C, and return the original draft when cancelled. Ion preserves the caller's terminal input settings across editor failures and leaves an editor's unclosed alternate screen when the terminal reports it. On terminals without screen-state reporting (DECRQM 1049), editors must restore their own screen. A pending clipboard read in the composer is cancelled first. Esc dismisses local UI; stopping via Esc, clearing a draft, cancelling a question with Esc, and quitting with a shortcut ask for confirmation. Reported key repeats cannot submit input, accept completions or choices, toggle tool output or question/picker controls, open an external editor, or start another cancellation; ordinary held-key editing and navigation still repeat. Legacy terminals cannot distinguish auto-repeat from another press.
+Configuration, saved credentials, resources and Sessions use `~/.ion` by default, or `ION_HOME` when set. Workspace `.ion` files are separate. Ion does not automatically migrate old XDG storage.
 
-In the `ion` coding clients, `SIGTERM` and `SIGHUP` request application-wide shutdown and join owned work before exiting with status 1. This includes startup model/Session pickers, masked key entry and `ion login`. An external editor receives `SIGTERM` on its own PID; Ion waits for it before restoring the terminal, so an editor that ignores the request can delay exit. An admitted key/default save is finished, not undone. Graceful exit can also wait for an unread final output pipe, including passive commands launched through `--resume`; passive commands without the startup browser retain default OS signal handling.
+## Use
 
-Ctrl-O expands or collapses tool output without leaving the composer. Inline chat temporarily uses the shared fullscreen conversation to inspect expanded output, then returns to native scrollback when collapsed; published history is not rewritten. Mutation rows show recorded line additions/removals for that operation, not repository totals. Counts cover the snapshot diff even when its patch capture is truncated; an uncaptured comparison is reported separately from write success. Expansion shows recorded directory entries, file-search results and remote-tool text or structured values; it cannot recover data omitted during capture. Command rows distinguish nonzero exits from signal termination; recorded wait failures show the unavailable status and retained cause. Use `/tool N` for raw tool evidence or `/tool all` for the raw conversation inspector.
+After configuration, submit a request or open terminal chat. Model requests can incur provider charges:
 
-The coding recipe runs native commands **with your host permissions**. Tool selection/read-only flags are model loadout controls, not a sandbox. Cancellation does not undo filesystem effects; interrupted effects may have unknown outcomes and are not blindly replayed.
+```sh
+ion --read-only run 'Summarize this project'
+ion                                  # experimental terminal chat
+ion --continue                       # reopen latest Session in this directory
+ion -r                               # choose a saved Session
+```
 
-Native filesystem tools (`read`, `ls`, `find`, `grep`, `edit`, `write`) accept `~` and `~/…` using the bound Host's captured `HOME`, independently of `ION_HOME`. A missing or non-absolute `HOME` is an error for these paths. Use `./~/…` for a literal tilde directory; other shell expansion is not performed.
+`ion run 'PROMPT'` runs headlessly; `ion -p 'PROMPT'` is shorthand. Use `ion --json run 'PROMPT'` for JSONL events or `ion rpc` for stdio JSONL control. Headless and RPC clients require a configured model and credentials. CLI options can precede a command but must apply to it; use `ion --help` and `ion COMMAND --help` for exact options. In chat, `/help` lists controls and `/help keys` shows effective bindings.
 
-Reopening a session does not restart its work. To continue after an interruption, send a new message in that session; it uses the current model, credentials and tools. Inspect unknown effects before asking to repeat a mutation. The previous Turn is recorded as interrupted and the new message starts a new Turn, with missing results marked unknown rather than rerun.
+**Permissions and recovery:**
 
-Terminal chat shows a cached `context ~input/window` estimate when space allows; `?` means the model's window is unknown. It is hidden during active turns and unsettled Session changes. `/session` shows the full estimate from Core's request planner, separately from recorded token usage. It uses the current model, instructions and loaded tools, excluding drafts and queued input. Compatible process-local provider observations calibrate the estimate; compaction, reopening or a changed binding can require a cold byte-based estimate. Neither is an exact tokenizer count or the budget of an in-flight request. Active turns may retain earlier instructions and a frozen loadout; refresh or compaction can change the next request. Retained request bytes are a planning bound, not HTTP wire size.
+- Coding commands run with your host permissions. Tool filters and `--read-only` restrict the model's loadout, not the host: explicit user shell and trusted executable commands remain available. They are not a sandbox or a per-call approval system.
+- Ctrl-C immediately **requests** cancellation of foreground work, including unanswered questions; it may wait for cleanup to join. While attached to a program, Ctrl-C goes to that program instead. See [terminal controls](docs/terminal.md).
+- Cancellation does not undo effects. Reopening does not restart interrupted work, and navigating, cloning or forking a conversation does not roll back files. Inspect unknown outcomes before asking to repeat a mutation.
 
-Automatic compaction for extra output room is best-effort: a provider failure or unusable summary produces a warning and leaves context intact, so a request that still fits can continue with a smaller output budget. Manual compaction and compaction required to fit a request remain strict; cancellation and storage/accounting failures still stop work.
+## Documentation
 
-Compaction summarizes bounded excerpts; original result envelopes and retained captures remain in the Session's SQLite database. Native command overflow/raw bytes, omitted web snapshots (converted text, not raw HTML), and retained MCP responses/resources use typed artifact receipts. Capture completeness is separate from command or server success. Partial, unfinished and unclaimed captures are retained conservatively, not automatically deleted or replayed.
+- [Sessions and alternative conversations](docs/sessions.md): reopen, navigate, clone/fork, attach input, estimate context, compact and retrieve retained evidence.
+- [Terminal chat](docs/terminal.md): composer controls, tool-output inspection, external editors and shutdown.
+- [Tool selection and operator vetoes](docs/tool-control.md): model loadouts, native path rules, Code Mode recovery and optional refusal programs.
+- [Long-running programs](docs/processes.md): supervised programs, PTY attachment and stop/join controls.
+- [Skills, prompts and commands](docs/customization.md): resource discovery, `/reload` and trusted executable commands.
+- [Delegating coding work](docs/delegation.md): subagents, task controls and recorded results.
+- [Headless JSONL and stdio RPC](docs/rpc.md): typed attachments and provisional streaming contracts.
+- [Rust embedding](docs/embedding.md): entry points, input custody, cancellation and Session retirement.
 
-The coding `history` tool searches recorded evidence without rerunning effects. It also retrieves committed child outcomes after task removal or reopening: search the run UUID without a `tool` filter, then read the `delegation_settled` hit. Recorded answers and failures do not restore live task controls; see [delegating coding work](docs/delegation.md).
-
-The `artifact` action reads a referenced capture by source entry and artifact index; Code Mode uses `inspectSaved({kind:'artifact',parent,child,artifact:0})`, including committed children of the current invocation. Pages return readable UTF-8 text where possible, otherwise exact base64 bytes. Check `encoding`; `data_bytes` counts the page's raw bytes, while `total_bytes` is the full capture size. Consume the page's data even when `next_offset` is null (EOF); otherwise follow `next_offset`. Offsets and the maximum 16 KiB page limit count raw bytes. Text pages preserve character boundaries without replacing malformed bytes. Readers enforce the issuing request's frozen prefix and exclude private `!!` shell results. An ID, hash or look-alike JSON reference grants no access.
-
-To revisit an image after compaction, call `history` directly with `{"action":"image","entry":N,"image":0}`. The source entry is one-based; the image index is zero-based among its typed images, not text parts. This returns one retained image from a user input, steering message or observed top-level tool result, without reopening a file or rerunning the original tool. Search/read JSON still omits typed image bytes. Normal image and request limits apply; Code Mode receives only metadata, so viewing the image requires a direct call.
-
-When a Code Mode script fails after admitting child calls, its error result includes `recovery.query`. Inside a later Code Mode call, pass that query to the global `inspectSaved` helper to inspect saved child outcomes before retrying. A script failure does not undo effects or require rerunning tools to recover their output.
-
-Conversation clones, forks and delegated forks copy their referenced observed captures before publishing the new history; they do not copy unclaimed forensic data. A consistent whole-database backup can retain that data as well. Chunk commits add SQLite/WAL work and disk retention; there is no automatic artifact eviction.
-
-During early unstable development, incompatible Session databases are rejected rather than migrated. Rust `ToolOutput` includes typed `artifacts`; observed shell outcomes retain the whole output. Low-level tool execution takes an explicit `ToolInvocation`; outside admitted execution, callers must supply an artifact sink to retain captures. These unreleased APIs have no compatibility shim.
-
-Configuration, saved credentials, resources and sessions use `~/.ion` by default, or `ION_HOME` when set; workspace-specific `.ion` is separate. No automatic migration from old XDG storage is performed.
-
-See [Sessions and alternative conversations](docs/sessions.md) for finding saved work, exploring context without changing files, and choosing clone or fork boundaries.
-
-See [Skills, prompts and commands](docs/customization.md) to add project skills, reusable `/name` prompts and explicit `/command:name` executables. `/skills`, `/prompts` and `/commands` show loaded resources; `/reload` refreshes them and reports source warnings.
-
-See [Delegating coding work](docs/delegation.md) for background subagents, full-handle `/tasks` lookup, progress, cancellation and retained results.
-
-See [Long-running programs](docs/processes.md) for starting supervised programs, `/attach`, Ctrl-] detachment, inspection and stop/join controls. [Tool selection and operator vetoes](docs/tool-control.md) explains model loadouts, optional pre-dispatch refusal programs and their limits.
-
-## Develop and embed
-
-This workspace contains `ion-ai` (model-facing types), `ion-core` (Turn and Session runtime), `ion-app` (the shared application, SDK and effects), and `ion-terminal` (physical terminal). The `ion` executable and its CLI, TUI and RPC clients live in `crates/ion-cli`. These are current code owners, not promised permanent API boundaries.
+## Develop
 
 ```sh
 cargo fmt --all -- --check
@@ -108,19 +82,11 @@ cargo build --locked -p ion
 scripts/smoke.sh
 ```
 
-Rust application entry points and examples live in `crates/ion-cli/examples/`. `CodingApplication` and `SessionControl` embed the same execution engine; APIs may change before release. `AGENTS.md` contains project-specific development checks.
-
-Application input uses `UserInput::Prompt { text, attachments }` and `ion_app::attachments::AttachmentSource`: automatic files, image-only files, owned image bytes, prepared images and literal text snapshots. `AttachmentSource::image_bytes(bytes)` avoids base64 in Rust callers. Custom runtimes default to no filesystem attachment access; explicitly set `ApplicationRuntime::allow_file_attachments` to permit file sources. In-memory sources need no filesystem permission. Core receives only prepared typed `Message` content, never source paths. The direct `prepare_attachments` helper requires absolute paths; `SessionControl` resolves relative sources against its Session. Pending sources and prepared messages share a 32 MiB encoded custody budget; a locally queued input can still be returned if preparation exceeds that budget or the model's limits.
-
-`Session::create/open` and `SessionSetup::new` are blocking factory operations. Async coding clients use retained `CodingApplication::prepare_setup`, Session I/O and reader capabilities. Keep `setup.retirements()` outside the controller: after controller shutdown, drain reliable updates, release every Session/read capability, then await the retirement scope's `join()`. Shutdown preserves read-only access; retirement separately joins native SQLite close and writer-lease release. Cancelling a borrowed wait does not cancel or discard its native work.
-
-Core execution APIs treat a caller's cancellation token as a parent scope. Cancelling it stops all operations beneath it; stopping or dropping one `Operation` stops only that operation and its descendants, not the parent or sibling Sessions. Dropping an operation handle requests stop but does not join it. Retain and await the handle, or join through Session shutdown, before releasing the host resources its work uses.
-
-A local input ID or pending launch is not durable acceptance. Use Core input/request receipts and reliable control updates to distinguish committed, not accepted and unresolved inputs. Never automatically retry or restore an unresolved input as a fresh request.
+The smoke script exercises an offline built headless/reopen path. See `AGENTS.md` for project-specific development guidance and [Rust embedding](docs/embedding.md) for library examples and API documentation.
 
 ## Limitations
 
-Durable storage and conservative effect recovery are implemented, but fully automatic service restart/wake, arbitrary dynamic extensions, provider coverage, broad ACP/editor integrations and model-backed daily-driver qualification are incomplete. Code Mode is optional in the current application; restart-safe guest reconstruction and full Pi Durable-level nested-call semantics are not yet established. Live model access and costs depend on the selected provider.
+Durable storage and conservative effect recovery are implemented, but fully automatic service restart/wake, arbitrary dynamic extensions, provider coverage, broad ACP/editor integrations and model-backed daily-driver qualification are incomplete. Code Mode is optional; restart-safe guest reconstruction and full Pi Durable-level nested-call semantics are not yet established. Incompatible Session databases are rejected rather than migrated during unstable development. Rust APIs may change before release.
 
 ## License
 

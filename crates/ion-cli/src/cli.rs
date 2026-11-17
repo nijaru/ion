@@ -271,7 +271,7 @@ fn options() -> Vec<Arg> {
         Arg::new("exclude_tools").long("exclude-tools").action(ArgAction::Append).value_delimiter(',')
             .value_name("PATTERNS").help("Remove visible tools by comma-separated names or * patterns"),
         Arg::new("read_only").long("read-only").action(ArgAction::SetTrue)
-            .help("Use read-only tools; exclude mutations, direct shell and managed children"),
+            .help("Restrict model tools to read-only set; human shell/commands remain enabled"),
         Arg::new("cwd").long("cwd").value_parser(clap::value_parser!(PathBuf))
             .value_name("DIR").help("Working directory (defaults to the current directory)"),
         Arg::new("session").long("session").value_parser(clap::value_parser!(PathBuf))

@@ -49,7 +49,7 @@ A fresh child starts without copied conversation history. An explicit fork copie
 
 ## Lifetime and recovery
 
-Transferred work survives parent cancellation and Session navigation within the live application. Quitting or interrupting the application requests stop and joins owned work. Retained handles belong to that application owner; reopening a saved conversation does not resurrect background jobs or their controls.
+Transferred work survives parent cancellation and Session navigation within the live application. Cancelling only the foreground Turn with Ctrl-C does not stop transferred children. Application shutdown requests stop and joins owned work; see [terminal cancellation and shutdown](terminal.md#cancellation-and-local-controls). Retained handles belong to that application owner; reopening a saved conversation does not resurrect background jobs or their controls.
 
 Saved child Sessions and committed relationship/outcome facts survive removing a finished task.
 

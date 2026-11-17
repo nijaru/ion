@@ -10,7 +10,17 @@ ion --tools read,ls,find,grep,exec
 ion --exclude-tools exec,process
 ```
 
-Run `ion --help` for supported selection options. A veto cannot restore an excluded or undeclared tool. `--read-only` also disables direct shell execution in the coding client. These controls do not isolate the filesystem, credentials or arbitrary trusted host code.
+Run `ion --help` for supported selection options. `--read-only` cannot be combined with `--tools` or `--exclude-tools`. It selects the built-in read-only model loadout, excluding mutation tools, `exec`, `process` and `subagent`. Optional Code Mode can compose only the selected tools; a veto cannot restore an excluded or undeclared tool.
+
+Explicit human shell execution (`!` / `!!`) and [trusted executable commands](customization.md#add-an-executable-command) remain available in a main coding Session, including with `--read-only`. These are separate application actions, not model tool calls. Tool selection does not isolate the filesystem, credentials or arbitrary trusted host code.
+
+## Native filesystem paths
+
+Native filesystem tools (`read`, `ls`, `find`, `grep`, `edit`, `write`) accept `~` and `~/…` using the bound Host's captured `HOME`, independently of `ION_HOME`. A missing or non-absolute `HOME` is an error for these paths. Use `./~/…` for a literal tilde directory; other shell expansion is not performed.
+
+## Code Mode recovery
+
+`--code-mode` enables bounded JavaScript composition alongside direct tools. When a script fails after admitting child calls, its error result includes `recovery.query`. Inside a later Code Mode call, pass that query to the global `inspectSaved` helper to inspect saved child outcomes before retrying. A script failure does not undo effects or require rerunning tools to recover output. See [Session captures](sessions.md#retained-evidence-and-captures) for artifact paging and access limits.
 
 ## Configure a veto program
 

@@ -131,8 +131,13 @@ ion commands trust
 
 Then `/reload` in chat. Changing the project manifest invalidates its grant;
 review and trust the new contents before reloading. `ion commands untrust`
-revokes the grant. Executable commands run with your host permissions and are
-unavailable in a read-only coding runtime; they are not sandboxed plugins.
+revokes the grant. Ion revalidates the loaded manifest and project trust before
+dispatch, so changed or revoked sources cannot use a stale loaded grant.
+
+Executable commands run with your host permissions, including with a read-only
+model loadout. Like explicit human shell input, they are separate from model
+tools and operator tool-veto hooks; they are not sandboxed plugins. See
+[tool control](tool-control.md#select-the-models-tools) for the authority boundary.
 
 `ION_HOME` changes the active Ion home. See `ion resources --help`,
 `ion commands --help` and `ion --help` for the complete CLI options.
