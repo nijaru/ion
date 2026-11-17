@@ -59,15 +59,15 @@ pub(super) fn submit_editor(
     delivery: Delivery,
     source: EditorDraft,
 ) {
-    if ui.session_io.blocks_input() {
-        ui.restore_editor(source);
-        ui.status = "Prompt retained; not sent".into();
-        return;
-    }
     if ui.recovery.blocks(runtime.session().id()) {
         ui.restore_editor(source);
         ui.status =
-            "Input commit unresolved; reconcile this Session before sending another prompt".into();
+            "Input acceptance unknown; inspect /recovery before sending another prompt".into();
+        return;
+    }
+    if ui.session_io.blocks_input() {
+        ui.restore_editor(source);
+        ui.status = "Prompt retained; not sent".into();
         return;
     }
     if delivery == Delivery::FollowUp

@@ -2,7 +2,7 @@
 use std::{
     io::Write,
     os::unix::fs::OpenOptionsExt,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
 };
 
@@ -72,11 +72,11 @@ struct SnapshotSource {
 }
 
 impl Record {
-    fn status(&self) -> serde_json::Value {
+    fn disposition(&self) -> Option<InputStatus> {
         match &self.source {
-            Source::Input(input) => serde_json::json!(input.receipt.status()),
-            Source::Discarded(receipt) => serde_json::json!(receipt.status()),
-            Source::Command(_) => serde_json::json!({"state": "unknown"}),
+            Source::Input(input) => Some(input.receipt.status()),
+            Source::Discarded(receipt) => Some(receipt.status()),
+            Source::Command(_) => None,
         }
     }
 
@@ -109,7 +109,10 @@ impl Record {
             id: self.id,
             origin: self.origin.clone(),
             cause: self.cause.clone(),
-            status: self.status(),
+            status: match self.disposition() {
+                Some(status) => serde_json::json!(status),
+                None => serde_json::json!({"state": "unknown"}),
+            },
             source,
         }
     }
@@ -156,15 +159,9 @@ impl Recovery {
     pub(super) fn blocks(&self, session: uuid::Uuid) -> bool {
         self.records.iter().any(|record| {
             record.origin.session == session
-                && match &record.source {
-                    Source::Input(input) => {
-                        !matches!(input.receipt.status(), InputStatus::NotAccepted)
-                    }
-                    Source::Discarded(receipt) => {
-                        !matches!(receipt.status(), InputStatus::NotAccepted)
-                    }
-                    Source::Command(_) => false,
-                }
+                && record
+                    .disposition()
+                    .is_some_and(|status| status != InputStatus::NotAccepted)
         })
     }
 
@@ -174,13 +171,14 @@ impl Recovery {
         }
         let mut rows = vec!["Local recovery · unsaved sources are lost on quit".into()];
         rows.extend(self.records.iter().map(|record| {
+            let status = record.disposition();
             format!(
                 "{} · Session {} · {} · {}",
                 record.id,
                 record.origin.session,
-                record.status(),
+                disposition_label(status),
                 match &record.source {
-                    Source::Input(input) if input.receipt.status() == InputStatus::NotAccepted =>
+                    Source::Input(_) if status == Some(InputStatus::NotAccepted) =>
                         "not accepted; select original Session to return draft",
                     Source::Input(_) => "input quarantined",
                     Source::Discarded(_) => "source discarded; fence retained",
@@ -198,7 +196,7 @@ impl Recovery {
             id,
             record.origin.session,
             record.origin.path.display(),
-            record.status(),
+            disposition_label(record.disposition()),
             record.cause
         );
         let editor = match &record.source {
@@ -259,10 +257,29 @@ impl Recovery {
     }
 }
 
+fn disposition_label(status: Option<InputStatus>) -> String {
+    match status {
+        Some(InputStatus::Pending) => "pending acceptance".into(),
+        Some(InputStatus::Committing) => "committing input".into(),
+        Some(InputStatus::Committed(commit)) => {
+            format!("committed (turn {}, entry {})", commit.turn, commit.entry)
+        }
+        Some(InputStatus::NotAccepted) => "not accepted".into(),
+        Some(InputStatus::Unresolved) => "acceptance unknown".into(),
+        None => "effects unknown".into(),
+    }
+}
+
 fn attachment_metadata(source: &AttachmentSource) -> String {
     match source {
-        AttachmentSource::File(path) => format!("file {}", path.display()),
-        AttachmentSource::ImageFile(path) => format!("image file {}", path.display()),
+        AttachmentSource::File(path) => format!(
+            "file {} (path reference only; contents are not preserved)",
+            path.display()
+        ),
+        AttachmentSource::ImageFile(path) => format!(
+            "image file {} (path reference only; contents are not preserved)",
+            path.display()
+        ),
         AttachmentSource::ImageBytes { bytes, mime_type } => {
             format!("image bytes: {} bytes, {mime_type:?}", bytes.len())
         }
@@ -281,13 +298,9 @@ impl Frontend {
     pub(super) fn reconcile_recovery(&mut self, current: uuid::Uuid) -> Result<()> {
         let mut at = 0;
         while at < self.recovery.records.len() {
-            let status = match &self.recovery.records[at].source {
-                Source::Input(input) => input.receipt.status(),
-                Source::Discarded(receipt) => receipt.status(),
-                Source::Command(_) => {
-                    at += 1;
-                    continue;
-                }
+            let Some(status) = self.recovery.records[at].disposition() else {
+                at += 1;
+                continue;
             };
             match status {
                 InputStatus::Committed(commit) => {
@@ -350,16 +363,12 @@ pub(super) fn command(
                 .context("use /recovery save ID PATH")?;
             let id = id.parse().context("invalid recovery ID")?;
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            let target = super::command::attachment_path(path.trim(), &ui.cwd, home.as_deref())?;
+            let target = super::command::file_path(path.trim(), &ui.cwd, home.as_deref())?;
             let snapshot = ui.recovery.record(id)?.snapshot();
             let io = control.session().io()?;
             ui.session_io
                 .start_file_write(control.session(), async move {
-                    io.run(move |_| {
-                        Ok(save_new(&snapshot, &target)
-                            .map(|()| ReadOutput::RecoverySaved { id, path: target }))
-                    })
-                    .await?
+                    io.run(move |_| Ok(save_new(&snapshot, target))).await?
                 })?;
         }
         id if tail.trim().is_empty() => ui.print(
@@ -373,17 +382,35 @@ pub(super) fn command(
     Ok(())
 }
 
-fn save_new(snapshot: &Snapshot, path: &Path) -> Result<()> {
-    let bytes = serde_json::to_vec_pretty(snapshot)?;
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
+fn save_new(snapshot: &Snapshot, path: PathBuf) -> Result<ReadOutput> {
+    // Before a successful create_new, refusal proves that this attempt did not
+    // start writing. After open, errors cannot promise rollback of file effects.
+    let opened = (|| -> Result<_> {
+        let bytes = serde_json::to_vec_pretty(snapshot)?;
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok((bytes, file))
+    })();
+    let (bytes, mut file) = match opened {
+        Ok(opened) => opened,
+        Err(error) => {
+            return Ok(ReadOutput::RecoverySaveRefused {
+                id: snapshot.id,
+                path,
+                error,
+            });
+        }
+    };
     if let Err(error) = file.write_all(&bytes).and_then(|()| file.sync_all()) {
         drop(file);
-        let _ = std::fs::remove_file(path);
+        let _ = std::fs::remove_file(&path);
         return Err(error.into());
     }
-    Ok(())
+    Ok(ReadOutput::RecoverySaved {
+        id: snapshot.id,
+        path,
+    })
 }

@@ -190,7 +190,9 @@ pub(super) fn apply(
                 unreachable!("terminal submits only raw prompts")
             };
             let withdrawn = matches!(returned.reason, ReturnReason::Cleared);
-            if withdrawn {
+            let composer_available = !ui.clipboard_pending()
+                && ui.input_target() == super::interaction::InputTarget::Composer;
+            if withdrawn && composer_available {
                 ui.show_draft(super::RecoveredDraft {
                     source: returned.metadata,
                     attachments,
@@ -198,9 +200,9 @@ pub(super) fn apply(
             } else {
                 ui.return_draft(returned.metadata, attachments);
             }
-            let retention = if !withdrawn && ui.clipboard_pending() {
+            let retention = if !composer_available {
                 ui.status = "Returned draft retained separately".into();
-                "Draft retained separately while clipboard acquisition is pending"
+                "Draft retained separately until the composer is available"
             } else {
                 ui.status = "Draft returned".into();
                 "Draft retained"
@@ -231,6 +233,7 @@ pub(super) fn apply(
                 .recovery
                 .input(input, super::recovery::Origin::capture(control.session()))?;
             ui.status = format!("Input commit unresolved · /recovery {id} · not replayed");
+            ui.note(format!("Input source quarantined as recovery {id}; inspect with /recovery {id}. Not restored or replayed."));
         }
         ControlUpdate::Settled(mut settlement) => {
             ui.discard_provisional();
@@ -391,6 +394,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ordinary_returns_and_withdrawals_keep_a_newer_picker_in_control() {
+        for withdrawn in [false, true] {
+            let mut fixture = super::super::tests::Fixture::new();
+            let source = "  queued original 🦀";
+            fixture
+                .control
+                .submit(
+                    Delivery::FollowUp,
+                    UserInput::Prompt {
+                        text: source.into(),
+                        attachments: vec![ion_app::attachments::AttachmentSource::ImageFile(
+                            fixture.root.join("missing.png"),
+                        )],
+                    },
+                    EditorDraft {
+                        literal: source.into(),
+                        cursor: 2,
+                    },
+                )
+                .unwrap();
+            if withdrawn {
+                assert!(fixture.control.withdraw_last_follow_up().is_some());
+            } else {
+                fixture.control.request_stop();
+            }
+            let mut ui = Frontend::default();
+            ui.pickers.open(
+                super::super::Picker::reasoning_for(
+                    fixture.control.agent(),
+                    ion_ai::Reasoning::default(),
+                )
+                .unwrap(),
+            );
+            super::super::tests::drain(&mut fixture.control, &mut ui).await;
+            assert_eq!(
+                ui.input_target(),
+                super::super::interaction::InputTarget::Picker
+            );
+            assert!(ui.editor.draft.is_empty());
+            assert!(ui.editor.attachments.is_empty());
+            assert_eq!(ui.editor.recovered.len(), 1);
+            let returned = &ui.editor.recovered[0];
+            assert_eq!(
+                (returned.source.literal.as_str(), returned.source.cursor),
+                (source, 2)
+            );
+            assert!(
+                matches!(&returned.attachments[..], [ion_app::attachments::AttachmentSource::ImageFile(path)] if path.ends_with("missing.png"))
+            );
+            assert!(fixture.control.session().view().unwrap().entries.is_empty());
+            assert!(!fixture.control.is_busy());
+            fixture.control.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
     async fn uncertain_input_is_retained_separately_and_never_restored_or_resent() {
         let mut fixture = super::super::tests::Fixture::new();
         rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
@@ -413,10 +472,17 @@ mod tests {
             .unwrap();
         let mut ui = Frontend::default();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut unresolved = false;
             loop {
                 let update = fixture.control.next().await;
-                if matches!(update, ControlUpdate::Unresolved(_)) {
-                    apply(&mut ui, &fixture.control, update).unwrap();
+                unresolved |= matches!(update, ControlUpdate::Unresolved(_));
+                let settled = matches!(update, ControlUpdate::Settled(_));
+                apply(&mut ui, &fixture.control, update).unwrap();
+                if settled {
+                    assert!(
+                        unresolved,
+                        "exercise the real unresolved → settled ordering"
+                    );
                     break;
                 }
             }
@@ -427,6 +493,31 @@ mod tests {
         assert!(ui.editor.recovered.is_empty());
         assert!(ui.recovery.blocks(fixture.control.session().id()));
         assert_eq!(ui.recovery.list().lines().count(), 2);
+        let id = ui
+            .recovery
+            .list()
+            .lines()
+            .nth(1)
+            .unwrap()
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .to_owned();
+        let transcript = ui
+            .pending_history_rows(200)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            transcript.contains(&format!("/recovery {id}")),
+            "settlement must not hide the recovery action"
+        );
+        assert!(transcript.contains("quarantined"));
+        assert!(
+            !transcript.contains(literal.trim()),
+            "the notice must not dump the source"
+        );
         super::super::interaction::submit_editor(
             &mut fixture.control,
             &mut ui,
@@ -434,7 +525,7 @@ mod tests {
             EditorDraft::at_end("do not send".into()),
         );
         assert_eq!(ui.editor.draft, "do not send");
-        assert!(ui.status.contains("reconcile this Session"));
+        assert!(ui.status.contains("/recovery"));
         assert_eq!(ui.recovery.list().lines().count(), 2);
         fixture.control.shutdown().await;
     }

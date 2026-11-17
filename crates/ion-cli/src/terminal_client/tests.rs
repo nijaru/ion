@@ -421,7 +421,7 @@ async fn help_output_is_complete_publication_not_clipped_composer_chrome() {
     fixture.control.shutdown().await;
 }
 
-async fn drain(control: &mut SessionControl<EditorDraft>, ui: &mut Frontend) {
+pub(super) async fn drain(control: &mut SessionControl<EditorDraft>, ui: &mut Frontend) {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let update = control.next().await;

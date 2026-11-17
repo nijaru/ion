@@ -35,6 +35,11 @@ pub(super) enum ReadOutput {
         id: u64,
         path: PathBuf,
     },
+    RecoverySaveRefused {
+        id: u64,
+        path: PathBuf,
+        error: anyhow::Error,
+    },
     Copy(String),
 }
 
@@ -84,7 +89,6 @@ struct Read {
     session: uuid::Uuid,
     generation: u64,
     path: PathBuf,
-    cwd: Option<PathBuf>,
     future: ReadFuture,
     source: Option<EditorDraft>,
     projection_revision: Option<u64>,
@@ -212,7 +216,6 @@ impl SessionIo {
             session: session.id(),
             generation: self.generation,
             path: session.path().to_owned(),
-            cwd: session.cwd().map(ToOwned::to_owned),
             future: Box::pin(future),
             source: None,
             projection_revision: None,
@@ -323,6 +326,13 @@ pub(super) fn binding_finished(
             "binding completion identity differs"
         );
     }
+    // Filesystem commands and completion follow the actual binding even when
+    // its canonical history is unreadable. A display snapshot never owns cwd.
+    ui.cwd = control
+        .session()
+        .cwd()
+        .context("terminal coding requires a working directory")?
+        .to_owned();
     ui.session_io.generation += 1;
     ui.session_io.request_refresh();
     match finished.result {
@@ -425,9 +435,6 @@ pub(super) fn apply(
             if interrupted {
                 ui.status = "Interrupted; effects unknown. Send a message to continue.".into();
             }
-            ui.cwd = read
-                .cwd
-                .context("terminal coding requires a working directory")?;
             if !ui.session_io.refresh_pending {
                 ui.session_io.blocked = false;
                 ui.session_io.refresh_error = None;
@@ -494,6 +501,15 @@ pub(super) fn apply(
                 path.display()
             );
         }
+        Ok(ReadOutput::RecoverySaveRefused { id, path, error }) => {
+            if let Some(source) = source {
+                ui.return_command_source(source);
+            }
+            ui.status = format!(
+                "Recovery backup was not saved for {id} at {}: {error:#}",
+                path.display()
+            );
+        }
         Ok(ReadOutput::Copy(text)) => return Ok(Some(UiEffect::Copy(text))),
         Err(error) => {
             if let Some(source) = source {
@@ -513,7 +529,10 @@ pub(super) fn apply(
                     ui.return_command_source(source);
                 }
             }
-            if ui.session_io.blocked {
+            if read.writes_files {
+                ui.status =
+                    format!("File operation failed: {error:#}; inspect /recovery before retrying");
+            } else if ui.session_io.blocked {
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             } else {
                 ui.status = format!("Session inspection failed: {error:#}");
@@ -536,21 +555,38 @@ fn finish_command(ui: &mut Frontend, source: Option<EditorDraft>, result: Result
 }
 
 pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut Result<()>) {
-    if let Some(source) = finished.read.source {
-        let cause = match &finished.result {
+    let ReadFinished { read, result } = finished;
+    let result = match result {
+        Ok(ReadOutput::RecoverySaveRefused { id, path, error }) => {
+            if let Some(source) = read.source {
+                ui.return_command_source(source);
+            }
+            super::activity::combine_error(
+                outcome,
+                error.context(format!(
+                    "Recovery backup {id} was not saved at {} during shutdown",
+                    path.display()
+                )),
+            );
+            return;
+        }
+        result => result,
+    };
+    if let Some(source) = read.source {
+        let cause = match &result {
             Ok(_) => "Session inspection/write joined during shutdown".into(),
             Err(error) => format!("Session inspection/write failed during shutdown: {error:#}"),
         };
         ui.recovery.command(
             source,
             super::recovery::Origin {
-                session: finished.read.session,
-                path: finished.read.path,
+                session: read.session,
+                path: read.path,
             },
             cause,
         );
     }
-    if let Err(error) = finished.result {
+    if let Err(error) = result {
         super::activity::combine_error(outcome, error);
     }
 }

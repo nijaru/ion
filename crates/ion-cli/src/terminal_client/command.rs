@@ -20,15 +20,15 @@ use ion_app::attachments::AttachmentSource;
 
 /// Completion spells quoted paths as JSON, not shell words. An unquoted tail
 /// remains one literal path, including spaces; only its home prefix is expanded.
-pub(super) fn attachment_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
+pub(super) fn file_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let path = if args.starts_with('"') {
-        Cow::Owned(serde_json::from_str::<String>(args).context("invalid quoted attachment path")?)
+        Cow::Owned(serde_json::from_str::<String>(args).context("invalid JSON-quoted path")?)
     } else {
         Cow::Borrowed(args)
     };
-    anyhow::ensure!(!path.is_empty(), "use /file PATH");
+    anyhow::ensure!(!path.is_empty(), "path must not be empty");
     let path = ion_app::expand_home_path(Path::new(path.as_ref()), home)
-        .context("cannot expand attachment path")?;
+        .context("cannot expand file path")?;
     Ok(cwd.join(path))
 }
 
@@ -424,7 +424,7 @@ pub(super) fn handle_builtin(
         Builtin::File => {
             anyhow::ensure!(!args.is_empty(), "use /file PATH");
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            ui.attach(AttachmentSource::File(attachment_path(
+            ui.attach(AttachmentSource::File(file_path(
                 args,
                 &ui.cwd,
                 home.as_deref(),
@@ -503,7 +503,7 @@ pub(super) fn handle_builtin(
                 args.to_owned()
             };
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            let target = attachment_path(&requested, &ui.cwd, home.as_deref())?;
+            let target = file_path(&requested, &ui.cwd, home.as_deref())?;
             let io = runtime.session().io()?;
             ui.session_io
                 .start_file_write(runtime.session(), async move {
@@ -646,7 +646,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_operand_decodes_completion_spelling_and_resolves_home() {
+    fn file_path_decodes_completion_spelling_and_resolves_home() {
         let cwd = Path::new("/workspace");
         let home = Path::new("/home/user");
         for name in [
@@ -657,13 +657,10 @@ mod tests {
             let raw = format!("~/{name}");
             let quoted = serde_json::to_string(&raw).unwrap();
             assert_eq!(
-                attachment_path(&quoted, cwd, Some(home)).unwrap(),
+                file_path(&quoted, cwd, Some(home)).unwrap(),
                 home.join(name)
             );
-            assert_eq!(
-                attachment_path(&raw, cwd, Some(home)).unwrap(),
-                home.join(name)
-            );
+            assert_eq!(file_path(&raw, cwd, Some(home)).unwrap(), home.join(name));
         }
         for literal in [
             "./~/shot.png",
@@ -673,15 +670,15 @@ mod tests {
             "two pictures.png",
         ] {
             assert_eq!(
-                attachment_path(literal, cwd, Some(home)).unwrap(),
+                file_path(literal, cwd, Some(home)).unwrap(),
                 cwd.join(literal)
             );
         }
-        assert_eq!(attachment_path("~", cwd, Some(home)).unwrap(), home);
+        assert_eq!(file_path("~", cwd, Some(home)).unwrap(), home);
     }
 
     #[test]
-    fn image_operand_rejects_invalid_quotes_and_home_without_fallback() {
+    fn file_path_rejects_invalid_quotes_and_home_without_fallback() {
         let cwd = Path::new("/workspace");
         for invalid in [
             "",
@@ -691,18 +688,18 @@ mod tests {
             "\"bad\\q.png\"",
         ] {
             assert!(
-                attachment_path(invalid, cwd, Some(Path::new("/home/user"))).is_err(),
+                file_path(invalid, cwd, Some(Path::new("/home/user"))).is_err(),
                 "{invalid:?}"
             );
         }
         for home in [None, Some(Path::new("")), Some(Path::new("relative"))] {
-            assert!(attachment_path("~/shot.png", cwd, home).is_err());
+            assert!(file_path("~/shot.png", cwd, home).is_err());
             assert_eq!(
-                attachment_path("shot.png", cwd, home).unwrap(),
+                file_path("shot.png", cwd, home).unwrap(),
                 cwd.join("shot.png")
             );
             assert_eq!(
-                attachment_path("/shots/one.png", cwd, home).unwrap(),
+                file_path("/shots/one.png", cwd, home).unwrap(),
                 Path::new("/shots/one.png")
             );
         }

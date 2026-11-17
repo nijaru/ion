@@ -1,5 +1,5 @@
 //! Coordinate editor replacement with independent foreground discovery.
-use super::{EditorDraft, Frontend, RecoveredDraft};
+use super::{EditorDraft, Frontend, RecoveredDraft, interaction::InputTarget};
 use ion_ai::Message;
 use ion_app::attachments::AttachmentSource;
 
@@ -27,7 +27,8 @@ impl Frontend {
 
     pub(super) fn return_command_source(&mut self, source: EditorDraft) {
         self.gestures.invalidate();
-        let replace_empty = !self.clipboard_pending();
+        let replace_empty =
+            !self.clipboard_pending() && self.input_target() == InputTarget::Composer;
         if self.editor.return_text(source, replace_empty) {
             self.pickers.close();
         }
@@ -40,9 +41,10 @@ impl Frontend {
 
     pub(super) fn return_draft(&mut self, source: EditorDraft, attachments: Vec<AttachmentSource>) {
         self.gestures.invalidate();
-        // Acquisition reserves the composer before its bytes arrive. Automatic
-        // returns must not become the prefix or attachment owner of that paste.
-        let replace_empty = !self.clipboard_pending();
+        // Automatic returns cannot steal modal focus or become the prefix and
+        // attachment owner of a pending clipboard paste.
+        let replace_empty =
+            !self.clipboard_pending() && self.input_target() == InputTarget::Composer;
         if self.editor.return_draft(source, attachments, replace_empty) {
             self.pickers.close();
         }

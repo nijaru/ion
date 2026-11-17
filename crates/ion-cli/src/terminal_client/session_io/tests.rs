@@ -423,6 +423,144 @@ async fn stale_file_failure_and_late_binding_error_keep_original_scope_and_cause
 }
 
 #[tokio::test]
+async fn file_worker_failure_keeps_unknown_source_without_overwriting_refresh_fault() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.session_io.blocked = true;
+    ui.session_io.refresh_error = Some("canonical refresh fault".into());
+    ui.session_io
+        .start_file_write(fixture.control.session(), async {
+            anyhow::bail!("write/sync or outer I/O worker failed")
+        })
+        .unwrap();
+    ui.session_io.retain_source(Some(EditorDraft {
+        literal: "/recovery save 1 uncertain.json".into(),
+        cursor: 4,
+    }));
+    let finished = ui.session_io.complete().await;
+    apply(&mut fixture.control, &mut ui, finished).unwrap();
+    assert!(ui.status.starts_with("File operation failed:"));
+    assert_eq!(
+        ui.session_io.refresh_error.as_deref(),
+        Some("canonical refresh fault")
+    );
+    assert!(
+        ui.editor.draft.is_empty(),
+        "unknown writes must not be restored for retry"
+    );
+    let list = ui.recovery.list();
+    assert_eq!(list.lines().count(), 2);
+    let id = list
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let inspection = ui.recovery.inspect(id).unwrap();
+    assert!(inspection.contains("/recovery save 1 uncertain.json"));
+    assert!(inspection.contains("Caret (UTF-8 byte offset): 4"));
+    assert!(inspection.contains("write/sync or outer I/O worker failed"));
+    assert!(inspection.contains(&fixture.control.session().id().to_string()));
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn binding_changes_filesystem_scope_before_history_even_when_refresh_fails() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.refresh_session(fixture.control.session()).unwrap();
+    let old = fixture.control.session().id();
+    let old_path = fixture.control.session().path().to_owned();
+    let retained = ui.recovery.command(
+        EditorDraft::at_end("/export from-A.html".into()),
+        super::super::recovery::Origin::capture(fixture.control.session()),
+        "old write outcome unknown".into(),
+    );
+    // Direct cross-cwd SwitchSession is forbidden by Host policy. Exercise the
+    // frontend publication boundary with a real B controller/binding instead.
+    fixture.control.shutdown().await;
+    let mut bound = Fixture::new();
+    let cwd_b = bound.control.session().cwd().unwrap().to_owned();
+    start_binding(&mut bound.control, &mut ui, BindingChange::NewSession, None).unwrap();
+    finish_binding(&mut bound.control, &mut ui).await;
+    assert_ne!(bound.control.session().id(), old);
+    assert_eq!(
+        ui.cwd, cwd_b,
+        "completion and human paths must follow the actual binding, not the history read"
+    );
+    sql(
+        bound.control.session(),
+        "ALTER TABLE entries RENAME TO hidden_entries",
+    )
+    .await;
+    settle_io(&mut bound.control, &mut ui).await;
+    let refresh_error = ui.session_io.refresh_error.clone();
+    assert!(refresh_error.is_some());
+    assert_eq!(ui.cwd, cwd_b);
+    assert_eq!(
+        ui.editor.completion.file_scope(
+            "/recovery save 1 ./",
+            "/recovery save 1 ./".len(),
+            &ui.cwd,
+            None,
+            true
+        ),
+        Some(crate::terminal_completion::FileScope::Directory(
+            cwd_b.join("./")
+        ))
+    );
+    super::super::command::handle_builtin(
+        &mut bound.control,
+        &bound.host,
+        &mut ui,
+        super::super::Builtin::File,
+        "attached.txt",
+    )
+    .unwrap();
+    assert!(
+        matches!(&ui.editor.attachments[0], AttachmentSource::File(path) if path == &cwd_b.join("attached.txt"))
+    );
+    super::super::command::handle_builtin(
+        &mut bound.control,
+        &bound.host,
+        &mut ui,
+        super::super::Builtin::Recovery,
+        &format!("save {retained} backup.json"),
+    )
+    .unwrap();
+    let finished = ui.session_io.complete().await;
+    apply(&mut bound.control, &mut ui, finished).unwrap();
+    let backup: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(cwd_b.join("backup.json")).unwrap()).unwrap();
+    assert_eq!(backup["origin"]["session"], old.to_string());
+    assert_eq!(backup["origin"]["path"], old_path.to_str().unwrap());
+    assert!(!fixture.root.join("backup.json").exists());
+    assert_eq!(ui.session_io.refresh_error, refresh_error);
+    sql(
+        bound.control.session(),
+        "ALTER TABLE hidden_entries RENAME TO entries",
+    )
+    .await;
+    // The display is still stale; only the immutable bound cwd selects the path.
+    super::super::command::handle_builtin(
+        &mut bound.control,
+        &bound.host,
+        &mut ui,
+        super::super::Builtin::Export,
+        "transcript.txt",
+    )
+    .unwrap();
+    let finished = ui.session_io.complete().await;
+    apply(&mut bound.control, &mut ui, finished).unwrap();
+    assert!(cwd_b.join("transcript.txt").exists());
+    assert!(!fixture.root.join("transcript.txt").exists());
+    bound.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn binding_preflight_does_not_admit_a_prompt_on_the_old_model() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();

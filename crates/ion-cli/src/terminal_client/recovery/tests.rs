@@ -68,6 +68,7 @@ async fn source_inspection_save_and_discard_preserve_exact_custody_and_fence() {
     assert!(inspected.contains(&serde_json::to_string(LITERAL).unwrap()));
     assert!(inspected.contains("Caret (UTF-8 byte offset): 2"));
     assert!(inspected.contains("original context.txt"));
+    assert!(inspected.contains("Status: acceptance unknown"));
     assert!(inspected.contains(&fixture.control.session().id().to_string()));
     assert!(inspected.contains(&fixture.control.session().path().display().to_string()));
     assert_eq!(ui.recovery.list().lines().count(), 2);
@@ -80,10 +81,17 @@ async fn source_inspection_save_and_discard_preserve_exact_custody_and_fence() {
             panic!()
         };
         attachments.push(AttachmentSource::image_bytes(vec![173; 8192]));
+        attachments.push(AttachmentSource::File(
+            fixture.root.join("deleted-context.txt"),
+        ));
+        attachments.push(AttachmentSource::ImageFile(
+            fixture.root.join("deleted-image.png"),
+        ));
     }
     let inspected = ui.recovery.inspect(id).unwrap();
     assert!(inspected.contains("8192 bytes"));
     assert!(!inspected.contains("ra2tra2t"));
+    assert!(inspected.contains("path reference only; contents are not preserved"));
 
     command(
         &fixture.control,
@@ -115,13 +123,28 @@ async fn source_inspection_save_and_discard_preserve_exact_custody_and_fence() {
         fixture.control.session().id().to_string()
     );
     assert_eq!(saved["status"]["state"], "unresolved");
+    assert_eq!(
+        saved["source"]["input"]["Prompt"]["attachments"][2]["File"],
+        fixture.root.join("deleted-context.txt").to_str().unwrap()
+    );
+    assert_eq!(
+        saved["source"]["input"]["Prompt"]["attachments"][3]["ImageFile"],
+        fixture.root.join("deleted-image.png").to_str().unwrap()
+    );
 
+    let refused_command = format!("  /recovery save {id} {}", path.display());
     command(
         &fixture.control,
         &mut ui,
         &format!("save {id} {}", path.display()),
     )
     .unwrap();
+    ui.session_io.retain_source(Some(EditorDraft {
+        literal: refused_command.clone(),
+        cursor: 3,
+    }));
+    ui.session_io.blocked = true;
+    ui.session_io.refresh_error = Some("existing canonical refresh fault".into());
     let finished = ui.session_io.complete().await;
     super::super::session_io::apply(&mut fixture.control, &mut ui, finished).unwrap();
     assert_eq!(
@@ -129,12 +152,29 @@ async fn source_inspection_save_and_discard_preserve_exact_custody_and_fence() {
         bytes,
         "save must not overwrite"
     );
+    assert_eq!(
+        ui.recovery.records.len(),
+        1,
+        "an open refusal must not create an uncertain command record"
+    );
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        (refused_command.as_str(), 3)
+    );
+    assert!(ui.status.contains("Recovery backup was not saved"));
+    assert_eq!(
+        ui.session_io.refresh_error.as_deref(),
+        Some("existing canonical refresh fault")
+    );
+    assert!(!fixture.control.is_busy());
     assert!(
         ui.recovery
             .inspect(id)
             .unwrap()
             .contains("original context.txt")
     );
+    ui.editor.take_literal();
+    ui.session_io.blocked = false;
     command(&fixture.control, &mut ui, &format!("discard {id}")).unwrap();
     assert!(
         ui.recovery
@@ -157,12 +197,78 @@ async fn source_inspection_save_and_discard_preserve_exact_custody_and_fence() {
             cursor: 3,
         },
     );
-    assert!(ui.status.contains("reconcile this Session"));
+    assert!(ui.status.contains("/recovery"));
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
         ("new after discard", 3)
     );
     assert!(!fixture.control.is_busy());
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn serialization_and_missing_parent_refuse_before_creating_a_backup() {
+    use std::os::unix::ffi::OsStringExt;
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend {
+        cwd: fixture.root.clone(),
+        ..Frontend::default()
+    };
+    let id = ui.recovery.command(
+        EditorDraft::at_end("/export original.html".into()),
+        Origin::capture(fixture.control.session()),
+        "original write failed".into(),
+    );
+    for serialization_refusal in [false, true] {
+        if serialization_refusal {
+            ui.recovery.records[0].origin.path =
+                PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 0xff]));
+        }
+        let target = if serialization_refusal {
+            fixture.root.join("not-created.json")
+        } else {
+            fixture.root.join("missing-parent/backup.json")
+        };
+        let source = format!("/recovery save {id} {}", target.display());
+        command(
+            &fixture.control,
+            &mut ui,
+            &format!("save {id} {}", target.display()),
+        )
+        .unwrap();
+        ui.session_io.retain_source(Some(EditorDraft {
+            literal: source.clone(),
+            cursor: 2,
+        }));
+        let finished = ui.session_io.complete().await;
+        super::super::session_io::apply(&mut fixture.control, &mut ui, finished).unwrap();
+        assert!(!target.exists());
+        assert_eq!(ui.recovery.records.len(), 1);
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            (source.as_str(), 2)
+        );
+        assert!(ui.status.contains("Recovery backup was not saved"));
+        assert!(!fixture.control.is_busy());
+        ui.editor.take_literal();
+    }
+    // The same owned result must remain observable if quit overtakes completion.
+    command(&fixture.control, &mut ui, &format!("save {id} joined.json")).unwrap();
+    let source = format!("  /recovery save {id} joined.json");
+    ui.session_io.retain_source(Some(EditorDraft {
+        literal: source.clone(),
+        cursor: 4,
+    }));
+    let finished = ui.session_io.complete().await;
+    let mut outcome = Ok(());
+    super::super::session_io::cleanup(&mut ui, finished, &mut outcome);
+    assert!(outcome.unwrap_err().to_string().contains("was not saved"));
+    assert_eq!(ui.recovery.records.len(), 1);
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        (source.as_str(), 4)
+    );
+    assert!(!fixture.root.join("joined.json").exists());
     fixture.control.shutdown().await;
 }
 
@@ -189,7 +295,17 @@ async fn authoritative_nonacceptance_returns_only_to_original_session_and_never_
         ui.editor.draft.is_empty(),
         "must not restore into another Session"
     );
-    assert!(ui.recovery.inspect(id).unwrap().contains("not_accepted"));
+    assert!(
+        ui.recovery
+            .inspect(id)
+            .unwrap()
+            .contains("Status: not accepted")
+    );
+    assert!(
+        ui.recovery
+            .list()
+            .contains("not accepted; select original Session")
+    );
     ui.reconcile_recovery(original).unwrap();
     assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), (LITERAL, 2));
     assert_eq!(ui.editor.attachments.len(), 1);
@@ -200,6 +316,53 @@ async fn authoritative_nonacceptance_returns_only_to_original_session_and_never_
         .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
         .unwrap();
     assert_eq!(committed, 0);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn nonacceptance_does_not_steal_a_picker_or_promote_input_to_its_empty_composer() {
+    let mut fixture = Fixture::new();
+    let mut input = unresolved(&mut fixture).await;
+    let prepared = pending();
+    input.receipt = prepared.receipt();
+    let original = input.session;
+    let mut ui = Frontend::default();
+    ui.recovery
+        .input(input, Origin::capture(fixture.control.session()))
+        .unwrap();
+    ui.pickers.open(
+        crate::terminal_client::Picker::reasoning_for(
+            fixture.control.agent(),
+            ion_ai::Reasoning::default(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(
+        ui.input_target(),
+        crate::terminal_client::interaction::InputTarget::Picker
+    );
+    ui.reconcile_recovery(original).unwrap();
+    assert!(ui.recovery.blocks(original));
+    drop(prepared);
+    ui.reconcile_recovery(original).unwrap();
+    assert_eq!(
+        ui.input_target(),
+        crate::terminal_client::interaction::InputTarget::Picker
+    );
+    assert!(ui.editor.draft.is_empty());
+    assert!(ui.editor.attachments.is_empty());
+    assert_eq!(ui.editor.recovered.len(), 1);
+    let returned = &ui.editor.recovered[0];
+    assert_eq!(
+        (returned.source.literal.as_str(), returned.source.cursor),
+        (LITERAL, 2)
+    );
+    assert_eq!(returned.attachments.len(), 1);
+    assert!(ui.recovery.records.is_empty());
+    assert!(
+        !fixture.control.is_busy(),
+        "reconciliation must not submit input"
+    );
     fixture.control.shutdown().await;
 }
 
