@@ -402,6 +402,10 @@ pub(super) fn apply(
         // A read owns its original coordinates, never a lookup of the new binding.
         if let Some(source) = read.source {
             let cause = match &result {
+                Ok(ReadOutput::RecoverySaveRefused { id, path, error }) => format!(
+                    "Recovery backup {id} was refused before file creation at {} after its original Session scope changed: {error:#}",
+                    path.display()
+                ),
                 Ok(_) => {
                     "Inspection/write completed after its original Session scope changed".into()
                 }

@@ -423,6 +423,45 @@ async fn stale_file_failure_and_late_binding_error_keep_original_scope_and_cause
 }
 
 #[tokio::test]
+async fn late_backup_refusal_keeps_its_diagnostic_with_the_original_scope() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    ui.session_io
+        .start_file_write(fixture.control.session(), async {
+            Ok(ReadOutput::RecoverySaveRefused {
+                id: 1,
+                path: PathBuf::from("/original/backup.json"),
+                error: anyhow::anyhow!("backup already exists"),
+            })
+        })
+        .unwrap();
+    ui.session_io.retain_source(Some(EditorDraft::at_end(
+        "/recovery save 1 backup.json".into(),
+    )));
+    // A stale completion cannot put command text into another binding's editor.
+    ui.session_io.generation += 1;
+    let finished = ui.session_io.complete().await;
+    apply(&mut fixture.control, &mut ui, finished).unwrap();
+    let list = ui.recovery.list();
+    let id = list
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let inspection = ui.recovery.inspect(id).unwrap();
+    assert!(inspection.contains("refused before file creation"));
+    assert!(inspection.contains("backup already exists"));
+    assert!(inspection.contains("/original/backup.json"));
+    assert!(inspection.contains(&fixture.control.session().id().to_string()));
+    assert!(ui.editor.draft.is_empty());
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn file_worker_failure_keeps_unknown_source_without_overwriting_refresh_fault() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
