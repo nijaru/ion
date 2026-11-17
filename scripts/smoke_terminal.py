@@ -18,7 +18,7 @@ import termios
 import time
 from pathlib import Path
 
-from terminal_style import has_foreground, program_ready
+from terminal_style import has_foreground, painted_text, program_ready
 from smoke_terminal_recovery import qualify as exercise_interrupted_session
 from smoke_process_terminal import qualify as exercise_process_terminal
 from smoke_terminal_veto import qualify as exercise_terminal_veto
@@ -385,7 +385,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         file_query_sent = False
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
-        sent_help = sent_help_keys = sent_preparation = False
+        sent_help = sent_help_keys = sent_preparation = preparation_submitted = False
         help_start = preparation_start = 0
         preparation_requests = None
         opened_active = closed_active = False
@@ -469,11 +469,18 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"/compact\r")
                     sent_compact = True
                 if sent_compact and b"Context summarized; raw history retained" in output and not sent_preparation:
-                    preparation_start = len(output)
-                    preparation_requests = trace.read_bytes()
-                    os.write(master, b"/file missing.png\rstatus probe\r")
-                    sent_preparation = True
-                if sent_preparation and b"Prompt returned: preparation failed" in output[preparation_start:] and b"\x1b]7501;state=done:app=ion\x1b\\" in output[preparation_start:] and not sent_clone:
+                    # The summary notice can precede canonical history refresh.
+                    # Observe its completed ready paint, not the earlier notice.
+                    screen = painted_text(output)
+                    if program_ready(output) and "prompts blocked" not in screen and "Session refresh required" not in screen:
+                        preparation_start = len(output)
+                        preparation_requests = trace.read_bytes()
+                        os.write(master, b"/file missing.png\r")
+                        sent_preparation = True
+                if sent_preparation and b"1 attachment(s) attached" in output[preparation_start:] and not preparation_submitted:
+                    os.write(master, b"status probe\r")
+                    preparation_submitted = True
+                if preparation_submitted and b"Prompt returned: preparation failed" in output[preparation_start:] and b"\x1b]7501;state=done:app=ion\x1b\\" in output[preparation_start:] and not sent_clone:
                     assert trace.read_bytes() == preparation_requests, "failed preparation reached the model"
                     # Clear the recovered literal; commands remain UI-only.
                     os.write(master, b"\x03\x03")
