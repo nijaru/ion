@@ -1,7 +1,7 @@
 use super::*;
 
 #[tokio::test]
-async fn uncertain_input_commit_hands_off_exact_custody_without_claiming_rejection() {
+async fn uncertain_input_transfers_exact_custody_and_retains_its_byte_budget() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
     // A real COMMIT error, not a statement rejection. This does not simulate fsync.
@@ -12,6 +12,10 @@ async fn uncertain_input_commit_hands_off_exact_custody_without_claiming_rejecti
          BEGIN INSERT INTO commit_child(parent) VALUES (999); END;"
     ).unwrap();
     let original = "  exact original 🦀\n";
+    let probe_message = Message::user_input("p".repeat(2048), []);
+    let budget = InputBudget::new(serde_json::to_vec(&(&probe_message, &())).unwrap().len());
+    fixture.control.budget = budget.clone();
+    let probe = || budget.prepare(probe_message.clone(), (), AgentLimits::default());
     let session = fixture.control.session().id();
     let id = fixture
         .control
@@ -39,7 +43,7 @@ async fn uncertain_input_commit_hands_off_exact_custody_without_claiming_rejecti
     assert_eq!(unresolved.session, session);
     assert_eq!(unresolved.operation, settlement.operation);
     assert!(
-        matches!(unresolved.input, UserInput::Prompt { text, attachments }
+        matches!(&unresolved.input, UserInput::Prompt { text, attachments }
         if text == original && attachments.is_empty())
     );
     assert_eq!(unresolved.metadata.literal, "exact metadata");
@@ -52,6 +56,16 @@ async fn uncertain_input_commit_hands_off_exact_custody_without_claiming_rejecti
         )))
     ));
     assert!(settlement.accepted.is_empty());
+    assert_eq!(lock(&fixture.control.custody).occupied, 0);
+    assert!(
+        matches!(probe(), Err(AgentError::InputQueueFull { .. })),
+        "transferring unresolved custody must not release bytes still retained"
+    );
+    drop(unresolved);
+    assert!(
+        probe().is_ok(),
+        "dropping the source releases its byte custody"
+    );
     assert_eq!(model.calls.load(Ordering::SeqCst), 0);
     assert!(matches!(
         fixture.control.session().view(),

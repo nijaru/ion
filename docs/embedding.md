@@ -24,7 +24,7 @@ Application input uses `UserInput::Prompt { text, attachments }` and `ion_app::a
 
 Custom runtimes default to no filesystem attachment access. Explicitly set `ApplicationRuntime::allow_file_attachments` to permit file sources; in-memory sources need no filesystem permission. Core receives only prepared typed `Message` content, never source paths. The direct `prepare_attachments` helper requires absolute paths; `SessionControl` resolves relative sources against its Session.
 
-Pending sources and prepared messages share a 32 MiB encoded custody budget. A locally queued input can still be returned if preparation exceeds that budget or the model's limits. A local input ID or pending launch is not durable acceptance. Use Core input/request receipts and reliable control updates to distinguish committed, not accepted and unresolved inputs. Never automatically retry or restore an unresolved input as a fresh request.
+Pending sources and prepared messages share a 32 MiB encoded custody budget. A locally queued input can still be returned if preparation exceeds that budget or the model's limits. A local input ID or pending launch is not durable acceptance. Use Core input/request receipts and reliable control updates to distinguish committed, not accepted and unresolved inputs. Never automatically retry or restore an unresolved input as a fresh request. Transferring an `UnresolvedInput` frees its admission slot, but its byte reservation remains charged while the recipient retains the wrapper; dropping it releases local custody, not proof of rollback.
 
 ## Cancellation and resource lifetime
 

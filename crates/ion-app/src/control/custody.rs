@@ -269,7 +269,7 @@ impl<M> Custody<M> {
             receipt,
             input: pending.original,
             metadata: input.metadata.into_inner(),
-            reservation: Some(input.reservation),
+            _reservation: input.reservation,
         }));
     }
 

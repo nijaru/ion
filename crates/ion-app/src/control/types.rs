@@ -250,7 +250,9 @@ pub struct ReturnedInput<M> {
     pub(super) reservation: Option<InputReservation>,
 }
 /// Exact custody with no safe replay claim. The read-only receipt may still
-/// resolve if a retained storage leaf outlives a failed root task.
+/// resolve if a retained storage leaf outlives a failed root task. Transferring
+/// this wrapper releases its admission slot, but retains its byte reservation
+/// until the wrapper is dropped.
 pub struct UnresolvedInput<M> {
     pub session: uuid::Uuid,
     pub id: InputId,
@@ -259,7 +261,7 @@ pub struct UnresolvedInput<M> {
     pub input: UserInput,
     pub metadata: M,
     pub receipt: ion_core::InputReceipt,
-    pub(super) reservation: Option<InputReservation>,
+    pub(super) _reservation: InputReservation,
 }
 
 pub struct AcceptedMetadata<M> {
@@ -379,10 +381,9 @@ impl<M> ControlUpdate<M> {
                 input.reservation.take();
                 1
             }
-            Self::Unresolved(input) => {
-                input.reservation.take();
-                1
-            }
+            // Unknown inputs remain quarantined outside Host; transferring the
+            // result slot does not release bytes that the recipient still owns.
+            Self::Unresolved(_) => 1,
             Self::Settled(settlement) => {
                 settlement.reservation.take();
                 for input in &mut settlement.accepted {
