@@ -22,7 +22,6 @@ pub(super) enum OperationKind {
 pub(super) struct ActiveOperation {
     pub(super) kind: OperationKind,
     pub(super) stop_requested: bool,
-    pub(super) pending_follow_ups: usize,
 }
 
 impl ActiveOperation {
@@ -46,7 +45,6 @@ impl ActiveOperation {
         Some(Self {
             kind,
             stop_requested,
-            pending_follow_ups: state.pending_follow_ups,
         })
     }
 
@@ -415,7 +413,7 @@ mod tests {
                 )
                 .unwrap();
             if withdrawn {
-                assert!(fixture.control.withdraw_last_follow_up().is_some());
+                fixture.control.clear_queue();
             } else {
                 fixture.control.request_stop();
             }

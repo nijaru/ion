@@ -175,6 +175,19 @@ impl<M> Default for Custody<M> {
     }
 }
 impl<M> Custody<M> {
+    pub(super) fn queued_inputs(
+        &self,
+        active_root: Option<InputId>,
+    ) -> impl Iterator<Item = (InputId, &Input<M>, &PendingInput)> {
+        self.inputs.iter().filter_map(move |(&id, input)| {
+            let pending = input.pending()?;
+            (input.delivery != Delivery::Start
+                && active_root != Some(id)
+                && pending.withdrawn.is_none())
+            .then_some((id, input, pending))
+        })
+    }
+
     pub(super) fn push_update(&mut self, update: ControlUpdate<M>) {
         self.updates.push_back(SnapshotValue::new(update));
     }

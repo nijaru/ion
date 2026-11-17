@@ -1051,7 +1051,7 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
             EditorDraft::at_end(literal.into()),
         );
         assert!(fixture.control.state().preparing_input);
-        assert!(fixture.control.withdraw_last_follow_up().is_some());
+        interaction::recover_queued_input(&mut fixture.control, &mut ui);
         ui.insert("x @");
         ui.key(KeyEvent::new(KeyCode::Tab, Modifiers::NONE), None, None);
         assert!(ui.editor.completion.active());
@@ -1386,7 +1386,6 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
             Some(ActiveOperation {
                 kind: operation,
                 stop_requested: false,
-                pending_follow_ups: 0,
             }),
         )
         .unwrap();
@@ -1398,7 +1397,6 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
         Some(ActiveOperation {
             kind: OperationKind::Coding,
             stop_requested: true,
-            pending_follow_ups: 0,
         }),
     )
     .unwrap();

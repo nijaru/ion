@@ -41,8 +41,8 @@ actions! {
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
     Copy, "app.message.copy", COMPOSER | DETAILS, ["ctrl+x"], "Copy answer or selected tool evidence";
     ExpandTools, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Expand/collapse tool output; close raw evidence inspection";
-    FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up";
-    Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Recover queued or returned input";
+    FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up while busy; submit normally when idle";
+    Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Withdraw queued steering and follow-ups; cycle returned drafts";
     Scope, "tui.select.toggleScope", PICKER, ["tab"], "Toggle model shortlist/all routes or launch Session folder scope";
     NamedSessions, "app.session.toggleNamedFilter", PICKER, ["ctrl+n"], "Toggle named Sessions only";
     Submit, "tui.input.submit", EDIT, ["enter"], "Submit composer or custom answer";

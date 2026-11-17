@@ -58,6 +58,17 @@ pub struct ControlState {
     pub shutdown_complete: bool,
 }
 
+/// Bounded presentation of original queued input, not model-ready content or
+/// evidence of acceptance. Metadata and attachment payloads remain in custody.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct QueuedInput {
+    pub id: InputId,
+    pub delivery: Delivery,
+    pub preview: String,
+    pub truncated: bool,
+    pub attachments: usize,
+}
+
 /// Identity of the foreground work and inputs affected by a stop request.
 /// Progress and admission acknowledgement do not change this identity.
 #[derive(Clone, Debug, PartialEq, Eq)]

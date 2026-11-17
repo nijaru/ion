@@ -236,7 +236,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             program.blocked_refresh = ui.session_io.refresh_error.is_some();
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy() || ui.session_io.has_read())?;
-            let painted = draw(terminal, screen, &mut ui, ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model())).await?;
+            let queued = runtime.queued_inputs(terminal.size()?.0 as usize);
+            let painted = draw(terminal, screen, &mut ui, ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model()), &queued).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
@@ -362,24 +363,20 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         poll_control = true;
                         continue;
                     }
-                    match ui.key(
-                        key,
-                        Some(runtime.resources()),
-                        Some(runtime.commands()),
-                    ) {
+                    let action = ui.key(key, Some(runtime.resources()), Some(runtime.commands()));
+                    match interaction::resolve_editor_action(&runtime, &mut ui, action) {
                         Action::None => {},
                         Action::Quit => break,
                         Action::Submit(source) => {
-                            let delivery = interaction::editor_delivery(&runtime);
+                            let delivery = interaction::editor_delivery(&runtime, interaction::EditorIntent::Submit);
                             submit_editor(&mut runtime, &mut ui, delivery, source);
                         },
                         Action::Queue(source) => {
-                            submit_editor(&mut runtime, &mut ui, Delivery::FollowUp, source);
+                            let delivery = interaction::editor_delivery(&runtime, interaction::EditorIntent::Queue);
+                            submit_editor(&mut runtime, &mut ui, delivery, source);
                         },
                         Action::Recover => {
-                            if runtime.withdraw_last_follow_up().is_none() {
-                                ui.recover_draft();
-                            }
+                            interaction::recover_queued_input(&mut runtime, &mut ui);
                         },
                         Action::Shell { command, exclude_from_context, source } => {
                             if ui.session_io.blocks_input() {
@@ -506,7 +503,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 // choices remain fullscreen; identity chrome is not retained.
                 ui.restore_tool_expansion_viewport();
                 ui.view.follow_end();
-                draw(terminal, screen, &mut ui, None, None).await?;
+                draw(terminal, screen, &mut ui, None, None, &[]).await?;
                 release_surface(terminal, screen).await?;
             }
             Ok(())
@@ -1185,61 +1182,15 @@ impl Frontend {
             }
             Some(KeyAction::Submit) => {
                 let syntax = self.editor.draft.trim();
-                let invalid_shell = if let Some(command) = syntax.strip_prefix("!!") {
-                    command
-                        .trim()
-                        .is_empty()
-                        .then_some("Type a shell command after !!")
-                } else if let Some(command) = syntax.strip_prefix('!') {
-                    command
-                        .trim()
-                        .is_empty()
-                        .then_some("Type a shell command after !")
-                } else {
-                    None
-                };
+                let invalid_shell = interaction::submission_error(&self.editor.draft);
                 if syntax.is_empty() && self.editor.attachments.is_empty() {
                     Action::None
                 } else if let Some(status) = invalid_shell {
                     self.status = status.into();
                     Action::None
                 } else {
-                    let EditorDraft {
-                        literal: prompt,
-                        cursor,
-                    } = self.editor.take_literal();
-                    let syntax = prompt.trim();
-                    if Builtin::parse(syntax) == Some(Builtin::Quit) {
-                        Action::Quit
-                    } else if syntax.starts_with('/') {
-                        Action::Command(CommandInput::Editor(EditorDraft {
-                            literal: prompt,
-                            cursor,
-                        }))
-                    } else if let Some(command) = syntax.strip_prefix("!!") {
-                        Action::Shell {
-                            command: command.trim().to_owned(),
-                            exclude_from_context: true,
-                            source: EditorDraft {
-                                literal: prompt,
-                                cursor,
-                            },
-                        }
-                    } else if let Some(command) = syntax.strip_prefix('!') {
-                        Action::Shell {
-                            command: command.trim().to_owned(),
-                            exclude_from_context: false,
-                            source: EditorDraft {
-                                literal: prompt,
-                                cursor,
-                            },
-                        }
-                    } else {
-                        Action::Submit(EditorDraft {
-                            literal: prompt,
-                            cursor,
-                        })
-                    }
+                    let source = self.editor.take_literal();
+                    self.submit_literal(source)
                 }
             }
             Some(KeyAction::Dequeue) => Action::Recover,
@@ -1394,6 +1345,7 @@ async fn draw(
     ui: &mut Frontend,
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
+    queued: &[ion_app::QueuedInput],
 ) -> Result<bool> {
     if terminal.colors_need_refresh() {
         terminal.refresh_colors().await?;
@@ -1406,7 +1358,7 @@ async fn draw(
     let Some(geometry) = prepare_draw(terminal, screen, ui).await? else {
         return Ok(false);
     };
-    draw_prepared(terminal, screen, ui, operation, model, geometry)
+    draw_prepared(terminal, screen, ui, operation, model, queued, geometry)
 }
 
 fn draw_prepared(
@@ -1415,13 +1367,22 @@ fn draw_prepared(
     ui: &mut Frontend,
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
+    queued: &[ion_app::QueuedInput],
     (width, height, surface_reset): (u16, u16, bool),
 ) -> Result<bool> {
     if ui.input_target() == interaction::InputTarget::Details {
         return draw_modal_fullscreen(terminal, screen, ui, operation, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
-        return draw_chat_fullscreen(terminal, screen, ui, operation, model, (width, height));
+        return draw_chat_fullscreen(
+            terminal,
+            screen,
+            ui,
+            operation,
+            model,
+            queued,
+            (width, height),
+        );
     }
 
     let publication = ui.conversation.prepare_publication();
@@ -1429,7 +1390,7 @@ fn draw_prepared(
     let history_committed = !commit_rows.is_empty();
     let width = width.max(1) as usize;
     let physical_budget = height.max(1) as usize;
-    let dock = dock::Dock::prepare(ui, operation, model, width, physical_budget);
+    let dock = dock::Dock::prepare(ui, operation, model, queued, width, physical_budget);
     let mut live_rows = ui.presenter.window(
         &ui.conversation,
         &mut ui.view,
@@ -1516,17 +1477,12 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
             ui.keys.hint(KeyAction::Dequeue)
         )
     };
-    let queued = operation
-        .filter(|operation| operation.pending_follow_ups != 0)
-        .map_or_else(String::new, |operation| {
-            format!(" · {} follow-up(s) queued", operation.pending_follow_ups)
-        });
     let mut status = if idle {
-        format!("{attachment}{recovery}{queued}")
+        format!("{attachment}{recovery}")
             .trim_start_matches(" · ")
             .to_owned()
     } else {
-        format!("{notice}{attachment}{recovery}{queued}")
+        format!("{notice}{attachment}{recovery}")
     };
     if ui.session_io.has_read() && !ui.session_io.blocked {
         let pending = if ui.session_io.blocks_input() {
@@ -1602,11 +1558,12 @@ fn draw_chat_fullscreen(
     ui: &mut Frontend,
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
+    queued: &[ion_app::QueuedInput],
     (width, height): (u16, u16),
 ) -> Result<bool> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let dock = dock::Dock::prepare(ui, operation, model, width, height);
+    let dock = dock::Dock::prepare(ui, operation, model, queued, width, height);
     let content = ui.presenter.window(
         &ui.conversation,
         &mut ui.view,
@@ -1808,6 +1765,7 @@ fn painted_dock_rows(
         ui,
         operation,
         None,
+        &[],
         usize::from(width.max(1)),
         usize::from(height.max(1)),
     );

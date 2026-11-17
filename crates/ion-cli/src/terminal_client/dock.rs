@@ -11,6 +11,63 @@ use crate::presentation_style::Role;
 use crate::terminal_completion::CompletionFrame;
 use crate::terminal_input::input_window;
 
+/// A transient rendering of Host custody, never a second mutable input queue.
+fn queue_rows(
+    queued: &[ion_app::QueuedInput],
+    keys: &crate::keybindings::KeyBindings,
+    width: usize,
+    budget: usize,
+) -> Vec<String> {
+    if queued.is_empty() || budget == 0 {
+        return Vec::new();
+    }
+    let steering = queued
+        .iter()
+        .filter(|input| matches!(input.delivery, ion_app::Delivery::Steer(_)))
+        .count();
+    let mut rows = vec![crate::display_text::fit_line(
+        &format!(
+            "Queued · {steering} steering · {} follow-up(s) · {} edits all",
+            queued.len() - steering,
+            keys.hint(crate::keybindings::KeyAction::Dequeue),
+        ),
+        width,
+    )];
+    let slots = budget.saturating_sub(1);
+    let shown = if queued.len() > slots {
+        slots.saturating_sub(1)
+    } else {
+        queued.len()
+    };
+    for input in queued.iter().take(shown) {
+        let kind = match input.delivery {
+            ion_app::Delivery::Steer(_) => "Steering",
+            ion_app::Delivery::FollowUp => "Follow-up",
+            ion_app::Delivery::Start => unreachable!("Host queue excludes initial prompts"),
+        };
+        let attachments = if input.attachments == 0 {
+            String::new()
+        } else {
+            format!(" · {} attachment(s)", input.attachments)
+        };
+        rows.push(crate::display_text::fit_line(
+            &format!(
+                "{kind}: {}{}{attachments}",
+                input.preview,
+                if input.truncated { "…" } else { "" }
+            ),
+            width,
+        ));
+    }
+    if shown < queued.len() && slots > 0 {
+        rows.push(crate::display_text::fit_line(
+            &format!("… {} more queued", queued.len() - shown),
+            width,
+        ));
+    }
+    rows
+}
+
 pub(super) struct DockPaint {
     geometry: (u16, u16),
     fullscreen: bool,
@@ -97,6 +154,7 @@ impl Dock {
         ui: &mut Frontend,
         operation: Option<ActiveOperation>,
         model: Option<&ModelRef>,
+        queued: &[ion_app::QueuedInput],
         width: usize,
         height: usize,
     ) -> Self {
@@ -182,6 +240,7 @@ impl Dock {
             earlier_rows = status.len();
             crate::display_text::push_wrapped(&mut status, &value, width);
         }
+        status.extend(queue_rows(queued, &ui.keys, width, (budget / 3).max(1)));
         let status_budget = budget.saturating_sub(1);
         if status.len() > status_budget {
             // Older notices yield first. Keep the current feedback's prefix

@@ -103,7 +103,7 @@ pub async fn choose_session(
         loop {
             anyhow::ensure!(!termination.is_cancelled(), "application startup interrupted");
             program.publish(&mut terminal, false)?;
-            let painted = draw(&mut terminal, &mut screen, &mut ui, None, None).await?;
+            let painted = draw(&mut terminal, &mut screen, &mut ui, None, None, &[]).await?;
             let event = tokio::select! {
                 biased;
                 _ = termination.cancelled() => anyhow::bail!("application startup interrupted"),
@@ -269,7 +269,7 @@ async fn run(
             );
         }
         program.publish(terminal, false)?;
-        let painted = draw(terminal, screen, ui, None, None).await?;
+        let painted = draw(terminal, screen, ui, None, None, &[]).await?;
         let event = tokio::select! {
             biased;
             _ = ui.termination.cancelled() => anyhow::bail!("application startup interrupted"),

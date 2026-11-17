@@ -869,7 +869,7 @@ async fn unread_return_capacity_is_reserved_before_more_effects() {
 }
 
 #[tokio::test]
-async fn withdraw_newest_followup_preserves_older_and_running_inputs() {
+async fn queued_projection_and_clear_share_custody_without_stopping_the_running_root() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
     fixture
@@ -877,31 +877,98 @@ async fn withdraw_newest_followup_preserves_older_and_running_inputs() {
         .submit(Delivery::Start, prompt("root"), meta("root"))
         .unwrap();
     model.wait_calls(1).await;
-    fixture
+    let operation = fixture.control.current_operation().unwrap();
+    let steering = fixture
         .control
-        .submit(Delivery::FollowUp, prompt("first"), meta("first literal"))
+        .submit(
+            Delivery::Steer(operation),
+            UserInput::Prompt {
+                text: "α steering 🦀\nremaining".into(),
+                attachments: vec![crate::attachments::AttachmentSource::Text(
+                    crate::attachments::TextFile {
+                        name: "owned.txt".into(),
+                        text: "immutable literal source".into(),
+                    },
+                )],
+            },
+            meta("original steering caret/source"),
+        )
         .unwrap();
-    let last = fixture
+    let mut message = Message::user_input("follow ".into(), []);
+    message.content.push(Content::Text("up 🦀".into()));
+    let follow_up = fixture
         .control
-        .submit(Delivery::FollowUp, prompt("last"), meta("last literal"))
+        .submit(
+            Delivery::FollowUp,
+            UserInput::Message(message.clone()),
+            meta("original follow-up"),
+        )
         .unwrap();
-    assert_eq!(fixture.control.withdraw_last_follow_up(), Some(last));
-    loop {
-        if let ControlUpdate::Returned(input) = fixture.control.next().await {
-            assert_eq!(input.id, last);
-            assert_eq!(input.metadata.literal, "last literal");
-            assert!(matches!(input.reason, ReturnReason::Cleared));
-            break;
+    let queue = fixture.control.queued_inputs(3);
+    assert_eq!(
+        queue.iter().map(|item| item.id).collect::<Vec<_>>(),
+        [steering, follow_up]
+    );
+    assert_eq!(
+        (&*queue[0].preview, queue[0].truncated, queue[0].attachments),
+        ("α s", true, 1)
+    );
+    assert_eq!(
+        (&*queue[1].preview, queue[1].truncated, queue[1].attachments),
+        ("fol", true, 0)
+    );
+    assert_eq!(fixture.control.queued_inputs(0)[0].preview, "");
+    assert!(fixture.control.queued_inputs(0)[0].truncated);
+    assert_eq!(
+        fixture.control.queued_inputs(100)[1].preview,
+        "follow up 🦀"
+    );
+    let state = fixture.control.state();
+    assert_eq!((state.pending_steering, state.pending_follow_ups), (1, 1));
+    fixture.control.clear_queue();
+    assert!(fixture.control.queued_inputs(100).is_empty());
+    let mut returned = Vec::new();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while returned.len() < 2 {
+            match fixture.control.next().await {
+                ControlUpdate::Returned(input) => returned.push(input),
+                ControlUpdate::Settled(_) => panic!("clearing the queue must not stop the root"),
+                _ => {}
+            }
         }
-    }
-    model.release();
-    settle(&mut fixture.control).await;
-    model.wait_calls(2).await;
-    assert_eq!(fixture.control.withdraw_last_follow_up(), None);
+    })
+    .await
+    .unwrap();
+    returned.sort_by_key(|input| input.id);
+    assert_eq!(returned[0].id, steering);
+    assert_eq!(
+        returned[0].metadata.literal,
+        "original steering caret/source"
+    );
+    assert!(matches!(&returned[0].input,
+        UserInput::Prompt { text, attachments }
+        if text == "α steering 🦀\nremaining"
+            && matches!(&attachments[..], [crate::attachments::AttachmentSource::Text(file)]
+                if file.name == "owned.txt" && file.text == "immutable literal source")));
+    assert_eq!(returned[1].id, follow_up);
+    assert_eq!(returned[1].metadata.literal, "original follow-up");
+    assert!(matches!(&returned[1].input, UserInput::Message(original) if original == &message));
+    assert!(
+        returned
+            .iter()
+            .all(|input| matches!(input.reason, ReturnReason::Cleared))
+    );
+    assert_eq!(fixture.control.current_operation(), Some(operation));
+    assert!(!fixture.control.state().stop_requested);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
     model.release();
     let (returned, settlement) = settle(&mut fixture.control).await;
     assert!(returned.is_empty());
-    assert_eq!(settlement.accepted[0].metadata.literal, "first literal");
+    assert_eq!(settlement.accepted.len(), 1);
+    assert_eq!(settlement.accepted[0].metadata.literal, "root");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.control.session().view().unwrap().turns().len(), 1);
+    fixture.control.shutdown().await;
 }
 
 #[tokio::test]

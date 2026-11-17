@@ -23,6 +23,7 @@ from pathlib import Path
 
 from smoke_input_editor import exercise_external_editor
 from smoke_input_files import exercise_file_input
+from smoke_input_queue import exercise_queue_controls
 from terminal_style import painted_text, program_ready
 
 
@@ -77,7 +78,7 @@ class Handler(BaseHTTPRequestHandler):
                 delta = {"tool_calls": [{"index": 0, "id": name, "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
             else:
                 delta = {"content": "TASK_ACCEPTED" if prompt.startswith("TASK_PARENT_") else "TASK_FINAL_🦀"}
-        if prompt in ("WAIT_HISTORY", "WAIT_MODEL_CYCLE", "ACCEPTED_VIEW_FAULT", "WAIT_USAGE"):
+        if prompt in ("WAIT_HISTORY", "WAIT_MODEL_CYCLE", "ACCEPTED_VIEW_FAULT", "WAIT_USAGE", "WAIT_QUEUE"):
             assert release.wait(10), "fixture did not release the waiting response"
         delta = delta or {"content": "DONE_" + prompt}
         events = [
@@ -601,19 +602,22 @@ def exercise_turn_outcomes(work, base_env, endpoint):
         terminal = Terminal(cwd, env, mode, args)
         try:
             terminal.wait_ready(lambda: "smoke/model" in terminal.text())
-            terminal.send("WAIT_OUTCOME\r")
+            terminal.send("WAIT_OUTCOME")
+            terminal.send(b"\x1b[13;3u")  # Idle Alt-Enter is a normal Start.
             terminal.wait(lambda: "PROVISIONAL_OUTCOME" in terminal.text())
             terminal.send(b"\x03")
             terminal.wait_ready(lambda: "Turn 1 stopped" in terminal.text())
             release.set()
-            terminal.send("AFTER_STOP_OUTCOME\r")
+            terminal.send("AFTER_STOP_OUTCOME")
+            terminal.send(b"\x1b[13;3u")
             terminal.wait_ready(lambda: "DONE_AFTER_STOP_OUTCOME" in terminal.text())
             terminal.send("FAILED_OUTCOME\r")
             # A settled failed operation publishes state=error, not state=done.
             terminal.wait(lambda: "Turn 3 failed" in terminal.text() and "InvalidRequest" in terminal.text()
                           and b"state=error:app=ion" in terminal.output)
             terminal.paint()
-            terminal.send("AFTER_FAILURE_OUTCOME\r")
+            terminal.send("AFTER_FAILURE_OUTCOME")
+            terminal.send(b"\x1b[13;3u")
             terminal.wait_ready(lambda: "DONE_AFTER_FAILURE_OUTCOME" in terminal.text())
             terminal.finish()
             assert termios.tcgetattr(terminal.master) == terminal.original_modes
@@ -1872,6 +1876,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_slash_input(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_editor_tty(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        exercise_queue_controls(binary, work, env, requests, release)
         exercise_recovery_sources(work, env)
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
@@ -2023,7 +2028,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     pid = int((cwd / "native.pid").read_text())
                     terminal.output.clear()
                     terminal.send("QUEUED🦀\x01\r")
-                    terminal.wait(lambda: "1 follow-up(s) queued" in terminal.text())
+                    terminal.wait(lambda: "Follow-up: QUEUED" in terminal.text())
                     terminal.send("unsent")
                     if cancelled:
                         terminal.send(b"\x03\x03")

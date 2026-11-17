@@ -104,7 +104,7 @@ pub(super) async fn dispatch_command(
     let Some(kind) = kind else {
         // Only recognized commands consume slash input. Host owns resource
         // expansion; every other literal uses ordinary prompt admission.
-        let delivery = editor_delivery(runtime);
+        let delivery = editor_delivery(runtime, super::interaction::EditorIntent::Submit);
         submit_editor(
             runtime,
             ui,

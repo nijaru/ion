@@ -1389,7 +1389,7 @@ fn composer_keeps_complete_error_feedback_and_source_cursor_at_common_widths() {
         let source = ui.editor.draft.clone();
         let source_cursor = ui.editor.cursor;
         for width in [40, 80] {
-            let dock = dock::Dock::prepare(&mut ui, None, None, width, 24);
+            let dock = dock::Dock::prepare(&mut ui, None, None, &[], width, 24);
             let (row, column) = dock.cursor.expect("composer cursor remains visible");
             let feedback = dock.rows[..row - 2]
                 .iter()
@@ -1420,7 +1420,7 @@ fn composer_bounds_overflowing_feedback_without_hiding_the_caret() {
         ui.editor.cursor = ui.editor.draft.len() - '🦀'.len_utf8();
         for width in [1, 2, 8, 40] {
             for height in 1..=8 {
-                let dock = dock::Dock::prepare(&mut ui, None, None, width, height);
+                let dock = dock::Dock::prepare(&mut ui, None, None, &[], width, height);
                 assert_eq!(dock.body_rows + dock.rows.len(), height);
                 assert!(dock.rows.iter().all(|line| line.width() <= width));
                 let (row, column) = dock.cursor.expect("feedback cannot displace the caret");
@@ -1467,7 +1467,7 @@ fn picker_selection_stays_visible_beside_wrapped_query_and_status() {
         for width in [8, 12, 80] {
             for height in 2..12 {
                 let dock =
-                    dock::Dock::prepare(&mut ui, None, None, width as usize, height as usize);
+                    dock::Dock::prepare(&mut ui, None, None, &[], width as usize, height as usize);
                 let (rows, cursor) = (dock.rows, dock.cursor);
                 assert_eq!(dock.body_rows + rows.len(), height as usize);
                 assert!(rows.iter().all(|row| row.width() <= width as usize));
@@ -1516,7 +1516,8 @@ fn session_picker_detail_never_hides_the_selected_row() {
     });
     for width in [8, 12, 80] {
         for height in 2..12 {
-            let dock = dock::Dock::prepare(&mut ui, None, None, width as usize, height as usize);
+            let dock =
+                dock::Dock::prepare(&mut ui, None, None, &[], width as usize, height as usize);
             let rows = dock.rows;
             assert_eq!(dock.body_rows + rows.len(), height as usize);
             assert!(rows.iter().all(|row| row.width() <= width as usize));

@@ -1,6 +1,11 @@
 //! Queue transitions and preparation, independent of Core execution.
 use super::*;
 
+fn preview(mut text: impl Iterator<Item = char>, chars: usize) -> (String, bool) {
+    let prefix = text.by_ref().take(chars).collect();
+    (prefix, text.next().is_some())
+}
+
 impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Stop intent is retained even if Core has already completed successfully.
     pub fn request_stop(&mut self) {
@@ -64,32 +69,45 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.advance();
     }
 
-    /// Withdraw just the newest queued follow-up. A running root is never a
-    /// queue item; a preparing input returns only after its worker has joined.
-    pub fn withdraw_last_follow_up(&mut self) -> Option<InputId> {
+    /// Project the owner's unaccepted queue without copying metadata or attachment
+    /// payloads. Each original text prefix is limited to the caller's character
+    /// budget; rendering this view grants no withdrawal or replay authority.
+    pub fn queued_inputs(&self, preview_chars: usize) -> Vec<QueuedInput> {
+        self.reconcile_admissions();
+        let custody = lock(&self.custody);
         let active_root = self.active.as_ref().and_then(|active| active.root);
-        let id = {
-            let mut custody = lock(&self.custody);
-            let (&id, input) = custody.inputs.iter_mut().rev().find(|(id, input)| {
-                input.delivery == Delivery::FollowUp
-                    && input
-                        .pending()
-                        .is_some_and(|pending| pending.withdrawn.is_none())
-                    && active_root != Some(**id)
-            })?;
-            input
-                .pending_mut()
-                .expect("selected pending follow-up")
-                .withdraw(ReturnReason::Cleared);
-            id
-        };
-        if let Some((preparing, preparation)) = &self.preparing
-            && *preparing == id
-        {
-            preparation.request_stop();
-        }
-        self.advance();
-        Some(id)
+        custody
+            .queued_inputs(active_root)
+            .map(|(id, input, pending)| {
+                let (preview, truncated, attachments) = match &pending.original {
+                    UserInput::Prompt { text, attachments } => {
+                        let (preview, truncated) = preview(text.chars(), preview_chars);
+                        (preview, truncated, attachments.len())
+                    }
+                    UserInput::Message(message) => {
+                        let text = message.content.iter().filter_map(|part| match part {
+                            ion_ai::Content::Text(text) => Some(text.as_str()),
+                            _ => None,
+                        });
+                        let (preview, truncated) =
+                            preview(text.flat_map(str::chars), preview_chars);
+                        let attachments = message
+                            .content
+                            .iter()
+                            .filter(|part| matches!(part, ion_ai::Content::Image(_)))
+                            .count();
+                        (preview, truncated, attachments)
+                    }
+                };
+                QueuedInput {
+                    id,
+                    delivery: input.delivery,
+                    preview,
+                    truncated,
+                    attachments,
+                }
+            })
+            .collect()
     }
 
     pub(super) fn withdraw_inbox(&mut self, reason: ReturnReason) {

@@ -37,19 +37,101 @@ impl Frontend {
     }
 }
 
-pub(super) fn editor_delivery(runtime: &SessionControl<EditorDraft>) -> Delivery {
-    match runtime.state().operation.map(|operation| operation.kind) {
-        Some(ion_app::OperationKind::Shell | ion_app::OperationKind::Compact) => Delivery::FollowUp,
-        _ => runtime.current_operation().map_or_else(
-            || {
-                if runtime.is_busy() {
-                    Delivery::FollowUp
-                } else {
-                    Delivery::Start
-                }
-            },
-            Delivery::Steer,
-        ),
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum EditorIntent {
+    Submit,
+    Queue,
+}
+
+pub(super) fn editor_delivery(
+    runtime: &SessionControl<EditorDraft>,
+    intent: EditorIntent,
+) -> Delivery {
+    let state = runtime.state();
+    match state.operation {
+        Some(operation)
+            if intent == EditorIntent::Submit && operation.kind == ion_app::OperationKind::Turn =>
+        {
+            Delivery::Steer(operation.id)
+        }
+        Some(_) => Delivery::FollowUp,
+        None if state.busy => Delivery::FollowUp,
+        None => Delivery::Start,
+    }
+}
+
+/// Alt-Enter is ordinary submission while idle, including local command syntax.
+/// The Host's explicit FollowUp contract remains unchanged for SDK/RPC callers.
+pub(super) fn resolve_editor_action(
+    runtime: &SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    action: super::Action,
+) -> super::Action {
+    match action {
+        super::Action::Queue(source)
+            if editor_delivery(runtime, EditorIntent::Queue) == Delivery::Start =>
+        {
+            if let Some(error) = submission_error(&source.literal) {
+                ui.restore_editor(source);
+                ui.status = error.into();
+                super::Action::None
+            } else {
+                ui.submit_literal(source)
+            }
+        }
+        action => action,
+    }
+}
+
+pub(super) fn submission_error(literal: &str) -> Option<&'static str> {
+    let syntax = literal.trim();
+    if let Some(command) = syntax.strip_prefix("!!") {
+        command
+            .trim()
+            .is_empty()
+            .then_some("Type a shell command after !!")
+    } else if let Some(command) = syntax.strip_prefix('!') {
+        command
+            .trim()
+            .is_empty()
+            .then_some("Type a shell command after !")
+    } else {
+        None
+    }
+}
+
+impl Frontend {
+    pub(super) fn submit_literal(&mut self, source: EditorDraft) -> super::Action {
+        let syntax = source.literal.trim();
+        if Builtin::parse(syntax) == Some(Builtin::Quit) {
+            super::Action::Quit
+        } else if syntax.starts_with('/') {
+            super::Action::Command(super::command::CommandInput::Editor(source))
+        } else if let Some(command) = syntax.strip_prefix("!!") {
+            super::Action::Shell {
+                command: command.trim().to_owned(),
+                exclude_from_context: true,
+                source,
+            }
+        } else if let Some(command) = syntax.strip_prefix('!') {
+            super::Action::Shell {
+                command: command.trim().to_owned(),
+                exclude_from_context: false,
+                source,
+            }
+        } else {
+            super::Action::Submit(source)
+        }
+    }
+}
+
+pub(super) fn recover_queued_input(runtime: &mut SessionControl<EditorDraft>, ui: &mut Frontend) {
+    let state = runtime.state();
+    if state.pending_steering + state.pending_follow_ups == 0 {
+        ui.recover_draft();
+    } else {
+        runtime.clear_queue();
+        ui.status = "Queue withdrawal requested; committed input cannot be withdrawn".into();
     }
 }
 

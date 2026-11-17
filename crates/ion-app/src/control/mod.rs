@@ -256,13 +256,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         let active_root = self.active.as_ref().and_then(|active| active.root);
         let mut pending_steering = 0;
         let mut pending_follow_ups = 0;
-        for (&id, input) in &custody.inputs {
-            let Some(pending) = input.pending() else {
-                continue;
-            };
-            if pending.withdrawn.is_some() || active_root == Some(id) {
-                continue;
-            }
+        for (_, input, _) in custody.queued_inputs(active_root) {
             match input.delivery {
                 Delivery::Steer(_) => pending_steering += 1,
                 Delivery::FollowUp => pending_follow_ups += 1,

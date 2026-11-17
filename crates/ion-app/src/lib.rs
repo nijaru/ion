@@ -72,7 +72,7 @@ pub use control::{
     AcceptedMetadata, AdmissionFailureKind, CompletionTargetPlan, ControlObserver, ControlSnapshot,
     ControlState, ControlUpdate, Delivery, InputAcceptance, InputCustodyPhase, InputId, InputPhase,
     InputSnapshot, McpReconnectFinished, McpReconnectSnapshot, McpReconnectState, Observation,
-    OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot,
+    OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot, QueuedInput,
     RecoveryAdmission, RecoveryDecision, RecoveryFailure, RejectedBatch, RejectedInput,
     RequestAdmission, RequestDecision, RequestLaunch, RequestPlan, ReturnReason, ReturnSnapshot,
     ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt,

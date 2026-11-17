@@ -1,6 +1,107 @@
 //! Publication, not layout, makes a retained interaction actionable.
 use super::*;
 
+#[tokio::test]
+async fn editor_delivery_and_idle_queue_commands_share_normal_submission() {
+    use interaction::{EditorIntent, editor_delivery, resolve_editor_action};
+    let mut fixture = tests::Fixture::new();
+    for stopped in [false, true] {
+        if stopped {
+            fixture.control.request_stop();
+        }
+        for intent in [EditorIntent::Submit, EditorIntent::Queue] {
+            assert_eq!(editor_delivery(&fixture.control, intent), Delivery::Start);
+        }
+        let mut ui = Frontend::default();
+        ui.insert(" !printf local ");
+        ui.editor.cursor = 2;
+        let action = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None, None);
+        let action = resolve_editor_action(&fixture.control, &mut ui, action);
+        assert!(matches!(action, Action::Shell { command, source, .. }
+            if command == "printf local" && source.literal == " !printf local " && source.cursor == 2));
+        ui.insert("/help");
+        let action = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT), None, None);
+        assert!(matches!(
+            resolve_editor_action(&fixture.control, &mut ui, action),
+            Action::Command(_)
+        ));
+    }
+    fixture
+        .control
+        .compact(None, EditorDraft::at_end(String::new()))
+        .unwrap();
+    for intent in [EditorIntent::Submit, EditorIntent::Queue] {
+        assert_eq!(
+            editor_delivery(&fixture.control, intent),
+            Delivery::FollowUp
+        );
+    }
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn withdrawing_all_preserves_each_caret_attachment_owner_and_current_composer() {
+    let mut fixture = tests::Fixture::new();
+    let mut ui = Frontend::default();
+    let first = EditorDraft {
+        literal: "first 🦀".into(),
+        cursor: 2,
+    };
+    ui.editor.attachments = vec![AttachmentSource::ImageFile(fixture.root.join("first.png"))];
+    submit_editor(&mut fixture.control, &mut ui, Delivery::FollowUp, first);
+    let second = EditorDraft {
+        literal: "second 雪".into(),
+        cursor: 4,
+    };
+    ui.editor.attachments = vec![AttachmentSource::Text(ion_app::attachments::TextFile {
+        name: "second.txt".into(),
+        text: "owned second source".into(),
+    })];
+    submit_editor(&mut fixture.control, &mut ui, Delivery::FollowUp, second);
+    let queued = fixture.control.queued_inputs(80);
+    assert_eq!(queued.len(), 2);
+    let dock = Dock::prepare(&mut ui, None, None, &queued, 100, 30);
+    let rows = dock
+        .rows
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(rows.contains("Follow-up: first 🦀") && rows.contains("Follow-up: second 雪"));
+    ui.insert("current é");
+    ui.editor.cursor = 3;
+    ui.editor.attachments = vec![AttachmentSource::ImageFile(
+        fixture.root.join("current.png"),
+    )];
+    interaction::recover_queued_input(&mut fixture.control, &mut ui);
+    tests::drain(&mut fixture.control, &mut ui).await;
+    assert_eq!(ui.editor.recovered.len(), 2);
+    let mut found = std::collections::BTreeSet::new();
+    for _ in 0..3 {
+        let (cursor, attachment) = match ui.editor.draft.as_str() {
+            "first 🦀" => (2, "first.png"),
+            "second 雪" => (4, "second.txt"),
+            "current é" => (3, "current.png"),
+            other => panic!("unexpected recovered source: {other}"),
+        };
+        assert!(found.insert(ui.editor.draft.clone()));
+        assert_eq!(ui.editor.cursor, cursor);
+        match &ui.editor.attachments[..] {
+            [AttachmentSource::ImageFile(path)] => assert!(path.ends_with(attachment)),
+            [AttachmentSource::Text(file)] => {
+                assert_eq!(file.name, attachment);
+                assert_eq!(file.text, "owned second source");
+            }
+            other => panic!("wrong attachment owner: {other:?}"),
+        }
+        interaction::recover_queued_input(&mut fixture.control, &mut ui);
+    }
+    assert_eq!(found.len(), 3);
+    assert!(fixture.control.session().view().unwrap().entries.is_empty());
+    assert!(!fixture.control.is_busy());
+    fixture.control.shutdown().await;
+}
+
 #[test]
 fn interrupt_requires_confirmation_and_does_not_escalate_after_clear() {
     let mut ui = Frontend::default();
@@ -244,7 +345,7 @@ async fn escape_stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_
     assert_eq!(ui.stop_key(interrupt, Some(changed.clone())), Some(false));
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         ui.mode = mode;
-        let dock = Dock::prepare(&mut ui, None, None, 24, 2);
+        let dock = Dock::prepare(&mut ui, None, None, &[], 24, 2);
         assert!(
             dock.rows
                 .iter()
@@ -273,7 +374,7 @@ fn question_cancel_and_its_hint_use_the_same_request_and_preserve_the_composer()
     assert!(matches!(ui.question_key(escape), QuestionAction::None));
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         ui.mode = mode;
-        let dock = Dock::prepare(&mut ui, None, None, 24, 2);
+        let dock = Dock::prepare(&mut ui, None, None, &[], 24, 2);
         assert!(
             dock.rows
                 .iter()
@@ -296,7 +397,6 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
     let operation = ActiveOperation {
         kind: activity::OperationKind::Coding,
         stop_requested: false,
-        pending_follow_ups: 0,
     };
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         for status in [String::new(), "diagnostic ".repeat(128)] {
@@ -320,7 +420,7 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
                     &ion_core::AgentEvent::ToolCatalogWarning(notice),
                 );
                 for height in [2, 8] {
-                    let dock = Dock::prepare(&mut ui, Some(operation), None, 24, height);
+                    let dock = Dock::prepare(&mut ui, Some(operation), None, &[], 24, height);
                     assert!(
                         dock.rows
                             .iter()
@@ -413,7 +513,7 @@ fn held_confirmation_cannot_accept_a_painted_picker() {
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         let mut ui = selector();
         ui.mode = mode;
-        let dock = Dock::prepare(&mut ui, None, None, 80, 20);
+        let dock = Dock::prepare(&mut ui, None, None, &[], 80, 20);
         publish_to(&mut ui, dock, (80, 20), &mut Vec::new()).unwrap();
         assert!(matches!(
             ui.key(
@@ -452,10 +552,10 @@ fn held_picker_key_cannot_submit_the_underlying_draft_after_a_new_paint() {
                 ui.editor.cursor = literal.find('🦀').unwrap_or(0);
                 let cursor = ui.editor.cursor;
                 ui.attach(AttachmentSource::ImageFile("retained.png".into()));
-                let picker = Dock::prepare(&mut ui, None, None, 80, 20);
+                let picker = Dock::prepare(&mut ui, None, None, &[], 80, 20);
                 publish_to(&mut ui, picker, (80, 20), &mut Vec::new()).unwrap();
                 assert!(matches!(ui.key(confirm, None, None), Action::Pick(_)));
-                let composer = Dock::prepare(&mut ui, None, None, 80, 20);
+                let composer = Dock::prepare(&mut ui, None, None, &[], 80, 20);
                 publish_to(&mut ui, composer, (80, 20), &mut Vec::new()).unwrap();
                 for _ in 0..3 {
                     assert!(matches!(
@@ -491,36 +591,36 @@ fn held_picker_key_cannot_submit_the_underlying_draft_after_a_new_paint() {
 #[test]
 fn selector_layout_rejected_geometry_failed_write_and_stale_choice_are_inert() {
     let mut ui = selector();
-    let layout_only = Dock::prepare(&mut ui, None, None, 80, 20);
+    let layout_only = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     assert!(matches!(ui.key(enter(), None, None), Action::None));
     drop(layout_only); // Deferred inline reconciliation publishes nothing.
 
-    let rejected = Dock::prepare(&mut ui, None, None, 80, 20);
+    let rejected = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     publish_to(&mut ui, rejected, (79, 20), &mut Vec::new()).unwrap();
     assert!(matches!(ui.key(enter(), None, None), Action::None));
 
-    let failed = Dock::prepare(&mut ui, None, None, 80, 20);
+    let failed = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     assert!(publish_to(&mut ui, failed, (80, 20), &mut BrokenOutput).is_err());
     assert!(matches!(ui.key(enter(), None, None), Action::None));
 
-    let stale = Dock::prepare(&mut ui, None, None, 80, 20);
+    let stale = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     ui.key(down(), None, None);
     publish_to(&mut ui, stale, (80, 20), &mut Vec::new()).unwrap();
     assert!(matches!(ui.key(enter(), None, None), Action::None));
     assert_eq!(ui.pickers.active().unwrap().selected, 1);
 
-    let overwritten = Dock::prepare(&mut ui, None, None, 80, 20);
-    let newer = Dock::prepare(&mut ui, None, None, 80, 20);
+    let overwritten = Dock::prepare(&mut ui, None, None, &[], 80, 20);
+    let newer = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     publish_to(&mut ui, newer, (80, 20), &mut Vec::new()).unwrap();
     publish_to(&mut ui, overwritten, (80, 20), &mut Vec::new()).unwrap();
     assert!(matches!(ui.key(enter(), None, None), Action::None));
 
-    let clipped = Dock::prepare(&mut ui, None, None, 2, 2);
+    let clipped = Dock::prepare(&mut ui, None, None, &[], 2, 2);
     publish_to(&mut ui, clipped, (2, 2), &mut Vec::new()).unwrap();
     assert!(matches!(ui.key(enter(), None, None), Action::None));
     assert_eq!(ui.pickers.active().unwrap().selected, 1);
 
-    let exact = Dock::prepare(&mut ui, None, None, 80, 20);
+    let exact = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     publish_to(&mut ui, exact, (80, 20), &mut Vec::new()).unwrap();
     assert!(
         matches!(ui.key(enter(), None, None), Action::Pick(PickerValue::Login(name)) if name == "beta")
@@ -533,17 +633,17 @@ fn foreground_focus_revokes_question_paint_and_short_questions_retain_conversati
         question: Some(question()),
         ..Frontend::default()
     };
-    let layout_only = Dock::prepare(&mut ui, None, None, 80, 20);
+    let layout_only = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     assert!(matches!(
         ui.question.as_mut().unwrap().key(enter(), &ui.keys),
         QuestionAction::None
     ));
     drop(layout_only);
 
-    let stale = Dock::prepare(&mut ui, None, None, 80, 20);
+    let stale = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     ui.pickers = selector().pickers;
     assert_eq!(ui.input_target(), InputTarget::Picker);
-    let overlay = Dock::prepare(&mut ui, None, None, 80, 20);
+    let overlay = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     publish_to(&mut ui, overlay, (80, 20), &mut Vec::new()).unwrap();
     ui.pickers.close();
     publish_to(&mut ui, stale, (80, 20), &mut Vec::new()).unwrap();
@@ -552,7 +652,7 @@ fn foreground_focus_revokes_question_paint_and_short_questions_retain_conversati
         QuestionAction::None
     ));
 
-    let exact = Dock::prepare(&mut ui, None, None, 80, 20);
+    let exact = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     // A short ordinary question leaves conversation space and no composer caret.
     // Guarded cancellation controls occupy one additional physical row.
     assert_eq!(exact.rows.len(), 6);
@@ -581,7 +681,7 @@ fn hidden_question_never_paints_or_enables_composer_and_preserves_literal_draft(
     assert_eq!(ui.input_target(), InputTarget::Question);
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         ui.mode = mode;
-        let dock = Dock::prepare(&mut ui, None, None, 80, 20);
+        let dock = Dock::prepare(&mut ui, None, None, &[], 80, 20);
         assert!(dock.cursor.is_none());
         assert_eq!(dock.rows.len(), 1);
         assert!(dock.rows[0].to_string().starts_with("Question hidden"));
@@ -608,18 +708,18 @@ fn completion_layout_does_not_authorize_and_only_normal_composer_paint_publishes
     let mut ui = Frontend::default();
     ui.insert("/he");
     ui.refresh_completion(None, None, false);
-    let layout = Dock::prepare(&mut ui, None, None, 80, 20);
+    let layout = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     assert!(!ui.editor.completion.visible());
     assert!(ui.editor.completion.replacement(&ui.editor.draft).is_none());
     assert_eq!(ui.editor.editor_width, None);
     drop(layout);
-    let stale = Dock::prepare(&mut ui, None, None, 80, 20);
+    let stale = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     ui.insert("l");
     ui.refresh_completion(None, None, false);
     publish_to(&mut ui, stale, (80, 20), &mut Vec::new()).unwrap();
     assert!(!ui.editor.completion.visible());
     for width in 1..=4 {
-        let clipped = Dock::prepare(&mut ui, None, None, width, 20);
+        let clipped = Dock::prepare(&mut ui, None, None, &[], width, 20);
         publish_to(&mut ui, clipped, (width as u16, 20), &mut Vec::new()).unwrap();
         assert!(
             !ui.editor.completion.visible(),
@@ -627,7 +727,7 @@ fn completion_layout_does_not_authorize_and_only_normal_composer_paint_publishes
         );
         assert!(ui.editor.completion.replacement(&ui.editor.draft).is_none());
     }
-    let exact = Dock::prepare(&mut ui, None, None, 80, 20);
+    let exact = Dock::prepare(&mut ui, None, None, &[], 80, 20);
     publish_to(&mut ui, exact, (80, 20), &mut Vec::new()).unwrap();
     assert_eq!(ui.editor.editor_width, Some(80));
     assert!(ui.editor.completion.visible());
@@ -635,7 +735,7 @@ fn completion_layout_does_not_authorize_and_only_normal_composer_paint_publishes
     assert_eq!(ui.editor.draft, "/help ");
 
     ui.pickers = selector().pickers;
-    let query = Dock::prepare(&mut ui, None, None, 40, 20);
+    let query = Dock::prepare(&mut ui, None, None, &[], 40, 20);
     publish_to(&mut ui, query, (40, 20), &mut Vec::new()).unwrap();
     assert_eq!(ui.editor.editor_width, Some(80));
 }

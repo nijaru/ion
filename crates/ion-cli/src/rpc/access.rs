@@ -78,7 +78,7 @@ impl Control {
                     let operation = state.operation.map(|operation| match operation.kind {
                         ion_app::OperationKind::Turn => "turn", ion_app::OperationKind::Compact => "compact", ion_app::OperationKind::Shell => "shell",
                     });
-                    Ok(AccessData::Json(json!({"session":session,"cwd":status.cwd,"name":status.name,"model":model,"reasoning":status.reasoning.to_string(),"busy":state.busy,"operation":operation,"binding":state.binding,"preparing_input":state.preparing_input,"mcp_reconnect":state.mcp_reconnect,"mcp_servers":servers,"completion_delivery":state.completion_delivery,"entries":status.entries,"follow_ups":state.pending_follow_ups})))
+                    Ok(AccessData::Json(json!({"session":session,"cwd":status.cwd,"name":status.name,"model":model,"reasoning":status.reasoning.to_string(),"busy":state.busy,"operation":operation,"binding":state.binding,"preparing_input":state.preparing_input,"mcp_reconnect":state.mcp_reconnect,"mcp_servers":servers,"completion_delivery":state.completion_delivery,"entries":status.entries,"steering":state.pending_steering,"follow_ups":state.pending_follow_ups})))
                 });
             }
             "list_sessions" => {
