@@ -54,9 +54,12 @@ try {
   const second=await steer(worker,GUIDANCE);
   const queued=await tools.subagent({action:'status',id:worker});
   const invalid=[];
+  // JSON Schema counts characters; the executor also checks nonblank UTF-8 bytes.
   for (const message of ['   ','é'.repeat(40000)]) invalid.push(await steer(worker,message));
   invalid.push(await steer('00000000-0000-0000-0000-000000000000','no grant'));
-  invalid.push(await tools.subagent({action:'steer',id:worker,message:'no route grant',model:'smoke/other'}));
+  let rejected = null;
+  try { await tools.subagent({action:'steer',id:worker,message:'no route grant',model:'smoke/other'}); }
+  catch (error) { rejected = String(error); }
   const cancelledGuidance=await steer(cancel,'return cancelled guidance');
   await tools.subagent({action:'cancel',id:cancel});
   const cancelled=await wait(cancel);
@@ -70,7 +73,7 @@ try {
   await ready('DEADLINE');
   const deadlineGuidance=await steer(deadline,'return expired guidance');
   const expired=await wait(deadline);
-  return {worker,cancel,deadline,first,second,queued,invalid,cancelledGuidance,cancelled,cancelledAck,joined,settled,absent,deadlineGuidance,expired};
+  return {worker,cancel,deadline,first,second,queued,invalid,rejected,cancelledGuidance,cancelled,cancelledAck,joined,settled,absent,deadlineGuidance,expired};
 } finally {
   for (const child of ids) await tools.subagent({action:'cancel',id:child});
   for (const name of ['WORKER','CANCEL','DEADLINE']) await tools.write({path:name+'.release',content:'cleanup'});
@@ -134,7 +137,9 @@ try {
                        env=env, capture_output=True, text=True, check=True, timeout=50)
         process = run("--tools", "read,write,exec,subagent,code_mode", "--code-mode", "--json", "run", "PARENT")
         records = [json.loads(line) for line in process.stdout.splitlines()]
-        result = next(r["output"]["result"] for r in records if r["type"] == "tool_finished")
+        finished = next(record for record in records if record["type"] == "tool_finished")
+        assert not finished["is_error"] and "result" in finished["output"], records
+        result = finished["output"]["result"]
         assert "first" in result, result
         assert not failures, failures
         for name in ("first", "second", "cancelledGuidance", "deadlineGuidance"):
@@ -142,7 +147,8 @@ try {
             assert result[name]["value"]["steering"]["status"]["state"] == "queued"
         assert result["first"]["value"]["steering"]["id"] != result["second"]["value"]["steering"]["id"]
         assert all(r["status"]["state"] == "queued" for r in result["queued"]["value"]["steering"])
-        assert all(r["is_error"] for r in result["invalid"])
+        assert len(result["invalid"]) == 3 and all(r["is_error"] for r in result["invalid"]), result["invalid"]
+        assert isinstance(result["rejected"], str) and "input schema check failed" in result["rejected"], result["rejected"]
         assert result["settled"]["is_error"] and result["absent"]["is_error"]
         [joined] = result["joined"]["value"]["runs"]
         assert joined["joined"] and joined["outcome"]["answer"] == "GUIDED_ANSWER", joined
@@ -163,6 +169,28 @@ try {
         parent = next(p for p in Path(env["ION_HOME"]).rglob("*.sqlite") if p.parent.name != "children")
         with closing(sqlite3.connect(f"file:{parent}?mode=ro", uri=True)) as db:
             entries = [json.loads(r[0]) for r in db.execute("SELECT body FROM entries ORDER BY seq")]
+        request_count = len(requests)
+        assert json.loads(run("--session", str(parent), "inspect").stdout)["entries"] == entries
+        assert len(requests) == request_count, "inspection replayed model work"
+        child_results = {e["data"]["child"]: e["data"] for e in entries if e["kind"] == "child_tool_result"}
+        calls = []
+        for entry in entries:
+            if entry["kind"] == "child_tool_admitted":
+                intent = entry["data"]["intent"]
+                settled = child_results[intent["child"]]
+                assert settled["parent"] == intent["parent"], settled
+                calls.append((intent["call"]["arguments"], settled["outcome"]))
+        structural = {"action": "steer", "id": result["worker"], "message": "no route grant", "model": "smoke/other"}
+        assert [args for args, outcome in calls if outcome["state"] == "not_dispatched"] == [structural], calls
+        [refused] = [outcome for args, outcome in calls if args == structural]
+        assert refused["state"] == "not_dispatched" and "input schema check failed" in refused["reason"], refused
+        semantic = [
+            {"action": "steer", "id": result["worker"], "message": message}
+            for message in ["   ", "é" * 40000, "must not start another Turn", "acknowledged is not authority"]
+        ] + [{"action": "steer", "id": "00000000-0000-0000-0000-000000000000", "message": "no grant"}]
+        for args in semantic:
+            [outcome] = [outcome for saved, outcome in calls if saved == args]
+            assert outcome["state"] == "observed" and outcome["output"]["is_error"], outcome
         admissions = [e["data"]["record"] for e in entries if e["kind"] == "delegation_admitted"]
         assert len(admissions) == len([e for e in entries if e["kind"] == "delegation_settled"]) == 3
         for record in admissions:

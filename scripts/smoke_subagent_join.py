@@ -47,10 +47,13 @@ print(json.dumps(record))
 ''')
     code = """
 const start = args => tools.subagent({action:'start',...args});
-const invalid = [];
-for (const join_timeout_ms of [0,600001,null])
-  invalid.push(await start({task:'INVALID',join_timeout_ms}));
-invalid.push(await start({task:'INVALID',mode:'background',join_timeout_ms:10}));
+const rejected = [];
+for (const join_timeout_ms of [0,600001,null]) {
+  try { await start({task:'INVALID',join_timeout_ms}); rejected.push(null); }
+  catch (error) { rejected.push(String(error)); }
+}
+// Background plus a join budget passes the schema but fails start policy.
+const invalid = await start({task:'INVALID',mode:'background',join_timeout_ms:10});
 const fast = await start({task:'FAST'});
 const empty = await tools.subagent({action:'list'});
 const held = await start({task:'HELD',join_timeout_ms:50});
@@ -65,7 +68,7 @@ try {
   const same = await tools.subagent({action:'status',id:held.value.id});
   const ack = await tools.subagent({action:'acknowledge',id:held.value.id});
   const absent = await tools.subagent({action:'status',id:held.value.id});
-  return {invalid,fast,empty,held,ready,live,brief,guided,joined,same,ack,absent};
+  return {invalid,rejected,fast,empty,held,ready,live,brief,guided,joined,same,ack,absent};
 } finally {
   await tools.write({path:'native.release',content:'release'});
 }
@@ -135,9 +138,12 @@ try {
         process = run("--tools", "read,write,exec,subagent,code_mode", "--code-mode", "--json", "run", "PARENT")
         records = [json.loads(line) for line in process.stdout.splitlines()]
         assert not failures, failures
-        result = next(record["output"]["result"] for record in records if record["type"] == "tool_finished")
+        finished = next(record for record in records if record["type"] == "tool_finished")
+        assert not finished["is_error"] and "result" in finished["output"], records
+        result = finished["output"]["result"]
         assert "held" in result, result
-        assert all(item["is_error"] for item in result["invalid"]), result["invalid"]
+        assert result["invalid"]["is_error"] and "only to foreground" in result["invalid"]["value"]["error"], result["invalid"]
+        assert len(result["rejected"]) == 3 and all(isinstance(error, str) and "input schema check failed" in error for error in result["rejected"]), result["rejected"]
         fast, held = result["fast"]["value"], result["held"]["value"]
         assert fast["join_timeout_ms"] == 60000 and not fast["join_expired"]
         assert fast["joined"] and not fast["transferred"] and fast["outcome"]["answer"] == "FAST_ANSWER"
@@ -172,6 +178,23 @@ try {
         transferred = [entry["data"]["run"] for entry in entries if entry["kind"] == "delegation_transferred"]
         settled = {entry["data"]["run"]: entry["data"]["outcome"] for entry in entries if entry["kind"] == "delegation_settled"}
         assert len(admissions) == 2 and transferred == [held["id"]]
+        assert {path for path in Path(env["ION_HOME"]).rglob("*.sqlite") if path.parent.name == "children"} == {Path(record["path"]) for record in admissions}, admissions
+        assert "INVALID" not in requests, requests
+        child_results = {entry["data"]["child"]: entry["data"] for entry in entries if entry["kind"] == "child_tool_result"}
+        calls = []
+        for entry in entries:
+            if entry["kind"] == "child_tool_admitted":
+                intent = entry["data"]["intent"]
+                result_entry = child_results[intent["child"]]
+                assert result_entry["parent"] == intent["parent"], result_entry
+                calls.append((intent["call"]["arguments"], result_entry["outcome"]))
+        structural = [{"action": "start", "task": "INVALID", "join_timeout_ms": value} for value in [0, 600001, None]]
+        assert [args for args, outcome in calls if outcome["state"] == "not_dispatched"] == structural, calls
+        for args in structural:
+            [outcome] = [outcome for saved, outcome in calls if saved == args]
+            assert outcome["state"] == "not_dispatched" and "input schema check failed" in outcome["reason"], outcome
+        [refused] = [outcome for args, outcome in calls if args == {"action": "start", "task": "INVALID", "mode": "background", "join_timeout_ms": 10}]
+        assert refused["state"] == "observed" and refused["output"]["is_error"] and "only to foreground" in refused["output"]["value"]["error"], refused
         assert settled == {fast["id"]: fast["outcome"], held["id"]: joined["outcome"]}
         for output in (fast, held):
             with closing(sqlite3.connect(f"file:{output['path']}?mode=ro", uri=True)) as db:

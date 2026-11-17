@@ -35,18 +35,22 @@ try {
   await release('FAST');
   const first = await tools.subagent({action:'wait',ids:ids,timeout_ms:5000});
   const repeated = await tools.subagent({action:'wait',ids:[ids[1],ids[0]],timeout_ms:1});
-  const invalid = [];
+  const invalid = [await tools.subagent({action:'wait',ids:[ids[1],'00000000-0000-0000-0000-000000000000']})];
+  const rejected = [];
+  // uniqueItems, minItems and timeout bounds are registered schema constraints.
   for (const args of [
-    {ids:[ids[1],'00000000-0000-0000-0000-000000000000']},
     {ids:[ids[1],ids[1]]},{ids:[]},
     {ids:[ids[0]],timeout_ms:0},{ids:[ids[0]],timeout_ms:600001}
-  ]) invalid.push(await tools.subagent({action:'wait',...args}));
+  ]) {
+    try { await tools.subagent({action:'wait',...args}); rejected.push(null); }
+    catch (error) { rejected.push(String(error)); }
+  }
   const ack = await tools.subagent({action:'acknowledge',id:ids[1]});
   const absent = await tools.subagent({action:'wait',ids:[ids[1]],timeout_ms:1});
   await release('SLOW');
   const last = await tools.subagent({action:'wait',ids:[ids[0]]});
   const retained = await tools.subagent({action:'status',id:ids[0]});
-  return {ids,expired,first,repeated,invalid,ack,absent,last,retained};
+  return {ids,expired,first,repeated,invalid,rejected,ack,absent,last,retained};
 } finally {
   await Promise.all([release('FAST'),release('SLOW')]);
 }
@@ -114,7 +118,9 @@ try {
         process = run("--tools", "read,write,subagent,code_mode", "--code-mode", "--json", "run", "PARENT")
         records = [json.loads(line) for line in process.stdout.splitlines()]
         assert not failures, failures
-        result = next(record["output"]["result"] for record in records if record["type"] == "tool_finished")
+        finished = next(record for record in records if record["type"] == "tool_finished")
+        assert not finished["is_error"] and "result" in finished["output"], records
+        result = finished["output"]["result"]
         assert "expired" in result, result
         slow, fast = result["ids"]
         expired = result["expired"]
@@ -134,7 +140,8 @@ try {
         assert again_held["progress"]["elapsed_ms"] >= held["progress"]["elapsed_ms"]
         assert again_held == held | {"progress": held["progress"] | {
             "elapsed_ms": again_held["progress"]["elapsed_ms"]}}
-        assert all(item["is_error"] and "error" in item["value"] for item in result["invalid"])
+        assert len(result["invalid"]) == 1 and all(item["is_error"] and "error" in item["value"] for item in result["invalid"])
+        assert len(result["rejected"]) == 4 and all(isinstance(error, str) and "input schema check failed" in error for error in result["rejected"]), result["rejected"]
         assert result["ack"]["value"] == ready and not result["ack"]["is_error"]
         assert result["absent"]["is_error"], result["absent"]
         last = result["last"]
@@ -149,6 +156,32 @@ try {
         parent = next(path for path in Path(env["ION_HOME"]).rglob("*.sqlite") if path.parent.name != "children")
         with closing(sqlite3.connect(f"file:{parent}?mode=ro", uri=True)) as db:
             entries = [json.loads(row[0]) for row in db.execute("SELECT body FROM entries ORDER BY seq")]
+        assert json.loads(run("--session", str(parent), "inspect").stdout)["entries"] == entries
+        child_results = {entry["data"]["child"]: entry["data"] for entry in entries if entry["kind"] == "child_tool_result"}
+        calls = []
+        for entry in entries:
+            if entry["kind"] == "child_tool_admitted":
+                intent = entry["data"]["intent"]
+                settled = child_results[intent["child"]]
+                assert settled["parent"] == intent["parent"], settled
+                calls.append((intent["call"]["arguments"], settled["outcome"]))
+        structural = [
+            {"action": "wait", "ids": [fast, fast]},
+            {"action": "wait", "ids": []},
+            {"action": "wait", "ids": [slow], "timeout_ms": 0},
+            {"action": "wait", "ids": [slow], "timeout_ms": 600001},
+        ]
+        assert [args for args, outcome in calls if outcome["state"] == "not_dispatched"] == structural, calls
+        for args in structural:
+            [outcome] = [outcome for saved, outcome in calls if saved == args]
+            assert outcome["state"] == "not_dispatched" and "input schema check failed" in outcome["reason"], outcome
+        for args in [
+            {"action": "wait", "ids": [fast, "00000000-0000-0000-0000-000000000000"]},
+            {"action": "wait", "ids": [fast], "timeout_ms": 1},
+        ]:
+            [outcome] = [outcome for saved, outcome in calls if saved == args]
+            assert outcome["state"] == "observed" and outcome["output"]["is_error"], outcome
+        assert child_requests.count("FAST") == child_requests.count("SLOW") == 2, child_requests
         admissions = [entry["data"]["record"]["run"] for entry in entries if entry["kind"] == "delegation_admitted"]
         outcomes = [entry["data"] for entry in entries if entry["kind"] == "delegation_settled"]
         assert set(admissions) == {slow, fast} and len(outcomes) == 2, (admissions, outcomes)

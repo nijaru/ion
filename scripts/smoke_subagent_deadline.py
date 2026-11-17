@@ -67,11 +67,15 @@ else:
 const start = (task, options={}) => tools.subagent({action:'start',task,...options});
 const release = task => tools.write({path:task+'.release',content:'release'});
 try {
-  const invalid = [];
-  for (const execution_timeout_ms of [0,7200001,null])
-    invalid.push(await start('INVALID',{execution_timeout_ms}));
-  for (const startup_timeout_ms of [0,300001,null])
-    invalid.push(await start('INVALID',{startup_timeout_ms}));
+  const rejected = [];
+  for (const execution_timeout_ms of [0,7200001,null]) {
+    try { await start('INVALID',{execution_timeout_ms}); rejected.push(null); }
+    catch (error) { rejected.push(String(error)); }
+  }
+  for (const startup_timeout_ms of [0,300001,null]) {
+    try { await start('INVALID',{startup_timeout_ms}); rejected.push(null); }
+    catch (error) { rejected.push(String(error)); }
+  }
   const [expired, survivor] = await Promise.all([
     start('EXPIRE',{mode:'background',startup_timeout_ms:60000,execution_timeout_ms:3000}),
     start('SURVIVE',{mode:'background'})
@@ -105,7 +109,7 @@ try {
   const compact = value => ({...value,progress:{...value.progress,
     provisional_output:{...value.progress.provisional_output,text:'(checked separately)'}}});
   const streaming = await tools.subagent({action:'wait',ids:[stream.value.id],timeout_ms:10000});
-  return {invalid,expired,survivor,brief,first,retained,checked,survived,stopped,foreground,
+  return {rejected,expired,survivor,brief,first,retained,checked,survived,stopped,foreground,
     streaming:{is_error:streaming.is_error,value:streaming.value.runs[0]},
     live:compact(live),silent:compact(silent),preview_exact};
 } finally {
@@ -189,9 +193,11 @@ try {
         process = run("--tools", "read,write,exec,subagent,code_mode", "--code-mode", "--json", "run", "PARENT")
         records = [json.loads(line) for line in process.stdout.splitlines()]
         assert not failures, failures
-        result = next(record["output"]["result"] for record in records if record["type"] == "tool_finished")
+        finished = next(record for record in records if record["type"] == "tool_finished")
+        assert not finished["is_error"] and "result" in finished["output"], records
+        result = finished["output"]["result"]
         assert "first" in result, result
-        assert len(result["invalid"]) == 6 and all(item["is_error"] for item in result["invalid"]), result["invalid"]
+        assert len(result["rejected"]) == 6 and all(isinstance(error, str) and "input schema check failed" in error for error in result["rejected"]), result["rejected"]
         assert result["expired"]["value"]["startup_timeout_ms"] == 60000
         assert result["survivor"]["value"]["startup_timeout_ms"] == 30000
         assert result["expired"]["value"]["execution_timeout_ms"] == 3000
@@ -270,6 +276,23 @@ try {
         admissions = [entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted"]
         outcomes = {entry["data"]["run"]: entry["data"]["outcome"] for entry in entries if entry["kind"] == "delegation_settled"}
         assert len(admissions) == len(outcomes) == 5, (admissions, outcomes)
+        assert {path for path in Path(env["ION_HOME"]).rglob("*.sqlite") if path.parent.name == "children"} == {Path(record["path"]) for record in admissions}, admissions
+        assert "INVALID" not in requests and not list(workspace.glob("INVALID.*")), requests
+        child_results = {entry["data"]["child"]: entry["data"] for entry in entries if entry["kind"] == "child_tool_result"}
+        structural = []
+        for entry in entries:
+            if entry["kind"] == "child_tool_admitted":
+                intent = entry["data"]["intent"]
+                settled = child_results[intent["child"]]
+                assert settled["parent"] == intent["parent"], settled
+                if settled["outcome"]["state"] == "not_dispatched":
+                    assert "input schema check failed" in settled["outcome"]["reason"], settled
+                    structural.append(intent["call"]["arguments"])
+        assert structural == [
+            {"action": "start", "task": "INVALID", field: value}
+            for field, values in [("execution_timeout_ms", [0, 7200001, None]), ("startup_timeout_ms", [0, 300001, None])]
+            for value in values
+        ], structural
         for receipt in (timed_out, survived, cancelled, foreground, streaming):
             assert outcomes[receipt["id"]] == receipt["outcome"]
         print("coding deadlines: foreground/background native joining, independent expiry/cancellation; bounded live progress/quiet timestamps and committed/provisional reports, elapsed runtime and typed facts retained: OK")
