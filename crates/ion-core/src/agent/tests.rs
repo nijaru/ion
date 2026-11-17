@@ -1967,6 +1967,13 @@ async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() 
     );
     let text_service = Arc::new(ScriptedModelService::new([]));
     let text_agent = Agent::new(text_service.clone(), Arc::new(ImageTool), model());
+    // Admission checks only direct image content; nested tool images are still
+    // rejected by request preparation before any model call.
+    assert!(
+        text_agent
+            .validate_context(&reopened, &CancellationToken::new())
+            .is_ok()
+    );
     let error = text_agent
         .submit(
             reopened.clone(),
@@ -3276,6 +3283,229 @@ fn steering_commit_releases_host_metadata_outside_inbox_lock() {
         );
     }
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn context_image_validation_follows_cuts_selected_ancestry_and_reopen() {
+    let root = std::env::temp_dir().join(format!("ion-context-images-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("session.sqlite");
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let scripts = Arc::new(ScriptedModelService::new([]));
+    let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model());
+    let stop = CancellationToken::new();
+    assert!(agent.validate_context(&session, &stop).is_ok());
+    let image_input = Message {
+        role: Role::User,
+        content: vec![Content::Text("look".into()), Content::Image(tiny_image())],
+        provider_replay: None,
+    };
+    let (turn, _) = session
+        .begin_turn_message(image_input.clone(), model())
+        .unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("observed".into())],
+                provider_replay: Some(ion_ai::ProviderReplay::new(
+                    "test",
+                    "fixture",
+                    serde_json::json!("opaque".repeat(8_000)),
+                )),
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let image_head = session.context_position().unwrap().head_entry;
+    assert!(matches!(
+        agent.validate_context(&session, &stop),
+        Err(AgentError::ImagesUnsupported)
+    ));
+    session
+        .record_compaction(
+            image_head,
+            "observed".into(),
+            ModelExecution {
+                route: ModelRoute::direct(model(), ModelRouteReason::Auxiliary),
+                returned_model: None,
+            },
+            Usage::unknown(),
+        )
+        .unwrap();
+    let compacted_head = session.context_position().unwrap().head_entry;
+    assert!(agent.validate_context(&session, &stop).is_ok());
+    drop(session);
+    let session = Session::open(&path).unwrap();
+    assert!(agent.validate_context(&session, &stop).is_ok());
+    let (turn, _) = session.begin_turn_message(image_input, model()).unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("new observation".into())],
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let suffix_head = session.context_position().unwrap().head_entry;
+    assert!(matches!(
+        agent.validate_context(&session, &stop),
+        Err(AgentError::ImagesUnsupported)
+    ));
+    session
+        .prepare_navigation(session.context_position().unwrap(), 0)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let (turn, _) = session
+        .begin_turn("text alternative".into(), model())
+        .unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("text answer".into())],
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            false,
+        )
+        .unwrap();
+    let alternative_head = session.context_position().unwrap().head_entry;
+    for (head, has_images) in [
+        (image_head, true),
+        (alternative_head, false),
+        (compacted_head, false),
+        (suffix_head, true),
+        (image_head, true),
+    ] {
+        session
+            .prepare_navigation(session.context_position().unwrap(), head)
+            .unwrap()
+            .commit()
+            .unwrap();
+        let validation = agent.validate_context(&session, &stop);
+        if has_images {
+            assert!(matches!(validation, Err(AgentError::ImagesUnsupported)));
+        } else {
+            validation.unwrap();
+        }
+        assert_eq!(
+            session
+                .context_messages()
+                .unwrap()
+                .iter()
+                .any(|message| message
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, Content::Image(_)))),
+            has_images
+        );
+    }
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert!(matches!(
+        agent.validate_context(&reopened, &stop),
+        Err(AgentError::ImagesUnsupported)
+    ));
+    assert!(scripts.requests().is_empty());
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn context_image_validation_keeps_pinned_active_inputs_until_a_later_cut() {
+    for steering_image in [false, true] {
+        let root = std::env::temp_dir().join(format!("ion-pinned-images-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = Session::create(&path, Some(&root)).unwrap();
+        let agent = Agent::new(
+            Arc::new(ScriptedModelService::new([])),
+            Arc::new(TestTools::new(&root)),
+            model(),
+        );
+        let stop = CancellationToken::new();
+        let image_input = Message {
+            role: Role::User,
+            content: vec![Content::Text("look".into()), Content::Image(tiny_image())],
+            provider_replay: None,
+        };
+        let input = if steering_image {
+            user_text("start".into())
+        } else {
+            image_input.clone()
+        };
+        let (turn, _) = session.begin_turn_message(input, model()).unwrap();
+        if steering_image {
+            session
+                .record_steerings(turn, vec![image_input.clone()])
+                .unwrap();
+        }
+        let answer = Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("checkpoint".into())],
+            provider_replay: None,
+        };
+        session
+            .record_assistant(turn, answer.clone(), Usage::unknown(), true)
+            .unwrap();
+        session
+            .record_compaction(
+                session.entry_count().unwrap(),
+                "checkpoint".into(),
+                ModelExecution {
+                    route: ModelRoute::direct(model(), ModelRouteReason::Auxiliary),
+                    returned_model: None,
+                },
+                Usage::unknown(),
+            )
+            .unwrap();
+        assert!(session.context_messages().unwrap().contains(&image_input));
+        assert!(matches!(
+            agent.validate_context(&session, &stop),
+            Err(AgentError::ImagesUnsupported)
+        ));
+        drop(session);
+        let session = Session::open(&path).unwrap();
+        assert!(session.context_messages().unwrap().contains(&image_input));
+        assert!(matches!(
+            agent.validate_context(&session, &stop),
+            Err(AgentError::ImagesUnsupported)
+        ));
+        session
+            .record_assistant(turn, answer, Usage::unknown(), false)
+            .unwrap();
+        // Ending the Turn does not retroactively change the previous cut's pins.
+        assert!(matches!(
+            agent.validate_context(&session, &stop),
+            Err(AgentError::ImagesUnsupported)
+        ));
+        session
+            .record_compaction(
+                session.entry_count().unwrap(),
+                "finished".into(),
+                ModelExecution {
+                    route: ModelRoute::direct(model(), ModelRouteReason::Auxiliary),
+                    returned_model: None,
+                },
+                Usage::unknown(),
+            )
+            .unwrap();
+        assert!(agent.validate_context(&session, &stop).is_ok());
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert!(agent.validate_context(&reopened, &stop).is_ok());
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[test]

@@ -336,10 +336,12 @@ fn interrupted_shell_recovery_is_atomic_private_and_never_replayed() {
         assert_eq!(context.contains("interrupted-command"), !excluded);
         assert_eq!(context.contains("external effect unknown"), !excluded);
         // Settled prefix cuts cannot bisect shell intent and outcome.
-        let plan = session
+        let CompactionPlanning::Plan(plan) = session
             .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
             .unwrap()
-            .unwrap();
+        else {
+            panic!("expected a settled compaction plan");
+        };
         assert!(plan.through_entry >= 2);
         assert_eq!(
             serde_json::to_string(&plan.messages)
@@ -841,10 +843,12 @@ fn user_shell_context_choice_survives_reopen_and_compaction() {
     assert!(context.contains("suffix-observation"));
     assert!(!context.contains("external effect unknown"));
     assert!(!context.contains("private"));
-    let plan = reopened
+    let CompactionPlanning::Plan(plan) = reopened
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert!(
         serde_json::to_string(&plan.messages)
             .unwrap()
@@ -1628,10 +1632,12 @@ fn compaction_preserves_active_inputs_without_changing_the_prefix_at_turn_end() 
     session
         .record_assistant(next, checkpoint(), Usage::unknown(), true)
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     for original in [&input, &steering, &readiness] {
         assert_eq!(
             plan.messages
@@ -1731,10 +1737,12 @@ fn historical_compaction_does_not_reconstruct_new_prefix_pins() {
     );
     assert!(archive.contains(&readiness));
     let prefix = reopened.context_messages().unwrap();
-    let plan = reopened
+    let CompactionPlanning::Plan(plan) = reopened
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert!(
         plan.retained_input_bytes > 0,
         "a later cut still accounts for the original active input"
@@ -1753,25 +1761,28 @@ fn compaction_changes_only_the_model_projection_and_survives_reopen() {
             None,
             Some("Keep \"雪\" and paths\\literal\nwithout guessing"),
         ] {
-            let plan = session
+            let CompactionPlanning::Plan(plan) = session
                 .compaction_plan(instructions, 0, usize::MAX, true, u64::MAX)
                 .unwrap()
-                .unwrap();
+            else {
+                panic!("expected a settled compaction plan");
+            };
             let input = crate::summary::input(instructions, plan.messages, true).unwrap();
             let bytes = serde_json::to_vec(&input.content).unwrap().len();
-            assert_eq!(
-                session
-                    .compaction_plan(instructions, 0, bytes, true, u64::MAX)
-                    .unwrap()
-                    .unwrap()
-                    .through_entry,
-                plan.through_entry
-            );
+            let CompactionPlanning::Plan(bounded) = session
+                .compaction_plan(instructions, 0, bytes, true, u64::MAX)
+                .unwrap()
+            else {
+                panic!("expected the exact source bound to fit");
+            };
+            assert_eq!(bounded.through_entry, plan.through_entry);
             assert!(
-                session
-                    .compaction_plan(instructions, 0, bytes - 1, true, u64::MAX)
-                    .unwrap()
-                    .is_none(),
+                matches!(
+                    session
+                        .compaction_plan(instructions, 0, bytes - 1, true, u64::MAX)
+                        .unwrap(),
+                    CompactionPlanning::CannotFitBounds
+                ),
                 "the sole settled prefix must include framing exactly once, including a prior summary"
             );
         }
@@ -1795,10 +1806,12 @@ fn compaction_changes_only_the_model_projection_and_survives_reopen() {
             false,
         )
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert_eq!(plan.through_entry, 3);
     assert_eq!(plan.messages.len(), 2);
     assert_input_budget();
@@ -2680,6 +2693,110 @@ fn code_inspection_preserves_states_exact_values_and_bounded_metadata() {
 }
 
 #[test]
+fn compaction_planning_distinguishes_history_from_bounds_and_preserves_suffix_target() {
+    let (root, path) = fixture();
+    let session = Session::create(&path, Some(&root)).unwrap();
+    assert!(matches!(
+        session.compaction_plan(None, 0, 0, false, 0).unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
+    let input = Message::user_input("task".into(), []);
+    let (turn, _) = session
+        .begin_turn_message(input.clone(), test_execution().route.logical)
+        .unwrap();
+    assert!(matches!(
+        session.compaction_plan(None, 0, 0, false, 0).unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
+    let mut messages = vec![input];
+    let mut cuts = Vec::new();
+    for index in 0..5 {
+        let answer = Message {
+            role: Role::Assistant,
+            content: vec![Content::Text(format!("checkpoint {index}"))],
+            provider_replay: None,
+        };
+        session
+            .record_assistant(turn, answer.clone(), Usage::unknown(), true)
+            .unwrap();
+        messages.push(answer);
+        cuts.push(session.entry_count().unwrap());
+    }
+    let third_input = crate::summary::input(None, messages[..4].to_vec(), false).unwrap();
+    let third_bytes = serde_json::to_vec(&third_input.content).unwrap().len();
+    for (bytes, through) in [
+        (third_bytes, u64::MAX),
+        (usize::MAX, cuts[2]),
+        (third_bytes, cuts[2]),
+    ] {
+        let CompactionPlanning::Plan(plan) = session
+            .compaction_plan(None, 0, bytes, false, through)
+            .unwrap()
+        else {
+            panic!("expected the bounded prefix to fit");
+        };
+        assert_eq!(plan.through_entry, cuts[2]);
+        assert_eq!(plan.messages, messages[..4]);
+        assert!(plan.chunked, "the unbounded suffix target is the last cut");
+        assert_eq!(plan.smaller_through_entry, Some(cuts[0]));
+        assert!(plan.retained_input_bytes > 0);
+    }
+    let CompactionPlanning::Plan(plan) = session
+        .compaction_plan(None, usize::MAX, third_bytes, false, cuts[2])
+        .unwrap()
+    else {
+        panic!("expected a recent suffix to fit");
+    };
+    assert_eq!(plan.through_entry, cuts[0]);
+    assert!(!plan.chunked, "the full suffix fits after the earliest cut");
+    assert_eq!(plan.smaller_through_entry, None);
+
+    let first_input = crate::summary::input(None, messages[..2].to_vec(), false).unwrap();
+    let first_bytes = serde_json::to_vec(&first_input.content).unwrap().len();
+    for (bytes, through) in [
+        (first_bytes - 1, u64::MAX),
+        (usize::MAX, cuts[0] - 1),
+        (first_bytes - 1, cuts[0] - 1),
+    ] {
+        assert!(matches!(
+            session
+                .compaction_plan(None, 0, bytes, false, through)
+                .unwrap(),
+            CompactionPlanning::CannotFitBounds
+        ));
+    }
+    let CompactionPlanning::Plan(plan) = session
+        .compaction_plan(None, 0, first_bytes, false, cuts[0])
+        .unwrap()
+    else {
+        panic!("expected both inclusive bounds to fit exactly");
+    };
+    assert_eq!(plan.through_entry, cuts[0]);
+    assert!(plan.chunked);
+    assert_eq!(plan.smaller_through_entry, None);
+    session
+        .record_compaction(
+            cuts[4],
+            "all checkpoints".into(),
+            test_execution(),
+            Usage::unknown(),
+        )
+        .unwrap();
+    assert!(matches!(
+        session.compaction_plan(None, 0, 0, false, 0).unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert!(matches!(
+        reopened.compaction_plan(None, 0, 0, false, 0).unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn compaction_suffix_budget_does_not_charge_opaque_replay() {
     let (root, path) = fixture();
     let session = Session::create(&path, Some(&root)).unwrap();
@@ -2706,10 +2823,12 @@ fn compaction_suffix_budget_does_not_charge_opaque_replay() {
             )
             .unwrap();
     }
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 1_000, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     let summarized = plan.messages.len();
     session
         .record_compaction(
@@ -2778,12 +2897,12 @@ fn compaction_never_cuts_between_parallel_tool_results() {
             },
         )
         .unwrap();
-    assert!(
+    assert!(matches!(
         session
             .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
-            .unwrap()
-            .is_none()
-    );
+            .unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
     session
         .record_tool_result(
             turn,
@@ -2796,22 +2915,15 @@ fn compaction_never_cuts_between_parallel_tool_results() {
             },
         )
         .unwrap();
-    assert_eq!(
-        session
-            .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+    for keep_bytes in [0, 1000] {
+        let CompactionPlanning::Plan(plan) = session
+            .compaction_plan(None, keep_bytes, usize::MAX, true, u64::MAX)
             .unwrap()
-            .unwrap()
-            .through_entry,
-        4
-    );
-    assert_eq!(
-        session
-            .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
-            .unwrap()
-            .unwrap()
-            .through_entry,
-        4
-    );
+        else {
+            panic!("expected a settled compaction plan");
+        };
+        assert_eq!(plan.through_entry, 4);
+    }
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }
@@ -2872,18 +2984,22 @@ fn idle_compaction_folds_settled_tool_batches_without_repeating_prefixes() {
     session
         .end_turn(turn, TurnEndReason::Cancelled, &BTreeSet::new())
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert_eq!(plan.messages.len(), 5);
     let next = session.clone_to(root.join("next.sqlite")).unwrap();
     next.begin_turn("new task".into(), test_execution().route.logical)
         .unwrap();
-    let next_plan = next
+    let CompactionPlanning::Plan(next_plan) = next
         .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert_eq!(next_plan.through_entry, plan.through_entry);
     next.record_compaction(
         next_plan.through_entry,
@@ -2904,23 +3020,23 @@ fn idle_compaction_folds_settled_tool_batches_without_repeating_prefixes() {
             Usage::unknown(),
         )
         .unwrap();
-    assert!(
+    assert!(matches!(
         session
             .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
-            .unwrap()
-            .is_none()
-    );
+            .unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
     let context = session.context_messages().unwrap();
     assert_eq!(context.len(), 1);
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert_eq!(reopened.context_messages().unwrap(), context);
-    assert!(
+    assert!(matches!(
         reopened
             .compaction_plan(None, 1, usize::MAX, false, u64::MAX)
-            .unwrap()
-            .is_none()
-    );
+            .unwrap(),
+        CompactionPlanning::NothingToCompact
+    ));
     drop(reopened);
     fs::remove_dir_all(root).unwrap();
 }
@@ -2978,20 +3094,24 @@ fn compaction_keeps_oversized_recent_tool_batch_when_older_cut_exists() {
             },
         )
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert_eq!(plan.through_entry, 3);
     assert_eq!(plan.messages.len(), 2);
     let steering = Message::user_input("Use the original read; do not repeat it".into(), []);
     session
         .record_steerings(current_turn, vec![steering.clone()])
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert_eq!(plan.through_entry, 3);
     session
         .record_inputs(
@@ -3005,10 +3125,12 @@ fn compaction_keeps_oversized_recent_tool_batch_when_older_cut_exists() {
         )
         .unwrap();
     let readiness = session.context_messages().unwrap().pop().unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 1000, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     assert_eq!(plan.through_entry, 3);
     session
         .record_compaction(
@@ -3064,24 +3186,22 @@ fn completed_text_response_is_a_compaction_boundary_during_steering() {
             }],
         )
         .unwrap();
-    assert_eq!(
-        session
-            .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
-            .unwrap()
-            .unwrap()
-            .through_entry,
-        2
-    );
+    let CompactionPlanning::Plan(plan) = session
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+        .unwrap()
+    else {
+        panic!("expected a settled compaction plan");
+    };
+    assert_eq!(plan.through_entry, 2);
     drop(session);
     let reopened = Session::open(&path).unwrap();
-    assert_eq!(
-        reopened
-            .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
-            .unwrap()
-            .unwrap()
-            .through_entry,
-        2
-    );
+    let CompactionPlanning::Plan(plan) = reopened
+        .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
+        .unwrap()
+    else {
+        panic!("expected a settled compaction plan");
+    };
+    assert_eq!(plan.through_entry, 2);
     drop(reopened);
     fs::remove_dir_all(root).unwrap();
 }

@@ -227,6 +227,12 @@ impl SessionView {
     }
 }
 
+pub(crate) enum CompactionPlanning {
+    NothingToCompact,
+    CannotFitBounds,
+    Plan(CompactionPlan),
+}
+
 pub(crate) struct CompactionPlan {
     pub through_entry: u64,
     pub messages: Vec<Message>,

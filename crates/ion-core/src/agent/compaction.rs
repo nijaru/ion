@@ -10,7 +10,7 @@ use tokio_util::sync::CancellationToken;
 use super::{Agent, AgentError, AgentEvent, contained_observer, observation_result};
 use crate::{
     generation::{GeneratedResponse, OutputObservation, generate_with_retry},
-    session::Session,
+    session::{CompactionPlanning, Session},
 };
 
 impl Agent {
@@ -107,28 +107,18 @@ impl Agent {
             let limits = self.limits;
             let planned = io
                 .run_with(move |session| {
-                    let Some(plan) = session.compaction_plan(
+                    let plan = match session.compaction_plan(
                         focus.as_deref(),
                         keep_bytes,
                         limits.max_request_bytes,
                         limits.image_input,
                         max_through_entry,
-                    )?
-                    else {
-                        return if session
-                            .compaction_plan(
-                                focus.as_deref(),
-                                keep_bytes,
-                                usize::MAX,
-                                limits.image_input,
-                                u64::MAX,
-                            )?
-                            .is_some()
-                        {
-                            Err(AgentError::ContextTooLarge)
-                        } else {
-                            Ok(None)
-                        };
+                    )? {
+                        CompactionPlanning::Plan(plan) => plan,
+                        CompactionPlanning::NothingToCompact => return Ok(None),
+                        CompactionPlanning::CannotFitBounds => {
+                            return Err(AgentError::ContextTooLarge);
+                        }
                     };
                     Ok(Some((plan, session.reasoning()?)))
                 })

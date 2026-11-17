@@ -547,14 +547,7 @@ impl Agent {
             return Err(AgentError::Cancelled);
         }
         self.validate_reasoning(session.reasoning()?)?;
-        if !self.limits.image_input
-            && session.context_messages()?.iter().any(|message| {
-                message
-                    .content
-                    .iter()
-                    .any(|part| matches!(part, Content::Image(_)))
-            })
-        {
+        if !self.limits.image_input && session.context_has_images()? {
             return Err(AgentError::ImagesUnsupported);
         }
         Ok(())

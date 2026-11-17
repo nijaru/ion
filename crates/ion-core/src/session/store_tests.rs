@@ -64,6 +64,7 @@ fn assert_fenced(session: &Arc<Session>, reference: &ArtifactRef) {
     assert_faulted(session.view());
     assert_faulted(session.status());
     assert_faulted(session.context_messages());
+    assert_faulted(session.context_has_images());
     assert_faulted(session.model_context());
     assert_faulted(session.model_preference());
     assert_faulted(session.reasoning());

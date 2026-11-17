@@ -5,7 +5,10 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use super::{HistoryError, Session};
-use crate::{ForkPoint, SessionEntry, ToolOutcome, ToolResultProjection, ToolSettlement};
+use crate::{
+    ForkPoint, SessionEntry, ToolOutcome, ToolResultProjection, ToolSettlement,
+    session::CompactionPlanning,
+};
 
 fn fixture() -> (PathBuf, PathBuf) {
     let root = std::env::temp_dir().join(format!("ion-history-{}", uuid::Uuid::now_v7()));
@@ -120,10 +123,12 @@ fn history_can_retrieve_a_completed_background_result_after_reopen() {
         )
         .unwrap();
     let entry = session.entry_count().unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     session
         .record_compaction(
             plan.through_entry,
@@ -353,10 +358,12 @@ async fn image_retrieval_restores_a_compacted_user_attachment_to_the_model() {
             false,
         )
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     session
         .record_compaction(
             plan.through_entry,
@@ -875,10 +882,12 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
             false,
         )
         .unwrap();
-    let plan = session
+    let CompactionPlanning::Plan(plan) = session
         .compaction_plan(None, 0, usize::MAX, true, u64::MAX)
         .unwrap()
-        .unwrap();
+    else {
+        panic!("expected a settled compaction plan");
+    };
     session
         .record_compaction(
             plan.through_entry,
