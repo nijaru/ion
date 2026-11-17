@@ -153,6 +153,12 @@ impl Start {
                 } else {
                     inherited_application
                 };
+                // Starting a coding task is execution, not passive binding.
+                // Refuse unavailable credentials before allocating/linking a child;
+                // Core still rechecks at input admission and HTTP dispatch.
+                application
+                    .selected
+                    .require_access(application.coding.host.credentials())?;
                 check_stop(&stop)?;
                 let target = if let Some(path) = self.resume {
                     DelegationTarget::resume(parent_cwd.join(path))?

@@ -46,11 +46,13 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
         {"model": "restricted/no-thinking"},
         {"model": "review/reviewer", "endpoint": "http://127.0.0.1:1"},
     ]
-    current, requests, failures, retargeted = {}, [], [], set()
+    current, requests, failures, retargeted, unexpected_connections = {}, [], [], set(), []
 
     def run(*arguments):
-        return subprocess.run([BINARY, "--cwd", workspace, *arguments], env=env,
-                              check=True, capture_output=True, text=True, timeout=20)
+        result = subprocess.run([BINARY, "--cwd", workspace, *arguments], env=env,
+                                capture_output=True, text=True, timeout=20)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        return result
 
     def configure(provider, model, endpoint, token, wire="chat-completions", output=256):
         subprocess.run([BINARY, "use", provider, model, "--endpoint", endpoint, "--wire", wire,
@@ -62,6 +64,10 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                                 "function": {"name": name, "arguments": json.dumps(arguments)}}]}
 
     class Provider(BaseHTTPRequestHandler):
+        def do_CONNECT(self):
+            unexpected_connections.append(self.path)
+            self.send_error(502, "external provider connections are forbidden in this fixture")
+
         def do_POST(self):
             try:
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -146,6 +152,8 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     endpoint = f"http://127.0.0.1:{server.server_port}"
+    env.update(HTTPS_PROXY=endpoint, HTTP_PROXY=endpoint, ALL_PROXY=endpoint,
+               NO_PROXY="127.0.0.1,localhost")
     try:
         for name, arguments, model, effort in cases + [
             (f"refusal_{index}", arguments, "parent", "high") for index, arguments in enumerate(refusals)
@@ -166,6 +174,7 @@ with tempfile.TemporaryDirectory(prefix="ion-subagent-routing-") as temporary:
                 options += ["--session", str(parent), "--code-mode"]
             records = [json.loads(line) for line in run(*options, "--json", "run", "PARENT_" + name).stdout.splitlines()]
             assert not failures, failures
+            assert not unexpected_connections, unexpected_connections
             final = next(record for record in records if record["type"] == "final")
             assert final["text"] == ("EXPECTED_REFUSAL" if refused else "PARENT_OK"), final
             allocated = set(Path(env["ION_HOME"]).rglob("*.sqlite")) - before
