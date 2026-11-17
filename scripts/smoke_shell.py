@@ -97,7 +97,7 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
         pid = int((workspace / "render.pid").read_text())
         os.write(input_master, b"Do not run another command." + (b"\x1b[13;3u" if coding else b"\r"))
         queued = bytearray()
-        while b"1 follow-up(s) queued" not in queued:
+        while b"Follow-up: Do not run another command." not in queued:
             assert time.monotonic() < deadline, "follow-up was not admitted to the client queue"
             if select.select([output_master], [], [], 0.05)[0]:
                 queued.extend(os.read(output_master, 65536))

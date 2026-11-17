@@ -16,7 +16,7 @@ use anyhow::{Context, Result};
 use ion_ai::{Content, ModelRef};
 use ion_app::attachments::AttachmentSource;
 
-use ion_app::{CredentialStore, Delivery, QuestionResponder, Resources};
+use ion_app::{CredentialStore, QuestionResponder, Resources};
 #[cfg(test)]
 use ion_core::Session;
 use ion_core::{LiveTranscript, SessionEntry, SessionView, TranscriptItem, TurnEndReason};

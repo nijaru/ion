@@ -3,7 +3,9 @@
 use super::activity::OperationKind;
 use super::*;
 use ion_ai::ModelRef;
-use ion_app::{ControlUpdate, Host, OperationOutcome, SavedSelection, SessionControl, Wire};
+use ion_app::{
+    ControlUpdate, Delivery, Host, OperationOutcome, SavedSelection, SessionControl, Wire,
+};
 use std::sync::Arc;
 
 #[test]

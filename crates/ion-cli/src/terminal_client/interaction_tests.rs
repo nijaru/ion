@@ -1,5 +1,6 @@
 //! Publication, not layout, makes a retained interaction actionable.
 use super::*;
+use ion_app::Delivery;
 
 #[tokio::test]
 async fn editor_delivery_and_idle_queue_commands_share_normal_submission() {
