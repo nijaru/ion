@@ -26,6 +26,12 @@ Custom runtimes default to no filesystem attachment access. Explicitly set `Appl
 
 Pending sources and prepared messages share a 32 MiB encoded custody budget. A locally queued input can still be returned if preparation exceeds that budget or the model's limits. A local input ID or pending launch is not durable acceptance. Use Core input/request receipts and reliable control updates to distinguish committed, not accepted and unresolved inputs. Never automatically retry or restore an unresolved input as a fresh request. Transferring an `UnresolvedInput` frees its admission slot, but its byte reservation remains charged while the recipient retains the wrapper; dropping it releases local custody, not proof of rollback.
 
+## Model access
+
+`Host::agent` constructs a model/tool binding without requiring credentials to be present. Core calls `ModelService::validate_access` before admitting a new user Turn or explicit Turn recovery. Failure leaves a new Turn's input unaccepted; an already-committed keyed request can still be reconciled without current access. Passive context reports do not check credentials.
+
+Anonymous and synthetic services may use the default access preflight. Forwarding services must delegate it. HTTP routes that require credentials reject a missing key both during preflight and at dispatch. Dispatch resolves credentials again: preflight is not an atomic grant, and logout or revocation can prevent a later request. Credentials are never Session facts.
+
 ## Cancellation and resource lifetime
 
 Core execution APIs treat a caller's cancellation token as a parent scope. Cancelling it stops all operations beneath it. Stopping or dropping one `Operation` stops only that operation and its descendants, not the parent or sibling Sessions. Dropping an operation handle requests stop but does not join it. Retain and await the handle, or join through Session shutdown, before releasing host resources its work uses.

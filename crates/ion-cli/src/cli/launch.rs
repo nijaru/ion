@@ -23,7 +23,7 @@ impl LaunchInput {
         Ok(())
     }
 
-    pub(super) fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.operands.is_empty() && self.literal_prompts.is_empty()
     }
 

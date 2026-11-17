@@ -534,7 +534,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     .context("coding requires a working directory")?,
                 None => cwd.as_path(),
             };
-            let previous = existing.as_ref().and_then(|view| view.last_model.clone());
+            let previous = existing.as_ref().and_then(|view| view.last_model.as_ref());
             let interactive_setup = matches!(action, Action::Chat { .. })
                 && io::stdin().is_terminal()
                 && io::stdout().is_terminal();
@@ -542,9 +542,17 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Some(pattern) => {
                     models.resolve_pattern(&pattern.text, pattern.provider.as_deref(), credentials)
                 }
-                None => models.choose(None, previous, credentials),
+                None => models.choose(None, previous.cloned(), credentials),
             };
-            let selected = if interactive_setup {
+            // Browsing an already-selected conversation is not model access.
+            // Explicit new inputs or a different model retain startup preflight.
+            let passive_reopen = interactive_setup
+                && cli.image.is_empty()
+                && matches!(&action, Action::Chat { input } if input.is_empty())
+                && previous.is_some_and(|previous| selection.as_ref().is_ok_and(|selected| {
+                    selected.provider == previous.provider && selected.model == previous.model
+                }));
+            let selected = if interactive_setup && !passive_reopen {
                 let selected = match selection {
                     Ok(selected) => Some(selected),
                     Err(error) if error.is::<ion_app::ModelSelectionRequired>() => None,
@@ -562,7 +570,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 selection?
             };
             ensure!(!stop.is_cancelled(), "application startup interrupted");
-            selected.require_access(credentials)?;
+            if !passive_reopen {
+                selected.require_access(credentials)?;
+            }
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut sources = cli
                 .image

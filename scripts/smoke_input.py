@@ -274,6 +274,100 @@ def exercise_recovery_sources(work, env):
         print(f"Ion {mode} uncertain custody inspect/save/discard/no replay: OK", flush=True)
 
 
+def exercise_saved_model_access(work, base_env, endpoint):
+    """Saved model identity permits browsing, not unauthenticated execution."""
+    def available_after_refusal(terminal):
+        # The last operation remains an error even after a successful local
+        # model change. That resting marker is not an active admission fence.
+        output = terminal.lifecycle_output
+        marker = output[output.rfind(b"\x1b]7501;"):]
+        frame = painted_text(output)
+        return (re.match(rb"\x1b\]7501;state=(idle|done|error):[^\x1b]*\x1b\\", marker) is not None
+                and "prompts blocked" not in frame and "Session refresh required" not in frame)
+
+    for mode in ("inline", "fullscreen"):
+        cwd = work / (mode + "-saved-access")
+        cwd.mkdir()
+        home = cwd / "ion"
+        env = dict(base_env, HOME=str(cwd / "home"), ION_HOME=str(home),
+                   XDG_CONFIG_HOME=str(cwd / "config"), XDG_STATE_HOME=str(cwd / "state"),
+                   HTTPS_PROXY=endpoint, HTTP_PROXY=endpoint, ALL_PROXY=endpoint,
+                   NO_PROXY="127.0.0.1,localhost")
+        subprocess.run([binary, "use", "access-fixture", "browse-fixture", "--endpoint", endpoint,
+                        "--wire", "chat-completions"], env=env, capture_output=True, check=True)
+        subprocess.run([binary, "--cwd", cwd, "run", "BROWSE_SEED_" + mode], env=env,
+                       capture_output=True, check=True)
+        database, = home.rglob("*.sqlite")
+
+        def snapshot():
+            return json.loads(subprocess.run([binary, "--session", database, "inspect"], env=env,
+                                             capture_output=True, check=True).stdout)
+
+        # Select a catalog identity locally, without calling the real provider.
+        terminal = Terminal(cwd, dict(env, OPENAI_API_KEY="DISPOSABLE_NOT_SENT"), mode,
+                            ["--cwd", cwd, "--session", database, "--tui-mode", mode])
+        try:
+            terminal.wait_ready(lambda: "access-fixture/browse-fixture" in terminal.text())
+            terminal.send("/model openai/gpt-5.4-mini\r")
+            terminal.wait_ready(lambda: "Selected openai/gpt-5.4-mini" in terminal.text())
+            terminal.finish()
+        finally:
+            terminal.close()
+        saved = snapshot()
+        assert saved["last_model"] == {"provider": "openai", "model": "gpt-5.4-mini"}, saved["last_model"]
+        defaults = (home / "models.json").read_bytes()
+        before = len(requests)
+        variants = (["--session", database], ["--continue"],
+                    ["--session", database, "--provider", "openai", "--model", "gpt-5.4-mini"])
+        for index, selector in enumerate(variants):
+            terminal = Terminal(cwd, env, mode, ["--cwd", cwd, "--tui-mode", mode, *selector])
+            try:
+                terminal.wait(lambda: "openai API key:" in terminal.text() or
+                              ("openai/gpt-5.4-mini" in terminal.text() and "›" in terminal.text()))
+                assert "API key:" not in terminal.text(), "passive saved-model reopen solicited a key"
+                terminal.wait_ready(lambda: "›" in terminal.text())
+                terminal.send("/recovery\r")
+                terminal.wait(lambda: "No local recovery records" in terminal.text())
+                assert snapshot()["entries"] == saved["entries"], "browsing changed durable history"
+                if index < len(variants) - 1:
+                    terminal.finish()
+                    continue
+                # Unattended callers retain their startup preflight guarantees.
+                paths = set(home.rglob("*.sqlite"))
+                for args in (["--provider", "openai", "--model", "gpt-5.4-mini", "run", "NEVER_COMMIT"],
+                             ["--session", database, "compact"], ["--session", database, "rpc"]):
+                    refused = subprocess.run([binary, "--cwd", cwd, *args], env=env, capture_output=True)
+                    assert refused.returncode == 1 and b"no openai credential" in refused.stderr
+                assert set(home.rglob("*.sqlite")) == paths
+                attachment = cwd / "notes café.txt"
+                attachment.write_text("not sent without credentials\n")
+                terminal.send("/file " + json.dumps(str(attachment), ensure_ascii=False) + "\r")
+                terminal.wait(lambda: "1 attachment(s) attached" in terminal.text())
+                literal = "  unsent café🦀\nkeep"
+                terminal.send(b"\x1b[200~" + literal.encode() + b"\x1b[201~" + b"\x1b[D" * 4 + b"\r")
+                terminal.wait(lambda: "Prompt returned: not durably accepted" in terminal.text()
+                              and available_after_refusal(terminal))
+                terminal.send("X")
+                terminal.wait(lambda: "Xkeep" in painted_text(terminal.lifecycle_output))
+                assert "1 attachment(s)" in painted_text(terminal.lifecycle_output), "refusal lost attachments"
+                assert snapshot()["entries"] == saved["entries"], "missing-key input started a Turn"
+                assert len(requests) == before and not unexpected_connections, "missing key caused provider traffic"
+                terminal.send(b"\x03\x03/model access-fixture/browse-fixture\r")
+                terminal.wait(lambda: "Selected access-fixture/browse-fixture" in terminal.text()
+                              and available_after_refusal(terminal))
+                repaired = "EXPLICIT_ACCESS_REPAIR_" + mode
+                terminal.send(repaired + "\r")
+                terminal.wait_ready(lambda: "DONE_" + repaired in terminal.text())
+                terminal.finish()
+                assert len(requests) == before + 1 and user_text(requests[-1]) == repaired
+            finally:
+                terminal.close()
+        assert (home / "models.json").read_bytes() == defaults
+        assert not list((home / "credentials").glob("*.key")) and not unexpected_connections
+        requests.clear()
+        print(f"Saved model {mode}: keyless passive reopen, exact refusal, explicit repair and headless preflight: OK", flush=True)
+
+
 def exercise_editor_tty(work, base_env, endpoint):
     for mode in ("inline", "fullscreen"):
         sandbox = work / f"editor-tty-{mode}"
@@ -1509,8 +1603,8 @@ def exercise_resume(work, base_env, endpoint):
         assert set(home.rglob("*.sqlite")) == paths
 
         # Persist a native model choice with a disposable environment credential,
-        # but never call that provider. Its later repair is Session-local, not
-        # fresh-launch default onboarding, even after cancelling the key reader.
+        # but never call that provider. Reopening is passive; explicit model
+        # repair, including cancelled key entry, stays Session-local.
         target_path, = [path for path in paths if json.loads(subprocess.run(
             [binary, "--session", path, "inspect"], env=env, capture_output=True,
             check=True).stdout)["cwd"] == str(b.resolve())]
@@ -1527,14 +1621,16 @@ def exercise_resume(work, base_env, endpoint):
         try:
             terminal.wait(lambda: selected(terminal))
             terminal.send(b"\r")
+            terminal.wait_ready(lambda: "openai/gpt-5.4-mini" in painted_text(terminal.lifecycle_output)
+                                and "reasoning default" in painted_text(terminal.lifecycle_output)
+                                and "prompts blocked" not in painted_text(terminal.lifecycle_output))
+            assert "API key:" not in terminal.text(), "Session browsing solicited a credential"
+            terminal.send("/model openai/gpt-5.4-mini\r")
             terminal.wait(lambda: "openai API key:" in terminal.text())
             terminal.send(b"\x03")
-            terminal.wait(lambda: "choose a model to retry" in terminal.text())
-            terminal.send("resume-saved/saved-model")
-            terminal.paint()
-            terminal.output.clear()
-            terminal.send(b"\r")
-            terminal.wait_ready(lambda: "resume-saved/saved-model" in terminal.text())
+            terminal.wait_ready(lambda: "read login credential" in terminal.text())
+            terminal.send(b"\x03\x03/model resume-saved/saved-model\r")
+            terminal.wait_ready(lambda: "Selected resume-saved/saved-model" in terminal.text())
             terminal.finish()
         finally:
             terminal.close()
@@ -1565,7 +1661,11 @@ def exercise_resume(work, base_env, endpoint):
                 [binary, "--session", path, "inspect"], env=env, capture_output=True,
                 check=True).stdout)["cwd"] == str(cwd.resolve())]
             backup = path.with_suffix(".held")
-            terminal = Terminal(cwd, env, mode, ["--resume", "--tui-mode", mode])
+            args = ["--resume", "--tui-mode", mode]
+            if stage == "key setup":
+                # An explicit different model still requires startup access.
+                args += ["--provider", "openai", "--model", "gpt-5.4"]
+            terminal = Terminal(cwd, env, mode, args)
             try:
                 terminal.wait(lambda: re.search(r"› [0-9a-f]{8}-[0-9a-f]{3}  " + ("BETA_NAMED  " if prompt == "RESUME_BETA" else "") + prompt, terminal.text()))
                 if stage == "key setup":
@@ -1713,8 +1813,9 @@ def exercise_onboarding(work, base_env, endpoint):
         finally:
             terminal.close()
 
-        # A known model with a missing credential goes directly to masked entry,
-        # even when reopening a Session. Cancellation does not modify its facts.
+        # An empty Session without a saved model still needs startup setup.
+        # A known default with a missing key goes directly to masked entry.
+        assert json.loads(inspection.stdout)["last_model"] is None
         subprocess.run([binary, "logout", "openai"], env=env, capture_output=True, check=True)
         before = sessions[0].read_bytes()
         terminal = Terminal(cwd, env, mode, ["--session", sessions[0], "--tui-mode", mode])
@@ -1767,6 +1868,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
     thread.start()
     try:
         exercise_onboarding(work, env, f"http://127.0.0.1:{server.server_port}/v1")
+        exercise_saved_model_access(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_slash_input(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_editor_tty(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)

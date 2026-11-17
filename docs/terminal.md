@@ -4,6 +4,10 @@ Run `ion` in a terminal, or explicitly use `ion chat`, after [configuring a mode
 
 `/help` lists commands, `/help COMMAND` shows usage and `/help keys` shows effective keybindings. The keys below are defaults.
 
+Reopening a Session with a saved, available model and no launch input shows its history even if that provider's key is missing. Ion keeps the saved model rather than switching providers. A new prompt without the required credential returns its draft and attachments without starting a Turn; use `/login` or explicitly select another model. First-run setup, launch inputs and explicit changes to another model still use startup credential checks.
+
+Opening chat still loads configured application resources and MCP connections. Use `ion --session ID inspect` for credential-free, read-only inspection without that setup.
+
 ## Input and orientation
 
 Use `/file PATH` to attach a UTF-8 text file or image to the next input. An unquoted path can include spaces; a JSON-quoted path is also accepted, matching completion. Ion does not evaluate shell expressions or attach files merely mentioned in prose. See [saved input and attachments](sessions.md#saved-input-and-attachments) for path expansion and CLI input syntax.
