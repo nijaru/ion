@@ -8,12 +8,20 @@ Ion is one reusable Rust agent engine with a complete coding application, not
 a coding-only kernel or multiple loops. Pi, including Pi Durable, is the primary
 reference family for runtime, context, tools and Session semantics. Target the
 Pi capabilities that matter in actual use, not every upstream package. User
-interaction should be Pi-like; visual presentation should be fx-like. Consult
-other relevant sources for specific questions. Model useful semantics and
-ownership idiomatically in Rust, not upstream classes or parallel runtimes.
+interaction should be Pi-like; visual presentation should be fx-like. Use
+Codex and other relevant primary sources for specific mechanisms, not competing
+product roadmaps. Model useful semantics and ownership idiomatically in Rust,
+not upstream classes or parallel runtimes.
 The model chooses the coding actions; inspect/edit/test is not a hard-coded
 runtime loop. Reuse working code; remove obsolete abstractions through all real
 callers. The current TUI is not accepted for daily use. No autonomous pull requests.
+
+Before behavior-changing implementation or review, read
+[ion-reference-implementation](.agents/skills/ion-reference-implementation/SKILL.md).
+Establish the reference lifecycle and intended Ion differences before choosing
+abstractions; complete shared-contract changes through their real callers.
+Existing code, green fixtures and feature counts do not establish reference
+conformance. Mechanical edits do not require a reference audit.
 
 Maintainer-private design, execution plan and source evidence may be available
 through the owner's knowledge repository. Consult them when accessible under
