@@ -199,6 +199,10 @@ async fn optional_failure_does_not_multiply_generation_retries_or_accounting() {
     // alone does not establish readable output or forbid bounded retry.
     struct UsageBeforeError(Arc<ScriptedModelService>);
     impl ModelService for UsageBeforeError {
+        fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+            self.0.validate_access()
+        }
+
         fn stream<'a>(
             &'a self,
             request: ModelRequest,

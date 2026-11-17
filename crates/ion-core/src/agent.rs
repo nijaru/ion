@@ -317,6 +317,7 @@ impl Agent {
             });
         }
         let admission = async {
+            self.preflight_access(&stop).await?;
             let io = session.io()?;
             // The Root may start before the admission worker joins. Its storage
             // lane must not overlap the worker's retained operation.
@@ -477,6 +478,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        self.preflight_access(&stop).await?;
         let io = session.io()?;
         let agent = self.clone();
         let admission_stop = stop.clone();
@@ -526,6 +528,14 @@ impl Agent {
             .await?;
         self.run_admitted(io, start, instructions, stop, steering, observe)
             .await
+    }
+
+    async fn preflight_access(&self, stop: &CancellationToken) -> Result<(), AgentError> {
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => Err(AgentError::Cancelled),
+            result = self.service.validate_access() => result.map_err(AgentError::from),
+        }
     }
 
     fn validate_submission(

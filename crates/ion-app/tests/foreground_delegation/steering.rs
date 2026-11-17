@@ -14,6 +14,10 @@ struct HeldContinuation {
     release: Notify,
 }
 impl ion_ai::ModelService for HeldContinuation {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ion_ai::ProviderError>> {
+        self.model.validate_access()
+    }
+
     fn context_encoding_overhead(
         &self,
         request: &ion_ai::ModelRequest,

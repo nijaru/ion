@@ -75,6 +75,10 @@ impl FixtureService {
     }
 }
 impl ion_ai::ModelService for FixtureService {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ion_ai::ProviderError>> {
+        ion_ai::ModelService::validate_access(&self.inner)
+    }
+
     fn stream<'a>(
         &'a self,
         request: ion_ai::ModelRequest,

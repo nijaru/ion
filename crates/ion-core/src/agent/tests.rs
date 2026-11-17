@@ -629,6 +629,10 @@ async fn unfinished_cache_refresh_retains_usage_when_tool_finishes_or_stop_joins
         cancel: bool,
     }
     impl ModelService for WarmStream {
+        fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+            self.inner.validate_access()
+        }
+
         fn context_encoding_overhead(
             &self,
             request: &ModelRequest,
@@ -742,6 +746,10 @@ struct DelayedInitialResponse {
 }
 
 impl ModelService for DelayedInitialResponse {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        self.inner.validate_access()
+    }
+
     fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
         self.inner.context_encoding_overhead(request)
     }
@@ -3628,6 +3636,10 @@ async fn steering_is_recorded_before_the_next_model_step_in_one_turn() {
 
 struct ReasoningScripts(Arc<ScriptedModelService>);
 impl ModelService for ReasoningScripts {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        self.0.validate_access()
+    }
+
     fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
         self.0.context_encoding_overhead(request)
     }
@@ -4765,6 +4777,10 @@ async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
         steering: Arc<SteeringInbox>,
     }
     impl ModelService for SteerDuringSummary {
+        fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+            self.service.validate_access()
+        }
+
         fn context_encoding_overhead(
             &self,
             request: &ModelRequest,

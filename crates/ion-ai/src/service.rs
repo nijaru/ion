@@ -13,6 +13,14 @@ pub type ModelStream =
     Pin<Box<dyn Stream<Item = Result<ModelStreamEvent, ProviderError>> + Send + 'static>>;
 
 pub trait ModelService: Send + Sync {
+    /// Check current model access before durable admission. This may resolve
+    /// credentials but must not issue generation or model transport. The caller
+    /// owns cancellation by dropping the future. This is not an atomic grant:
+    /// adapters must recheck access at dispatch. Forwarding services must delegate.
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Pure route preflight: no credentials, transport or generation. Implementations
     /// accepting explicit reasoning must validate it with their wire compiler.
     /// Acceptance describes adapter support, not remote entitlement or reliability.

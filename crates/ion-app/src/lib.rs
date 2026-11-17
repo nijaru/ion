@@ -209,18 +209,22 @@ impl Host {
 
     /// Bind a selected HTTP route to a complete caller-owned tool set. This
     /// adds no native tools, instructions, filesystem input or composition VM.
+    /// Binding does not grant model access: credentials are checked at admission
+    /// and dispatch, leaving passive Session inspection available without a key.
     pub fn agent(&self, selected: &Selection, tools: Arc<ToolSet>) -> Result<Arc<Agent>> {
-        selected.require_access(&self.credentials)?;
         let resolver = self
             .credentials
             .resolver(&selected.provider, selected.api_key_env.as_deref())?;
-        let service = Arc::new(HttpModelService::new_with_capabilities(
-            &selected.endpoint,
-            selected.wire,
-            resolver,
-            selected.capabilities,
-            selected.context_window_tokens,
-        )?);
+        let service = Arc::new(
+            HttpModelService::new_with_capabilities(
+                &selected.endpoint,
+                selected.wire,
+                resolver,
+                selected.capabilities,
+                selected.context_window_tokens,
+            )?
+            .with_required_credential(selected.requires_key),
+        );
         Ok(Arc::new(
             Agent::with_tool_set(service, tools, selected.identity()).with_limits(AgentLimits {
                 max_output_tokens: selected.max_output_tokens,
@@ -373,6 +377,64 @@ mod tests {
         assert_eq!(commands.iter().next().unwrap().origin, CommandOrigin::User);
         assert!(commands.diagnostics().is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn required_route_binds_without_credentials_and_reports_context_without_access() {
+        let root = std::env::temp_dir().join(format!("ion-passive-model-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let host = Host::new(root.join("config"), root.join("state"));
+        let selected = Selection {
+            provider: format!("passive-{}", uuid::Uuid::now_v7()),
+            model: "fixture".into(),
+            endpoint: "http://127.0.0.1:1/v1/chat/completions".into(),
+            wire: HttpWire::ChatCompletions,
+            api_key_env: None,
+            max_output_tokens: 1024,
+            context_window_tokens: Some(32_000),
+            requires_key: true,
+            image_input: false,
+            capabilities: catalog::ModelCapabilities::conservative(),
+        };
+        let tools = Arc::new(ToolSet::new([]));
+        let agent = host.agent(&selected, tools.clone()).unwrap();
+        let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+        let before = session.view().unwrap().entries;
+        agent.context_report(&session, "inspect only").unwrap();
+        assert_eq!(session.view().unwrap().entries, before);
+        assert!(
+            host.agent(
+                &Selection {
+                    endpoint: "file:///tmp/model".into(),
+                    ..selected.clone()
+                },
+                tools.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            host.agent(
+                &Selection {
+                    provider: "invalid/provider".into(),
+                    ..selected.clone()
+                },
+                tools.clone()
+            )
+            .is_err()
+        );
+        assert!(
+            host.agent(
+                &Selection {
+                    api_key_env: Some(String::new()),
+                    ..selected
+                },
+                tools
+            )
+            .is_err()
+        );
+        session.shutdown().await.unwrap();
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

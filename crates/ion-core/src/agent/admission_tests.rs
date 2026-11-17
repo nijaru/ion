@@ -12,6 +12,9 @@ use std::{
     time::Duration,
 };
 
+#[path = "access_tests.rs"]
+mod access;
+
 struct SendOnlyMetadata {
     _cell: Cell<()>,
 }
@@ -47,6 +50,10 @@ impl PreflightService {
 }
 
 impl ModelService for PreflightService {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        self.scripts.validate_access()
+    }
+
     fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
         self.scripts.context_encoding_overhead(request)
     }

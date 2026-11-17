@@ -81,6 +81,7 @@ impl Agent {
         F: FnMut(AgentEvent) + Send + 'static,
     {
         let stop = stop.child_token();
+        self.preflight_access(&stop).await?;
         let io = session.io()?;
         let turn_io = session.io()?;
         let agent = self.clone();

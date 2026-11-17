@@ -105,6 +105,7 @@ pub struct HttpModelService {
     endpoint: Url,
     wire: HttpWire,
     credentials: Arc<dyn CredentialResolver>,
+    requires_key: bool,
     capabilities: ModelCapabilities,
     context_window_tokens: Option<u32>,
 }
@@ -186,10 +187,63 @@ impl HttpModelService {
             endpoint,
             wire,
             credentials,
+            requires_key: false,
             capabilities,
             context_window_tokens,
         })
     }
+
+    /// Require a credential for this selected route. Constructors otherwise allow
+    /// anonymous custom endpoints; wire format alone does not imply access policy.
+    pub fn with_required_credential(mut self, required: bool) -> Self {
+        self.requires_key = required;
+        self
+    }
+
+    async fn credential_header(&self) -> Result<Option<HeaderValue>, ProviderError> {
+        // The caller owns lookup cancellation by dropping this future. No lookup
+        // or provider request is spawned into an independent task.
+        let key = self
+            .credentials
+            .resolve(CancellationToken::new())
+            .await
+            .map_err(|_| {
+                error(
+                    ProviderErrorKind::Authentication,
+                    "credential resolution failed",
+                )
+            })?;
+        let Some(key) = key else {
+            return if self.requires_key {
+                Err(error(
+                    ProviderErrorKind::Authentication,
+                    "provider credential required",
+                ))
+            } else {
+                Ok(None)
+            };
+        };
+        if key.is_empty() || key.chars().any(char::is_control) {
+            return Err(error(
+                ProviderErrorKind::Authentication,
+                "invalid provider credential",
+            ));
+        }
+        let text = if self.wire == HttpWire::AnthropicMessages {
+            key
+        } else {
+            format!("Bearer {key}")
+        };
+        let mut header = HeaderValue::from_str(&text).map_err(|_| {
+            error(
+                ProviderErrorKind::Authentication,
+                "invalid provider credential",
+            )
+        })?;
+        header.set_sensitive(true);
+        Ok(Some(header))
+    }
+
     fn native_anthropic(&self) -> bool {
         self.wire == HttpWire::AnthropicMessages
             && self.endpoint.host_str() == Some("api.anthropic.com")
@@ -214,6 +268,10 @@ fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
 }
 
 impl ModelService for HttpModelService {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        Box::pin(async { self.credential_header().await.map(|_| ()) })
+    }
+
     fn validate_controls(
         &self,
         model: &ion_ai::ModelRef,
@@ -260,42 +318,13 @@ impl ModelService for HttpModelService {
                 }
                 _ => Decoder::Chat(ChatState::new(self.wire)),
             };
-            // Dropping this future drops credential lookup. The caller owns cancellation;
-            // no provider request is spawned into an independent task.
-            let key = self
-                .credentials
-                .resolve(CancellationToken::new())
-                .await
-                .map_err(|_| {
-                    error(
-                        ProviderErrorKind::Authentication,
-                        "credential resolution failed",
-                    )
-                })?;
+            let credential = self.credential_header().await?;
             let mut post = self
                 .client
                 .post(self.endpoint.clone())
                 .header("accept", "text/event-stream")
                 .json(&body);
-            if let Some(key) = key {
-                if key.is_empty() {
-                    return Err(error(
-                        ProviderErrorKind::Authentication,
-                        "invalid provider credential",
-                    ));
-                }
-                let header_text = if self.wire == HttpWire::AnthropicMessages {
-                    key
-                } else {
-                    format!("Bearer {key}")
-                };
-                let mut header = HeaderValue::from_str(&header_text).map_err(|_| {
-                    error(
-                        ProviderErrorKind::Authentication,
-                        "invalid provider credential",
-                    )
-                })?;
-                header.set_sensitive(true);
+            if let Some(header) = credential {
                 post = if self.wire == HttpWire::AnthropicMessages {
                     post.header("x-api-key", header)
                 } else {

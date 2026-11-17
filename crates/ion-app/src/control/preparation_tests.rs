@@ -56,6 +56,92 @@ fn assert_file_snapshot(input: &UserInput, root: &std::path::Path) {
 }
 
 #[tokio::test]
+async fn missing_model_access_returns_exact_draft_caret_and_prepared_attachments() {
+    #[derive(Serialize)]
+    struct Editor {
+        draft: String,
+        caret: usize,
+    }
+    let model = Model::new(1);
+    let mut fixture = Fixture::<Editor>::with_metadata(model.clone(), true);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let selected = crate::Selection {
+        provider: format!("custody-access-{}", uuid::Uuid::now_v7()),
+        endpoint: format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        ),
+        requires_key: true,
+        ..fixture.selected.clone()
+    };
+    fixture.control.setup.runtime.agent = fixture
+        .host
+        .agent(&selected, Arc::new(ToolSet::new([])))
+        .unwrap();
+    let original = file_image_prompt(&fixture.root).await;
+    let expected = serde_json::to_value(&original).unwrap();
+    let before = fixture.control.session().view().unwrap().entries;
+    let id = fixture
+        .control
+        .submit(
+            Delivery::Start,
+            original,
+            Editor {
+                draft: "  exact editor 雪\n".into(),
+                caret: 9,
+            },
+        )
+        .unwrap();
+    let (returned, settlement) = tokio::time::timeout(Duration::from_secs(5), async {
+        let mut returned = None;
+        loop {
+            match fixture.control.next().await {
+                ControlUpdate::Returned(input) => {
+                    assert!(returned.is_none());
+                    returned = Some(input);
+                }
+                ControlUpdate::Settled(settlement) => break (returned.unwrap(), settlement),
+                ControlUpdate::Accepted { .. }
+                | ControlUpdate::Activity(_)
+                | ControlUpdate::Unresolved(_) => {
+                    panic!("access failure must not admit or generate")
+                }
+                ControlUpdate::Idle => panic!("expected access rejection"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(returned.id, id);
+    assert_eq!(returned.metadata.draft, "  exact editor 雪\n");
+    assert_eq!(returned.metadata.caret, 9);
+    assert!(matches!(returned.reason, ReturnReason::NotAccepted));
+    assert_eq!(serde_json::to_value(&returned.input).unwrap(), expected);
+    assert_file_snapshot(&returned.input, &fixture.root);
+    assert!(settlement.accepted.is_empty());
+    assert!(matches!(
+        settlement.outcome,
+        OperationOutcome::Turn(Err(AgentError::Provider(ProviderError {
+            kind: ion_ai::ProviderErrorKind::Authentication,
+            ..
+        })))
+    ));
+    assert_eq!(fixture.control.session().view().unwrap().entries, before);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
+    assert!(
+        matches!(fixture.control.next().await, ControlUpdate::Idle),
+        "returned drafts must not autosubmit"
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), listener.accept())
+            .await
+            .is_err()
+    );
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn local_files_use_session_cwd_and_text_only_batches_fail_atomically() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);

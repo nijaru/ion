@@ -19,6 +19,10 @@ impl AdmissionModel {
     }
 }
 impl ModelService for AdmissionModel {
+    fn validate_access(&self) -> BoxFuture<'_, Result<(), ProviderError>> {
+        self.model.validate_access()
+    }
+
     fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
         self.model.context_encoding_overhead(request)
     }
