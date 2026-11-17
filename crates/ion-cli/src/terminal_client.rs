@@ -48,6 +48,7 @@ mod orientation;
 pub(crate) mod paint;
 mod picker;
 mod question;
+mod recovery;
 mod resource_commands;
 mod session_io;
 mod session_search;
@@ -150,15 +151,9 @@ struct Frontend {
     view: block_presenter::ConversationView,
     editor: Editor,
     gestures: gestures::Gestures,
-    // Not editor drafts: no automatic restore or replay before reconciliation.
-    unresolved_inputs: Vec<ion_app::UnresolvedInput<EditorDraft>>,
+    recovery: recovery::Recovery,
     status: String,
     session_io: session_io::SessionIo,
-    uncertain_commands: Vec<EditorDraft>,
-    existing_requests: Vec<(ion_core::RequestReceipt, EditorDraft)>,
-    rejected_requests: Vec<ion_app::RejectedInput<EditorDraft>>,
-    unresolved_requests: Vec<ion_app::UnresolvedRequest<EditorDraft>>,
-    unresolved_recoveries: Vec<ion_app::RecoveryFailure<EditorDraft>>,
     pickers: Pickers,
     details: Option<DetailView>,
     clipboard_job: Option<ClipboardJob>,
@@ -229,6 +224,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         theme_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
+            ui.reconcile_recovery(runtime.session().id())?;
             if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, ui.conversation.revision()) {
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }

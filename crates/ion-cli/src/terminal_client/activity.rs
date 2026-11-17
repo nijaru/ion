@@ -103,56 +103,11 @@ pub(super) fn apply(
         ControlUpdate::BindingFinished(finished) => {
             super::session_io::binding_finished(ui, control, finished)?
         }
-        ControlUpdate::RequestAdmission(decision) => match decision.result {
-            Ok(ion_app::RequestAdmission::Started { .. }) => {
-                ui.status = "Request durably accepted".into();
-                ui.session_io.request_refresh();
-            }
-            Ok(ion_app::RequestAdmission::Existing { receipt, metadata }) => {
-                ui.note(format!("Request already exists in Session {}; not replayed. Original attempt retained separately: {}", receipt.session, metadata.literal));
-                ui.existing_requests.push((receipt, metadata));
-                ui.session_io.request_refresh();
-            }
-            Ok(ion_app::RequestAdmission::Unresolved(input)) => {
-                ui.status = "Request admission unknown; inspect before retrying".into();
-                ui.note(format!("Request admission unresolved in Session {}; original retained separately, not restored: {}", input.session, input.metadata.literal));
-                ui.unresolved_requests.push(input);
-                ui.session_io.request_refresh();
-            }
-            Err(rejected) => {
-                let rejected = *rejected;
-                ui.status = format!("Request was not accepted: {:#}", rejected.reason);
-                if let UserInput::Prompt { attachments, .. } = rejected.input {
-                    ui.return_draft(rejected.metadata, attachments);
-                } else {
-                    // A prepared SDK Message is not an editor draft. Keep the
-                    // entire input, including media, rather than reconstruct it.
-                    ui.note(format!(
-                        "Prepared request was not accepted; original retained separately: {}",
-                        rejected.metadata.literal
-                    ));
-                    ui.rejected_requests.push(rejected);
-                }
-            }
-        },
-        ControlUpdate::RecoveryAdmission(decision) => match decision.result {
-            Ok(_) => {
-                ui.status = "Continuation admitted; no input replayed".into();
-                ui.session_io.request_refresh();
-            }
-            Err(failure) => {
-                ui.status = format!(
-                    "Continuation admission {:?}: {:#}",
-                    failure.kind, failure.reason
-                );
-                if failure.kind == ion_app::AdmissionFailureKind::NotAccepted {
-                    ui.return_command_source(failure.metadata);
-                } else {
-                    ui.note(format!("Continuation outcome unknown; original retained separately, not restored: {}", failure.metadata.literal));
-                    ui.unresolved_recoveries.push(failure);
-                }
-            }
-        },
+        ControlUpdate::RequestAdmission(_) | ControlUpdate::RecoveryAdmission(_) => {
+            // Native input never invokes keyed SDK request/recovery admission.
+            // Propagate through chat's common shutdown boundary to join custody.
+            anyhow::bail!("native frontend received an unexpected SDK admission update");
+        }
         ControlUpdate::McpReconnectFinished(finished) => {
             match finished.result {
                 Ok(report) => {
@@ -272,9 +227,10 @@ pub(super) fn apply(
             ui.note(format!("{kind} returned: {reason}{fault}. {retention}; {} additional draft(s) · {} cycles without resubmitting", ui.editor.recovered.len(), ui.keys.hint(crate::keybindings::KeyAction::Dequeue)));
         }
         ControlUpdate::Unresolved(input) => {
-            ui.status = "Input commit unresolved; inspect Session before retrying".into();
-            ui.note(format!("Input commit is unresolved in Session {}. Original retained separately, not restored for retry:\n{}", input.session, input.metadata.literal));
-            ui.unresolved_inputs.push(input);
+            let id = ui
+                .recovery
+                .input(input, super::recovery::Origin::capture(control.session()))?;
+            ui.status = format!("Input commit unresolved · /recovery {id} · not replayed");
         }
         ControlUpdate::Settled(mut settlement) => {
             ui.discard_provisional();
@@ -374,6 +330,67 @@ mod tests {
     use std::sync::Arc;
 
     #[tokio::test]
+    async fn sdk_only_admission_updates_are_invariants_followed_by_owned_shutdown() {
+        for recovery in [false, true] {
+            let mut fixture = super::super::tests::Fixture::new();
+            let mut ui = Frontend::default();
+            if recovery {
+                fixture
+                    .control
+                    .launch_recovery(
+                        ion_core::RecoveryPoint {
+                            session: uuid::Uuid::now_v7(),
+                            turn: 1,
+                            checkpoint: 1,
+                        },
+                        EditorDraft::at_end("SDK continuation".into()),
+                    )
+                    .unwrap();
+            } else {
+                // Reject before dispatch; this invariant test performs no network I/O.
+                rusqlite::Connection::open(fixture.control.session().path()).unwrap()
+                    .execute_batch("CREATE TRIGGER no_request BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'fixture rejection'); END;").unwrap();
+                let plan = fixture
+                    .control
+                    .prepare_request(
+                        ion_core::RequestKey::new("fixture".into(), "once".into()).unwrap(),
+                        ion_ai::Message::user_input("literal SDK input".into(), []),
+                    )
+                    .await
+                    .unwrap();
+                fixture
+                    .control
+                    .launch_request(plan, EditorDraft::at_end("SDK request".into()))
+                    .unwrap();
+            }
+            let error = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    let update = fixture.control.next().await;
+                    if matches!(
+                        update,
+                        ControlUpdate::RequestAdmission(_) | ControlUpdate::RecoveryAdmission(_)
+                    ) {
+                        break apply(&mut ui, &fixture.control, update).unwrap_err();
+                    }
+                    apply(&mut ui, &fixture.control, update).unwrap();
+                }
+            })
+            .await
+            .unwrap();
+            assert!(error.to_string().contains("unexpected SDK admission"));
+            let mut outcome = Err(error);
+            fixture.control.request_shutdown();
+            let report = fixture.control.shutdown().await;
+            for update in report.updates {
+                cleanup_update(&mut ui, &fixture.control, update, &mut outcome);
+            }
+            assert!(!fixture.control.is_busy());
+            assert!(report.cleanup_errors.is_empty());
+            assert!(outcome.is_err());
+        }
+    }
+
+    #[tokio::test]
     async fn uncertain_input_is_retained_separately_and_never_restored_or_resent() {
         let mut fixture = super::super::tests::Fixture::new();
         rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
@@ -408,8 +425,8 @@ mod tests {
         .unwrap();
         assert!(ui.editor.draft.is_empty());
         assert!(ui.editor.recovered.is_empty());
-        assert_eq!(ui.unresolved_inputs.len(), 1);
-        assert_eq!(ui.unresolved_inputs[0].metadata.literal, literal);
+        assert!(ui.recovery.blocks(fixture.control.session().id()));
+        assert_eq!(ui.recovery.list().lines().count(), 2);
         super::super::interaction::submit_editor(
             &mut fixture.control,
             &mut ui,
@@ -418,7 +435,7 @@ mod tests {
         );
         assert_eq!(ui.editor.draft, "do not send");
         assert!(ui.status.contains("reconcile this Session"));
-        assert_eq!(ui.unresolved_inputs.len(), 1);
+        assert_eq!(ui.recovery.list().lines().count(), 2);
         fixture.control.shutdown().await;
     }
 

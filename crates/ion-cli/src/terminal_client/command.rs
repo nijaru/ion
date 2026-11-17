@@ -20,7 +20,7 @@ use ion_app::attachments::AttachmentSource;
 
 /// Completion spells quoted paths as JSON, not shell words. An unquoted tail
 /// remains one literal path, including spaces; only its home prefix is expanded.
-fn attachment_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
+pub(super) fn attachment_path(args: &str, cwd: &Path, home: Option<&Path>) -> Result<PathBuf> {
     let path = if args.starts_with('"') {
         Cow::Owned(serde_json::from_str::<String>(args).context("invalid quoted attachment path")?)
     } else {
@@ -99,6 +99,7 @@ pub(super) async fn dispatch_command(
     interrupt: &mut tokio::signal::unix::Signal,
     input: CommandInput,
 ) -> Result<()> {
+    ui.reconcile_recovery(runtime.session().id())?;
     let ParsedCommand { kind, args } = input.parsed();
     let Some(kind) = kind else {
         // Only recognized commands consume slash input. Host owns resource
@@ -116,7 +117,12 @@ pub(super) async fn dispatch_command(
         && !matches!(
             kind,
             CommandKind::Builtin(
-                Builtin::Help | Builtin::Tui | Builtin::Settings | Builtin::Copy | Builtin::Tasks
+                Builtin::Help
+                    | Builtin::Tui
+                    | Builtin::Settings
+                    | Builtin::Copy
+                    | Builtin::Tasks
+                    | Builtin::Recovery
             )
         )
     {
@@ -318,6 +324,7 @@ pub(super) async fn dispatch_command(
                             | Builtin::Reload
                             | Builtin::Session
                             | Builtin::Export
+                            | Builtin::Recovery
                             | Builtin::New
                             | Builtin::Clone
                             | Builtin::Tree
@@ -488,26 +495,15 @@ pub(super) fn handle_builtin(
                 )))
             })?;
         }
+        Builtin::Recovery => super::recovery::command(runtime, ui, args)?,
         Builtin::Export => {
             let requested = if args.is_empty() {
                 format!("ion-session-{}.html", uuid::Uuid::now_v7())
-            } else if args.starts_with(['"', '\'']) {
-                let mut paths = shlex::split(args).context("export path has unclosed quotes")?;
-                anyhow::ensure!(paths.len() == 1, "use /export [PATH]; quote a single path");
-                paths.remove(0)
             } else {
                 args.to_owned()
             };
-            let target = Path::new(&requested);
-            let target = if target.is_absolute() {
-                target.to_owned()
-            } else {
-                runtime
-                    .session()
-                    .cwd()
-                    .context("relative export path requires a working directory")?
-                    .join(target)
-            };
+            let home = std::env::var_os("HOME").map(PathBuf::from);
+            let target = attachment_path(&requested, &ui.cwd, home.as_deref())?;
             let io = runtime.session().io()?;
             ui.session_io
                 .start_file_write(runtime.session(), async move {

@@ -61,6 +61,7 @@ commands! {
     Copy => (Editor, "copy", "", "Copy the last completed answer"),
     Editor => (Editor, "editor", "", "Edit the draft in an external editor"),
     Export => (Editor, "export", "[PATH]", "Save offline HTML (.html), or a text transcript"),
+    Recovery => (Editor, "recovery", "[ID|save ID PATH|discard ID]", "Inspect, save or discard local quarantined sources; never replay"),
     Skills => (Resources, "skills", "", "List available skills"),
     Prompts => (Resources, "prompts", "", "List available prompt templates"),
     Commands => (Resources, "commands", "", "List enabled executable user commands"),

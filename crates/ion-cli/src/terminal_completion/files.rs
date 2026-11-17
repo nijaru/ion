@@ -74,6 +74,16 @@ impl Prefix {
 }
 
 pub(super) fn path_prefix(draft: &str, cursor: usize, force: bool) -> Option<Prefix> {
+    let syntax = draft.trim_start();
+    let command_end = syntax.find(char::is_whitespace).unwrap_or(syntax.len());
+    if let Some(
+        command @ (crate::terminal_commands::Builtin::File
+        | crate::terminal_commands::Builtin::Export
+        | crate::terminal_commands::Builtin::Recovery),
+    ) = crate::terminal_commands::Builtin::parse(&syntax[..command_end])
+    {
+        return command_path_prefix(draft, cursor, force, command);
+    }
     let before = &draft[..cursor];
     let mut start = 0;
     let mut quoted = false;
@@ -143,6 +153,48 @@ pub(super) fn path_prefix(draft: &str, cursor: usize, force: bool) -> Option<Pre
         range: start..token_end(draft, cursor, quoted),
         query,
         attachment,
+    })
+}
+
+// These commands reserve their entire argument tail for one literal/JSON path.
+// In particular, never replace the recovery verb or record ID.
+fn command_path_prefix(
+    draft: &str,
+    cursor: usize,
+    force: bool,
+    command: crate::terminal_commands::Builtin,
+) -> Option<Prefix> {
+    let mut tail = draft.trim_start();
+    let end = tail.find(char::is_whitespace)?;
+    tail = tail[end..].trim_start();
+    if command == crate::terminal_commands::Builtin::Recovery {
+        tail = tail.strip_prefix("save")?;
+        if !tail.starts_with(char::is_whitespace) {
+            return None;
+        }
+        tail = tail.trim_start();
+        let end = tail.find(char::is_whitespace)?;
+        tail[..end].parse::<u64>().ok()?;
+        tail = tail[end..].trim_start();
+    }
+    let start = draft.len() - tail.len();
+    if cursor < start {
+        return None;
+    }
+    let before = &draft[start..cursor];
+    let quoted = before.starts_with('"');
+    let query = if let Some(raw) = before.strip_prefix('"') {
+        serde_json::from_str::<String>(&format!("\"{raw}\"")).ok()?
+    } else {
+        before.to_owned()
+    };
+    if !force && !quoted && !query.contains('/') && !query.starts_with('.') && query != "~" {
+        return None;
+    }
+    Some(Prefix {
+        range: start..draft.len(),
+        query,
+        attachment: false,
     })
 }
 
@@ -226,7 +278,18 @@ pub(super) fn replacement(
     range: &Range<usize>,
     path: &str,
 ) -> (Range<usize>, String, usize) {
-    let attachment = draft[range.clone()].starts_with('@');
+    let path_command = matches!(
+        draft
+            .split_whitespace()
+            .next()
+            .and_then(crate::terminal_commands::Builtin::parse),
+        Some(
+            crate::terminal_commands::Builtin::File
+                | crate::terminal_commands::Builtin::Export
+                | crate::terminal_commands::Builtin::Recovery
+        )
+    );
+    let attachment = !path_command && draft[range.clone()].starts_with('@');
     let marker = if attachment { "@" } else { "" };
     let quoted = draft[range.clone()]
         .trim_start_matches('@')
@@ -266,6 +329,56 @@ pub(super) fn replacement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_save_completes_only_the_whole_path_tail() {
+        let head = "  /recovery save 17 ";
+        let draft = format!("{head}./résumé old.json");
+        let token = path_prefix(&draft, draft.len(), true).unwrap();
+        assert_eq!(token.query, "./résumé old.json");
+        assert_eq!(token.range, head.len()..draft.len());
+        let path = "./résumé \"new\".json";
+        let (range, text, cursor) = replacement(&draft, &token.range, path);
+        let mut completed = draft.clone();
+        completed.replace_range(range, &text);
+        assert!(completed.starts_with(head));
+        assert_eq!(
+            serde_json::from_str::<String>(completed[head.len()..].trim()).unwrap(),
+            path
+        );
+        assert_eq!(cursor, completed.len());
+
+        let draft = format!("{head}\"./résumé old.json\"");
+        let cursor = draft.find(" old").unwrap();
+        let token = path_prefix(&draft, cursor, true).unwrap();
+        assert_eq!(token.query, "./résumé");
+        assert_eq!(token.range, head.len()..draft.len());
+        let (range, text, cursor) = replacement(&draft, &token.range, "./🦀 dir/");
+        let mut completed = draft.clone();
+        completed.replace_range(range, &text);
+        assert_eq!(completed, format!("{head}\"./🦀 dir/\""));
+        assert_eq!(cursor, completed.len() - 1);
+
+        for draft in [
+            "/recovery 17",
+            "/recovery save",
+            "/recovery save 17",
+            "/recovery discard 17",
+            "/recovery save nope ./x",
+        ] {
+            assert!(path_prefix(draft, draft.len(), true).is_none(), "{draft}");
+        }
+        let draft = "/recovery save 17 ./x";
+        assert!(path_prefix(draft, "/recovery save 1".len(), true).is_none());
+
+        let draft = format!("{head}@old.json");
+        let token = path_prefix(&draft, draft.len(), true).unwrap();
+        let (_, text, _) = replacement(&draft, &token.range, "@new.json");
+        assert_eq!(
+            text, "\"@new.json\" ",
+            "a path-leading @ is not an attachment marker"
+        );
+    }
 
     #[test]
     fn file_prefix_respects_boundaries_quotes_and_unicode() {

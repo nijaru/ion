@@ -64,19 +64,7 @@ pub(super) fn submit_editor(
         ui.status = "Prompt retained; not sent".into();
         return;
     }
-    if ui
-        .unresolved_inputs
-        .iter()
-        .any(|input| input.session == runtime.session().id())
-        || ui
-            .unresolved_requests
-            .iter()
-            .any(|input| input.session == runtime.session().id())
-        || ui
-            .unresolved_recoveries
-            .iter()
-            .any(|failure| failure.point.session == runtime.session().id())
-    {
+    if ui.recovery.blocks(runtime.session().id()) {
         ui.restore_editor(source);
         ui.status =
             "Input commit unresolved; reconcile this Session before sending another prompt".into();
@@ -121,7 +109,7 @@ pub(super) fn submit_initial_prompts(
     if prompts.is_empty() {
         return;
     }
-    if ui.session_io.blocks_input() {
+    if ui.session_io.blocks_input() || ui.recovery.blocks(runtime.session().id()) {
         let mut attachments = ui.editor.take_attachments();
         let mut drafts = prompts.into_iter().map(|literal| super::RecoveredDraft {
             source: EditorDraft::at_end(literal),

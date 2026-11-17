@@ -31,6 +31,10 @@ pub(super) enum ReadOutput {
     Fork(super::navigation::ForkPickerValue),
     Switch(PathBuf),
     Exported(PathBuf),
+    RecoverySaved {
+        id: u64,
+        path: PathBuf,
+    },
     Copy(String),
 }
 
@@ -96,6 +100,7 @@ pub(super) struct ReadFinished {
 
 pub(super) struct Binding {
     operation: BindingOperationId,
+    origin: super::recovery::Origin,
     pub(super) source: Option<EditorDraft>,
     restore: Option<ion_ai::Message>,
     presentation: Option<Box<(crate::keybindings::KeyBindings, crate::themes::Themes)>>,
@@ -290,12 +295,14 @@ pub(super) fn start_binding(
         ui.session_io.binding.is_none(),
         "Wait for the binding operation"
     );
+    let origin = super::recovery::Origin::capture(runtime.session());
     let operation = runtime.start_binding(change)?;
     // Invalidate in-flight reads even for same-Session context/model changes.
     ui.session_io.generation += 1;
     ui.session_io.blocked = true;
     ui.session_io.binding = Some(Binding {
         operation,
+        origin,
         source: None,
         restore,
         presentation: None,
@@ -356,9 +363,17 @@ pub(super) fn binding_finished(
             };
         }
         Err(error) => {
-            if let Some(source) = pending.and_then(|pending| pending.source) {
-                ui.note(format!("Session change failed; inspect before retrying. Original command retained separately: {}", source.literal));
-                ui.uncertain_commands.push(source);
+            if let Some(pending) = pending
+                && let Some(source) = pending.source
+            {
+                let id = ui.recovery.command(
+                    source,
+                    pending.origin,
+                    format!("Session change failed: {error:#}"),
+                );
+                ui.note(format!(
+                    "Session change outcome requires inspection · /recovery {id} · not replayed"
+                ));
             }
             ui.status =
                 format!("Session change failed: {error:#}; refreshing before further input");
@@ -376,7 +391,23 @@ pub(super) fn apply(
     if read.session != runtime.session().id() || read.generation != ui.session_io.generation {
         // A read owns its original coordinates, never a lookup of the new binding.
         if let Some(source) = read.source {
-            ui.uncertain_commands.push(source);
+            let cause = match &result {
+                Ok(_) => {
+                    "Inspection/write completed after its original Session scope changed".into()
+                }
+                Err(error) => format!(
+                    "Inspection/write failed after its original Session scope changed: {error:#}"
+                ),
+            };
+            let id = ui.recovery.command(
+                source,
+                super::recovery::Origin {
+                    session: read.session,
+                    path: read.path,
+                },
+                cause,
+            );
+            ui.note(format!("Late Session operation retained · /recovery {id}"));
         }
         return Ok(None);
     }
@@ -457,12 +488,27 @@ pub(super) fn apply(
         Ok(ReadOutput::Exported(path)) => {
             ui.status = format!("Transcript saved to {}", path.display())
         }
+        Ok(ReadOutput::RecoverySaved { id, path }) => {
+            ui.status = format!(
+                "Recovery {id} inspection backup saved to {}; not replay/import authority",
+                path.display()
+            );
+        }
         Ok(ReadOutput::Copy(text)) => return Ok(Some(UiEffect::Copy(text))),
         Err(error) => {
             if let Some(source) = source {
                 if read.writes_files {
-                    ui.note(format!("File operation failed; inspect before retrying. Original command retained separately: {}", source.literal));
-                    ui.uncertain_commands.push(source);
+                    let id = ui.recovery.command(
+                        source,
+                        super::recovery::Origin {
+                            session: read.session,
+                            path: read.path,
+                        },
+                        format!("File operation failed: {error:#}"),
+                    );
+                    ui.note(format!(
+                        "File operation failed; original retained · /recovery {id} · not replayed"
+                    ));
                 } else {
                     ui.return_command_source(source);
                 }
@@ -491,7 +537,18 @@ fn finish_command(ui: &mut Frontend, source: Option<EditorDraft>, result: Result
 
 pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut Result<()>) {
     if let Some(source) = finished.read.source {
-        ui.uncertain_commands.push(source);
+        let cause = match &finished.result {
+            Ok(_) => "Session inspection/write joined during shutdown".into(),
+            Err(error) => format!("Session inspection/write failed during shutdown: {error:#}"),
+        };
+        ui.recovery.command(
+            source,
+            super::recovery::Origin {
+                session: finished.read.session,
+                path: finished.read.path,
+            },
+            cause,
+        );
     }
     if let Err(error) = finished.result {
         super::activity::combine_error(outcome, error);

@@ -307,8 +307,9 @@ async fn stale_read_cannot_retarget_a_replaced_session() {
     let mut ui = Frontend::default();
     let old = fixture.control.session().id();
     let old_path = fixture.control.session().path().to_owned();
+    let switch_path = old_path.clone();
     let release = hold_read(&fixture.control, &mut ui, move |_| {
-        ReadOutput::Switch(old_path)
+        ReadOutput::Switch(switch_path)
     })
     .await;
     ui.session_io
@@ -332,10 +333,92 @@ async fn stale_read_cannot_retarget_a_replaced_session() {
     );
     assert!(ui.session_io.binding.is_none());
     assert_eq!(fixture.control.session().id(), current);
-    assert_eq!(ui.uncertain_commands.len(), 1);
-    assert_eq!(ui.uncertain_commands[0].literal, "/resume previous");
+    assert_eq!(ui.recovery.list().lines().count(), 2);
+    assert!(ui.recovery.list().contains(&old.to_string()));
+    let id = ui
+        .recovery
+        .list()
+        .lines()
+        .nth(1)
+        .unwrap()
+        .split_whitespace()
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let inspected = ui.recovery.inspect(id).unwrap();
+    assert!(inspected.contains("/resume previous"));
+    assert!(inspected.contains(&old_path.display().to_string()));
+    assert!(!inspected.contains(&current.to_string()));
     settle_io(&mut fixture.control, &mut ui).await;
     assert!(!ui.session_io.blocked);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
+async fn stale_file_failure_and_late_binding_error_keep_original_scope_and_cause() {
+    let mut fixture = Fixture::new();
+    let mut ui = Frontend::default();
+    let old = fixture.control.session().id();
+    let old_path = fixture.control.session().path().to_owned();
+    ui.session_io
+        .start_file_write(fixture.control.session(), async {
+            anyhow::bail!("original disk failure")
+        })
+        .unwrap();
+    ui.session_io.retain_source(Some(EditorDraft {
+        literal: "/export old.html".into(),
+        cursor: 3,
+    }));
+    start_binding(
+        &mut fixture.control,
+        &mut ui,
+        BindingChange::SwitchSession(fixture.root.join("missing.sqlite")),
+        None,
+    )
+    .unwrap();
+    // Capture the real failed completion, but delay its UI publication until a
+    // subsequent actual binding has changed the controller's current Session.
+    let failed = loop {
+        if let ControlUpdate::BindingFinished(finished) = fixture.control.next().await {
+            break finished;
+        }
+    };
+    assert!(failed.result.is_err());
+    ui.session_io.binding.as_mut().unwrap().source =
+        Some(EditorDraft::at_end("/resume missing".into()));
+    fixture
+        .control
+        .start_binding(BindingChange::NewSession)
+        .unwrap();
+    loop {
+        if let ControlUpdate::BindingFinished(finished) = fixture.control.next().await {
+            assert!(finished.result.is_ok());
+            break;
+        }
+    }
+    let current = fixture.control.session().id();
+    assert_ne!(current, old);
+    binding_finished(&mut ui, &fixture.control, failed).unwrap();
+    let finished = ui.session_io.complete().await;
+    apply(&mut fixture.control, &mut ui, finished).unwrap();
+    let list = ui.recovery.list();
+    assert_eq!(list.lines().count(), 3);
+    for row in list.lines().skip(1) {
+        let id = row.split_whitespace().next().unwrap().parse().unwrap();
+        let inspected = ui.recovery.inspect(id).unwrap();
+        assert!(inspected.contains(&old.to_string()));
+        assert!(inspected.contains(&old_path.display().to_string()));
+        assert!(!inspected.contains(&current.to_string()));
+        if inspected.contains("/export") {
+            assert!(inspected.contains("original disk failure"));
+            assert!(inspected.contains("Caret (UTF-8 byte offset): 3"));
+        } else {
+            assert!(inspected.contains("/resume missing"));
+            assert!(inspected.contains("Session change failed"));
+        }
+    }
+    assert!(ui.editor.draft.is_empty());
     fixture.control.shutdown().await;
 }
 
