@@ -20,8 +20,10 @@ pub enum ToolDecision {
 }
 
 /// Optional application-owned veto before a selected executor or intrinsic
-/// route runs. Core has checked the call envelope and frozen capability, not
-/// every tool's complete JSON Schema; executors retain their argument checks.
+/// route runs. Core has checked the call envelope, frozen capability and exact
+/// registered input schema without rewriting arguments. Invalid or unavailable
+/// schema checks refuse dispatch before this hook. Executors retain domain,
+/// preimage and authority checks; schema validity is not an execution grant.
 ///
 /// Errors and cancellation fail closed. Retain and join started policy work
 /// through Stop; callers await this future rather than dropping it. The local

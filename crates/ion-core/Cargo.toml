@@ -11,6 +11,7 @@ description = "Ion durable agent and Session runtime"
 base64 = "0.22.1"
 futures-util = "0.3.34"
 ion-ai.workspace = true
+jsonschema.workspace = true
 rusqlite = { version = "0.41.1", features = ["bundled"] }
 rustix = { version = "1.1.4", features = ["event", "fs", "pipe", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }

@@ -14,6 +14,14 @@ Run `ion --help` for supported selection options. `--read-only` cannot be combin
 
 Explicit human shell execution (`!` / `!!`) and [trusted executable commands](customization.md#add-an-executable-command) remain available in a main coding Session, including with `--read-only`. These are separate application actions, not model tool calls. Tool selection does not isolate the filesystem, credentials or arbitrary trusted host code.
 
+## Registered input schemas
+
+Every frozen tool route checks its registered input JSON Schema before invoking a veto, executor, Code Mode runtime or history reader. Direct calls, Code Mode children and low-level `ToolCatalog::execute` share this gate. Invalid arguments and unavailable or inconclusive schema checks refuse dispatch; admitted calls retain their original intent and a `not_dispatched` settlement, not an observed executor error. A corrected new call can execute; reopening does not replay refused calls.
+
+Checks are strict: Ion does not coerce types, insert defaults, remove extra fields or rewrite arguments. This deliberately differs from Pi's argument coercion. Schema validity does not replace executor-specific domain, preimage or authority checks, and is not an execution grant.
+
+The shared [Core compiler](../crates/ion-core/src/json_schema.rs) performs no HTTP or file retrieval, including for `$schema`. It bounds schema text, JSON size/depth and reference-expanded work. It supports document-local JSON-pointer references, but not recursive references, resource/anchor scopes or unevaluated annotation checks. Patterns are limited to a checked ASCII subset using a linear regex engine. Malformed or unsupported input schemas remain visible as unavailable contracts; capturing a catalog does not panic or silently accept them. These same compiler constraints apply to MCP output reporting, but output annotations do not become a general result-enforcement gate.
+
 ## Native filesystem paths
 
 Native filesystem tools (`read`, `ls`, `find`, `grep`, `edit`, `write`) accept `~` and `~/…` using the bound Host's captured `HOME`, independently of `ION_HOME`. A missing or non-absolute `HOME` is an error for these paths. Use `./~/…` for a literal tilde directory; other shell expansion is not performed.
@@ -49,7 +57,7 @@ Before dispatching a selected model tool, Ion starts a one-shot program in the c
 - `origin`, with Session UUID, Turn, tool occurrence and optional composed-child index;
 - `cwd`, the captured canonical working directory.
 
-Core checks the call envelope and frozen tool catalog before invoking the policy, but does not validate every tool's full argument schema at this point. Validate any fields your policy uses. Origin is provenance, not a credential, execution lease or permission to replay an effect. Do not interpolate model arguments into a shell command.
+Core checks the call envelope, frozen tool catalog and registered input schema before invoking the policy. Invalid or uncheckable calls never start the veto program. This strengthens the earlier envelope-only boundary; executors still own domain and authority validation. Origin is provenance, not a credential, execution lease or permission to replay an effect. Do not interpolate model arguments into a shell command.
 
 Exit zero and write exactly one JSON decision to stdout:
 

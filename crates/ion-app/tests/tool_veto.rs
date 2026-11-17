@@ -155,7 +155,7 @@ else:
                 "write",
                 json!({"path":"direct", "content":content}),
             ),
-            call("history", "history", json!({})),
+            call("history", "history", json!({"action":"list"})),
             call("search", "tool_search", json!({"query":"deferred"})),
             call("undeclared", "deferred", json!({})),
             call(
@@ -165,7 +165,7 @@ else:
             const outcomes = await Promise.allSettled([
                 tools.read({path:'input'}),
                 tools.write({path:'composed',content:'MUST_NOT_WRITE'}),
-                tools.history({})
+                tools.history({action:'list'})
             ]);
             return outcomes.map(value => value.status);
         "#}),

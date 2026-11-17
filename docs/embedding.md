@@ -42,6 +42,13 @@ Core execution APIs treat a caller's cancellation token as a parent scope. Cance
 
 Shutdown preserves read-only access; retirement separately joins native SQLite close and writer-lease release. Cancelling a borrowed wait does not cancel or discard its native work.
 
+
+## Tool schemas
+
+Core compiles each frozen catalog entry's input schema once and shares that immutable contract when rebuilding exposure. All dispatch paths enforce it before policy or effects. See [registered input schemas](tool-control.md#registered-input-schemas) for strict, offline checks and supported bounds.
+
+`ToolResultSchema` remains discovery metadata, not general runtime result enforcement. MCP's `outputSchema` has separate reporting: App uses the same Core compiler to annotate successful remote observations with `valid`, `invalid`, `indeterminate` or `not_checked`; remote errors use `skipped_remote_error`. Missing structured content differs from an explicit JSON null. An unsupported output schema does not disable the tool's input contract or turn its observed success into an executor failure. Invalid, inconclusive and unchecked output reports retain raw response evidence through the artifact sink, including when inline output is truncated. Reporting never rewrites the server response or replays the request.
+
 ## Tool output and retained captures
 
 `ToolOutput` includes typed `artifacts`; observed shell outcomes retain the whole output. Low-level tool execution takes an explicit `ToolInvocation`. Outside admitted execution, callers must supply an artifact sink to retain captures. These unreleased APIs have no compatibility shim. For retention, copy and backup behavior, see [Session captures](sessions.md#retained-evidence-and-captures).

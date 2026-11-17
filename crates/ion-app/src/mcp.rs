@@ -48,6 +48,8 @@ use connection::Connection;
 pub use values::McpValue;
 
 #[cfg(test)]
+mod input_schema_tests;
+#[cfg(test)]
 mod invocation_tests;
 #[cfg(test)]
 mod lifecycle_tests;

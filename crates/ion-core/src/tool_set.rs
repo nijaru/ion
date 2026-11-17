@@ -253,10 +253,10 @@ impl ToolSet {
                 if !self.selection.allows(&name) {
                     continue;
                 }
-                let routed = RoutedTool {
-                    definition: registration.definition,
-                    route: ToolRoute::Executor(registration.executor),
-                };
+                let routed = RoutedTool::new(
+                    registration.definition,
+                    ToolRoute::Executor(registration.executor),
+                );
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
                     None => {
@@ -270,10 +270,8 @@ impl ToolSet {
             let definition = crate::composition::definition(*limits);
             let name = definition.spec.name.clone();
             if self.selection.allows(&name) {
-                let routed = RoutedTool {
-                    definition,
-                    route: ToolRoute::Composition(runtime.clone(), *limits),
-                };
+                let routed =
+                    RoutedTool::new(definition, ToolRoute::Composition(runtime.clone(), *limits));
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
                     None => {
@@ -287,10 +285,7 @@ impl ToolSet {
             let definition = crate::session::history::definition();
             let name = definition.spec.name.clone();
             if self.selection.allows(&name) {
-                let routed = RoutedTool {
-                    definition,
-                    route: ToolRoute::History,
-                };
+                let routed = RoutedTool::new(definition, ToolRoute::History);
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
                     None => {
@@ -321,6 +316,22 @@ enum ToolRoute {
 struct RoutedTool {
     definition: ToolDefinition,
     route: ToolRoute,
+    // Rebuilding exposure shares this exact compiled contract, including an
+    // explicit unavailable contract for unsupported external definitions.
+    input_schema: Arc<Result<crate::json_schema::CompiledSchema, String>>,
+}
+
+impl RoutedTool {
+    fn new(definition: ToolDefinition, route: ToolRoute) -> Self {
+        let input_schema = Arc::new(crate::json_schema::CompiledSchema::compile(
+            &definition.spec.input_schema,
+        ));
+        Self {
+            definition,
+            route,
+            input_schema,
+        }
+    }
 }
 
 /// Immutable tool schema/presentation/route view used by one model request and
@@ -368,10 +379,7 @@ impl ToolCatalog {
         {
             let definition = tool_search_definition();
             let name = definition.spec.name.clone();
-            let routed = RoutedTool {
-                definition,
-                route: ToolRoute::Search,
-            };
+            let routed = RoutedTool::new(definition, ToolRoute::Search);
             match positions.get(&name).copied() {
                 Some(index) => entries[index] = routed,
                 None => {
@@ -514,7 +522,8 @@ impl ToolCatalog {
     }
 
     /// Invoke a frozen capability, including a deferred one. This low-level
-    /// operation does not admit a Turn or publish Session facts; coding execution
+    /// operation enforces the registered input schema but does not admit a Turn
+    /// or publish Session facts; coding execution
     /// must remain inside the Turn's commit/settlement boundary.
     /// Supply an untracked invocation for low-level use, optionally with an
     /// explicit artifact sink. An invocation is not an admission receipt.
@@ -584,6 +593,19 @@ impl ToolCatalog {
         else {
             return ToolDispatch::rejected(format!("unknown tool: {}", call.name));
         };
+        // All routes (including composition/history and composed children) pass
+        // this one frozen-schema gate before asking policy or starting effects.
+        let validator = match entry.input_schema.as_ref() {
+            Ok(validator) => validator,
+            Err(reason) => {
+                return ToolDispatch::rejected(format!("tool input schema unavailable: {reason}"));
+            }
+        };
+        if let Err(error) = validator.validate(&call.arguments) {
+            return ToolDispatch::rejected(format!(
+                "tool input schema check failed ({error}); submit a corrected call"
+            ));
+        }
         if let Some(policy) = &self.policy {
             let Some(origin) = invocation.origin() else {
                 return ToolDispatch::rejected("tool policy requires an admitted invocation");
@@ -851,6 +873,49 @@ mod tests {
                 .value,
             json!("changing:new")
         );
+    }
+
+    struct ChangingSchema(AtomicBool);
+    impl ToolSource for ChangingSchema {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            let version = if self.0.load(Ordering::Acquire) { 2 } else { 1 };
+            let mut stub = Stub::new("versioned", "observed");
+            stub.definition.spec.input_schema = json!({
+                "type":"object", "required":["version"],
+                "properties":{"version":{"const":version}}
+            });
+            stub.definition.exposure = ToolExposure::Deferred;
+            Arc::new(stub).registrations()
+        }
+    }
+
+    #[tokio::test]
+    async fn schema_contract_stays_with_frozen_route_through_refresh_and_exposure_rebuild() {
+        let source = Arc::new(ChangingSchema(AtomicBool::new(false)));
+        let tools = ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
+        let issued = tools.snapshot();
+        let declared = issued.with_previous(&issued.specs());
+        source.0.store(true, Ordering::Release);
+        let refreshed = tools.snapshot();
+        for (catalog, accepted) in [(&issued, 1), (&declared, 1), (&refreshed, 2)] {
+            for version in [1, 2] {
+                let call = ToolCall {
+                    id: "version".into(),
+                    name: "versioned".into(),
+                    arguments: json!({"version":version}),
+                    raw_arguments: None,
+                };
+                let output = catalog
+                    .execute(crate::ToolInvocation::untracked(
+                        &call,
+                        CancellationToken::new(),
+                    ))
+                    .await;
+                assert_eq!(!output.is_error, version == accepted, "{}", output.value);
+            }
+        }
+        assert!(declared.is_declared("versioned"));
+        assert!(!refreshed.is_declared("versioned"));
     }
 
     #[tokio::test]

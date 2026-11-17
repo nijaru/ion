@@ -588,9 +588,9 @@ async fn concurrent_native_edits_preserve_guards_and_disjoint_changes() {
             successful == 0
                 && final_bytes == source.as_bytes()
                 && [&outputs.0, &outputs.1].iter().all(|output| {
-                    output.value["error"]
-                        .as_str()
-                        .is_some_and(|error| error.contains("requires base_digest"))
+                    output.value["error"].as_str().is_some_and(|error| {
+                        error.contains("input schema check failed") && error.contains("required")
+                    })
                 })
         };
         if !correct {

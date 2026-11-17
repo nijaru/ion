@@ -90,6 +90,22 @@ fn process_outputs(session: &Session) -> Vec<Value> {
         })
         .collect()
 }
+fn assert_schema_refusal(session: &Session, call_id: &str) {
+    let view = session.view().unwrap();
+    let result = view
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } if result.call_id == call_id => Some(result),
+            _ => None,
+        })
+        .expect("settled call");
+    assert!(
+        matches!(&result.outcome, ToolOutcome::NotDispatched { reason }
+        if reason.contains("input schema check failed")),
+        "{result:?}"
+    );
+}
 fn started_id(output: &Value) -> Uuid {
     Uuid::parse_str(
         output["id"]
@@ -488,7 +504,8 @@ async fn absent_and_foreign_authority_reject_before_effects() {
         !root.join("invalid-marker").exists(),
         "invalid start had an effect"
     );
-    let id = started_id(&process_outputs(&session_a)[1]);
+    assert_schema_refusal(&session_a, "invalid");
+    let id = started_id(&process_outputs(&session_a)[0]);
     until(&root.join("marker")).await;
 
     let session_b = Arc::new(Session::create(root.join("b.sqlite"), Some(&root)).unwrap());
@@ -515,15 +532,8 @@ async fn absent_and_foreign_authority_reject_before_effects() {
     );
     submit(&owner_session, &session_a, "inspect").await.unwrap();
     let outputs = process_outputs(&session_a);
-    assert_eq!(outputs[2]["running"], true, "{}", outputs[2]);
-    assert!(
-        outputs[3]["error"]
-            .as_str()
-            .unwrap()
-            .contains("invalid process arguments"),
-        "{}",
-        outputs[3]
-    );
+    assert_eq!(outputs[1]["running"], true, "{}", outputs[1]);
+    assert_schema_refusal(&session_a, "null");
 
     // The original owner can still close it: the foreign attempt neither
     // attached nor stopped the process.
@@ -1147,21 +1157,17 @@ async fn invalid_dimensions_and_cross_backend_actions_reject_without_effects() {
         "{}",
         outputs[0]
     );
+    assert_schema_refusal(&session, "pty_zero");
     assert!(
-        outputs[1]["error"].as_str().unwrap().contains("rows"),
+        outputs[1]["error"].as_str().unwrap().contains("maximum"),
         "{}",
         outputs[1]
-    );
-    assert!(
-        outputs[2]["error"].as_str().unwrap().contains("maximum"),
-        "{}",
-        outputs[2]
     );
     assert!(!root.join("bad-pipe").exists());
     assert!(!root.join("bad-zero").exists());
     assert!(!root.join("bad-cells").exists());
-    let pipe = started_id(&outputs[3]);
-    let pty = started_id(&outputs[4]);
+    let pipe = started_id(&outputs[2]);
+    let pty = started_id(&outputs[3]);
     until(&root.join("pipe-marker")).await;
     until(&root.join("pty-marker")).await;
 
@@ -1199,6 +1205,14 @@ async fn invalid_dimensions_and_cross_backend_actions_reject_without_effects() {
     let outputs = process_outputs(&session);
     owner.join_shutdown().await.unwrap();
     assert!(
+        outputs[4]["error"]
+            .as_str()
+            .unwrap()
+            .contains("only available for PTY"),
+        "{}",
+        outputs[4]
+    );
+    assert!(
         outputs[5]["error"]
             .as_str()
             .unwrap()
@@ -1207,32 +1221,20 @@ async fn invalid_dimensions_and_cross_backend_actions_reject_without_effects() {
         outputs[5]
     );
     assert!(
-        outputs[6]["error"]
-            .as_str()
-            .unwrap()
-            .contains("only available for PTY"),
+        outputs[6]["error"].as_str().unwrap().contains("PTY EOF"),
         "{}",
         outputs[6]
     );
     assert!(
-        outputs[7]["error"].as_str().unwrap().contains("PTY EOF"),
-        "{}",
-        outputs[7]
-    );
-    assert!(
-        outputs[8]["error"]
+        outputs[7]["error"]
             .as_str()
             .unwrap()
             .contains("merged terminal stream"),
         "{}",
-        outputs[8]
+        outputs[7]
     );
-    assert!(
-        outputs[9]["error"].as_str().unwrap().contains("rows"),
-        "{}",
-        outputs[9]
-    );
-    let inspect = &outputs[10];
+    assert_schema_refusal(&session, "pty_bad_resize");
+    let inspect = &outputs[8];
     assert_eq!(inspect["backend"], "pty", "{inspect}");
     assert_eq!(inspect["running"], true, "{inspect}");
     assert_eq!(inspect["screen"]["available"], true, "{inspect}");
@@ -1244,10 +1246,10 @@ async fn invalid_dimensions_and_cross_backend_actions_reject_without_effects() {
         inspect["screen"]["columns"], 80,
         "invalid resize took effect: {inspect}"
     );
-    assert_eq!(outputs[11]["joined"], true, "{}", outputs[11]);
-    assert_eq!(outputs[12]["joined"], true, "{}", outputs[12]);
-    assert_eq!(outputs[13]["acknowledged"], true, "{}", outputs[13]);
-    assert_eq!(outputs[14]["acknowledged"], true, "{}", outputs[14]);
+    assert_eq!(outputs[9]["joined"], true, "{}", outputs[9]);
+    assert_eq!(outputs[10]["joined"], true, "{}", outputs[10]);
+    assert_eq!(outputs[11]["acknowledged"], true, "{}", outputs[11]);
+    assert_eq!(outputs[12]["acknowledged"], true, "{}", outputs[12]);
     owner.join_shutdown().await.unwrap();
     session.shutdown().await.unwrap();
     std::fs::remove_dir_all(root).unwrap();

@@ -26,7 +26,15 @@ for line in sys.stdin:
         result = {'protocolVersion': request['params']['protocolVersion'],
                   'capabilities': capabilities, 'serverInfo': {'name': 'custody', 'version': '1'}}
     elif method == 'tools/list':
-        result = {'tools': [{'name': 'probe', 'inputSchema': {'type': 'object'}}]}
+        schema = {'type': 'object'}
+        if mode == 'schema':
+            schema = {'type':'object', 'additionalProperties':False, 'required':['count'],
+                      '$defs':{'count':{'type':'integer', 'minimum':1}},
+                      'properties':{'count':{'$ref':'#/$defs/count'},
+                                    'label':{'type':'string', 'default':'not inserted'}}}
+        result = {'tools': [{'name': 'probe', 'inputSchema': schema}]}
+        if mode == 'schema':
+            result['tools'].append({'name':'unavailable', 'inputSchema':{'type':'object', '$ref':'#/missing'}})
     elif method == 'resources/read':
         with Path('calls').open('a') as observed:
             observed.write(json.dumps(request) + '\n')
@@ -54,7 +62,7 @@ for line in sys.stdin:
             time.sleep(0.01)
 "#;
 
-async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
+pub(super) async fn fixture(mode: &str) -> (PathBuf, Arc<McpTools>, ion_core::ToolSet) {
     let root = std::env::temp_dir().join(format!("ion-mcp-invoke-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
     let config = McpConfig::new(&root);

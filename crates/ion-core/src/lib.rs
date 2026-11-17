@@ -58,6 +58,7 @@ mod delegation;
 mod generation;
 mod input;
 mod invocation;
+pub mod json_schema;
 mod json_size;
 mod operation;
 mod prompt_size;
