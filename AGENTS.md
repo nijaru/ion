@@ -14,7 +14,8 @@ product roadmaps. Model useful semantics and ownership idiomatically in Rust,
 not upstream classes or parallel runtimes.
 The model chooses the coding actions; inspect/edit/test is not a hard-coded
 runtime loop. Reuse working code; remove obsolete abstractions through all real
-callers. The current TUI is not accepted for daily use. No autonomous pull requests.
+callers. Do not claim daily-use readiness without sustained-use evidence and
+maintainer acceptance. No autonomous pull requests.
 
 Before behavior-changing implementation or review, read
 [ion-reference-implementation](.agents/skills/ion-reference-implementation/SKILL.md).
@@ -28,6 +29,8 @@ through the owner's knowledge repository. Consult them when accessible under
 the shared working agreements, but public usage and implementation contracts
 must remain understandable from this repository alone. Do not recreate public
 design/roadmap copies or treat old research snapshots as current instructions.
+Keep session notes, progress, and next-task choices out of `AGENTS.md`; it is
+standing guidance for every session.
 
 ## Source navigation
 
