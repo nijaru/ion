@@ -623,7 +623,13 @@ pub(super) fn handle_builtin(
                 lines.join("\n")
             });
         }
-        Builtin::Tools => ui.list_tools(),
+        Builtin::Tools => {
+            ui.list_tools();
+            let catalog = runtime.agent().tool_catalog();
+            for (name, reason) in catalog.unavailable() {
+                ui.print(format!("Unavailable tool {name}: {reason}"));
+            }
+        }
         Builtin::Tool => {
             if args == "all" {
                 ui.open_details(None);

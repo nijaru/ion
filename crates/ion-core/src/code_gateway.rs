@@ -148,7 +148,7 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                 }
                 let description = self
                     .catalog
-                    .definition(&name)
+                    .callable_definition(&name)
                     .filter(|_| !self.catalog.is_intrinsic(&name))
                     .map(|definition| ToolDescription {
                         spec: &definition.spec,
@@ -245,7 +245,7 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                 };
                 let Some(definition) = self
                     .catalog
-                    .definition(&name)
+                    .callable_definition(&name)
                     .filter(|_| !self.catalog.is_intrinsic(&name))
                 else {
                     let _ = request

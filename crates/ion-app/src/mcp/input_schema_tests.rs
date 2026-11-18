@@ -61,13 +61,13 @@ async fn registered_input_gate_precedes_mcp_request_and_child_policy_and_reopens
                     "parent",
                     "code_mode",
                     json!({"code":r#"
-                for (const [name, args] of [
-                    ['mcp__7_custody__probe', {count:'1',extra:true}],
-                    ['mcp__7_custody__unavailable', {}]
-                ]) {
-                    const refused = await tools[name](args).then(() => false, () => true);
-                    if (!refused) throw new Error('invalid contract was dispatched');
+                const unavailable = 'mcp__7_custody__unavailable';
+                if (unavailable in tools || await describeTool(unavailable) !== null ||
+                    (await searchTools('unavailable')).some(tool => tool.name === unavailable)) {
+                    throw new Error('unavailable contract was advertised');
                 }
+                const refused = await tools.mcp__7_custody__probe({count:'1',extra:true}).then(() => false, () => true);
+                if (!refused) throw new Error('invalid contract was dispatched');
                 return (await tools.mcp__7_custody__probe({count:1})).value.structured_content.calls;
             "#}),
                 )]),
@@ -100,6 +100,14 @@ async fn registered_input_gate_precedes_mcp_request_and_child_policy_and_reopens
                 model: "test".into(),
             },
         );
+        assert_eq!(
+            agent
+                .tool_catalog()
+                .unavailable()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["mcp__7_custody__unavailable"]
+        );
         let path = root.join("session.sqlite");
         let session = Arc::new(Session::create(&path, Some(&root)).unwrap());
         agent
@@ -112,6 +120,12 @@ async fn registered_input_gate_precedes_mcp_request_and_child_policy_and_reopens
             )
             .await
             .unwrap();
+        assert!(model.requests().iter().all(|request| {
+            request
+                .tools
+                .iter()
+                .all(|tool| tool.name != "mcp__7_custody__unavailable")
+        }));
         source.shutdown().await.unwrap();
         let calls = fs::read_to_string(root.join("calls")).unwrap();
         let requests: Vec<Value> = calls
@@ -139,14 +153,11 @@ async fn registered_input_gate_precedes_mcp_request_and_child_policy_and_reopens
                     _ => None,
                 })
                 .collect();
-            assert_eq!(children.len(), 3);
+            assert_eq!(children.len(), 2);
             assert!(
                 matches!(children[0], ChildOutcome::NotDispatched {reason} if reason.contains("input schema check failed"))
             );
-            assert!(
-                matches!(children[1], ChildOutcome::NotDispatched {reason} if reason.contains("input schema unavailable"))
-            );
-            assert!(matches!(children[2], ChildOutcome::Observed {output} if !output.is_error));
+            assert!(matches!(children[1], ChildOutcome::Observed {output} if !output.is_error));
             assert!(view.entries.iter().any(|entry| matches!(entry,
                 SessionEntry::ChildToolAdmitted {intent, ..} if intent.call.arguments == json!({"count":"1", "extra":true}))));
             assert!(view.entries.iter().any(|entry| matches!(entry,
@@ -165,7 +176,7 @@ async fn registered_input_gate_precedes_mcp_request_and_child_policy_and_reopens
                 matches!(results[0], ToolOutcome::NotDispatched {reason} if reason.contains("input schema check failed"))
             );
             assert!(
-                matches!(results[1], ToolOutcome::NotDispatched {reason} if reason.contains("input schema unavailable"))
+                matches!(results[1], ToolOutcome::NotDispatched {reason} if reason.contains("not declared"))
             );
             assert!(matches!(results[2], ToolOutcome::Observed {output, ..} if !output.is_error));
         }

@@ -362,6 +362,7 @@ impl ToolCatalog {
             .collect::<HashMap<_, _>>();
         let mut declared = entries
             .iter()
+            .filter(|entry| entry.input_schema.is_ok())
             .filter(|entry| {
                 entry.definition.exposure == ToolExposure::Direct
                     || previous
@@ -373,7 +374,8 @@ impl ToolCatalog {
 
         if selection.allows(TOOL_SEARCH_NAME)
             && entries.iter().any(|entry| {
-                entry.definition.exposure == ToolExposure::Deferred
+                entry.input_schema.is_ok()
+                    && entry.definition.exposure == ToolExposure::Deferred
                     && !declared.contains(&entry.definition.spec.name)
             })
         {
@@ -416,8 +418,7 @@ impl ToolCatalog {
     /// Callable declarations, not opaque executor identity. Discovery's temporary
     /// search route changes model exposure, not application authority.
     pub(crate) fn authority_manifest(&self) -> Vec<(&ToolSpec, bool, Option<crate::CodeLimits>)> {
-        self.entries
-            .iter()
+        self.callable_entries()
             .filter_map(|entry| {
                 let limits = match &entry.route {
                     ToolRoute::Search => return None,
@@ -435,8 +436,7 @@ impl ToolCatalog {
     /// Every callable definition in this frozen catalog, including deferred
     /// capabilities that are not declared directly to the model.
     pub fn specs(&self) -> Vec<ToolSpec> {
-        self.entries
-            .iter()
+        self.callable_entries()
             .map(|entry| entry.definition.spec.clone())
             .collect()
     }
@@ -454,15 +454,37 @@ impl ToolCatalog {
         self.declared.contains(name)
     }
 
-    pub(crate) fn definitions(&self) -> impl Iterator<Item = &ToolDefinition> {
-        self.entries.iter().map(|entry| &entry.definition)
+    fn callable_entries(&self) -> impl Iterator<Item = &RoutedTool> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.input_schema.is_ok())
     }
 
-    pub fn definition(&self, name: &str) -> Option<&ToolDefinition> {
+    pub(crate) fn definitions(&self) -> impl Iterator<Item = &ToolDefinition> {
+        self.callable_entries().map(|entry| &entry.definition)
+    }
+
+    /// Selected registrations unavailable for model dispatch, with local diagnostics.
+    pub fn unavailable(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries.iter().filter_map(|entry| {
+            let reason = entry.input_schema.as_ref().as_ref().err()?;
+            Some((entry.definition.spec.name.as_str(), reason.as_str()))
+        })
+    }
+
+    pub(crate) fn callable_definition(&self, name: &str) -> Option<&ToolDefinition> {
+        let entry = self.entry(name)?;
+        entry.input_schema.is_ok().then_some(&entry.definition)
+    }
+
+    fn entry(&self, name: &str) -> Option<&RoutedTool> {
         self.positions
             .get(name)
             .and_then(|index| self.entries.get(*index))
-            .map(|entry| &entry.definition)
+    }
+
+    pub fn definition(&self, name: &str) -> Option<&ToolDefinition> {
+        self.entry(name).map(|entry| &entry.definition)
     }
 
     /// Declared specs after additionally activating names returned by the
@@ -471,13 +493,12 @@ impl ToolCatalog {
         &self,
         additional: &std::collections::BTreeSet<String>,
     ) -> Vec<ToolSpec> {
-        let search_needed = self.entries.iter().any(|entry| {
+        let search_needed = self.callable_entries().any(|entry| {
             entry.definition.exposure == ToolExposure::Deferred
                 && !self.declared.contains(&entry.definition.spec.name)
                 && !additional.contains(&entry.definition.spec.name)
         });
-        self.entries
-            .iter()
+        self.callable_entries()
             .filter(|entry| match &entry.route {
                 ToolRoute::Search => search_needed,
                 ToolRoute::Executor(_) | ToolRoute::Composition(..) | ToolRoute::History => {
@@ -495,8 +516,7 @@ impl ToolCatalog {
     pub(crate) fn discover_callable(&self, query: &str, limit: usize) -> Vec<&ToolDefinition> {
         discovery::rank(
             query,
-            self.entries
-                .iter()
+            self.callable_entries()
                 .filter(|entry| {
                     !matches!(entry.route, ToolRoute::Search | ToolRoute::Composition(..))
                 })
@@ -586,11 +606,7 @@ impl ToolCatalog {
                 "tool arguments were not a valid JSON object; submit a corrected call",
             );
         }
-        let Some(entry) = self
-            .positions
-            .get(&call.name)
-            .and_then(|index| self.entries.get(*index))
-        else {
+        let Some(entry) = self.entry(&call.name) else {
             return ToolDispatch::rejected(format!("unknown tool: {}", call.name));
         };
         // All routes (including composition/history and composed children) pass
@@ -696,8 +712,7 @@ impl ToolCatalog {
 
         let matches = discovery::rank(
             &query,
-            self.entries
-                .iter()
+            self.callable_entries()
                 .filter(|entry| {
                     entry.definition.exposure == ToolExposure::Deferred
                         && !self.declared.contains(&entry.definition.spec.name)
@@ -779,6 +794,44 @@ mod tests {
                 }
             })
         }
+    }
+
+    #[tokio::test]
+    async fn unavailable_deferred_registration_cannot_be_discovered_or_reactivated() {
+        let mut unavailable = Stub::new("broken", "unavailable");
+        unavailable.definition.exposure = ToolExposure::Deferred;
+        unavailable.definition.spec.input_schema = json!({"$ref":"#/missing"});
+        let previous = unavailable.definition.spec.clone();
+        let mut deferred = Stub::new("working", "working");
+        deferred.definition.exposure = ToolExposure::Deferred;
+        let tools = ToolSet::new([
+            Arc::new(unavailable) as Arc<dyn ToolSource>,
+            Arc::new(deferred) as Arc<dyn ToolSource>,
+        ]);
+        let catalog = tools.snapshot_with_previous(&[previous]);
+        assert!(!catalog.is_declared("broken"));
+        assert!(catalog.is_declared(TOOL_SEARCH_NAME));
+        assert!(
+            catalog
+                .declared_specs_with(&["broken".into()].into_iter().collect())
+                .iter()
+                .all(|spec| spec.name != "broken")
+        );
+        let call = ToolCall {
+            id: "find".into(),
+            name: TOOL_SEARCH_NAME.into(),
+            arguments: json!({"query":"broken working"}),
+            raw_arguments: None,
+        };
+        let output = catalog
+            .execute(crate::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await;
+        let results = output.value["loaded"].as_array().expect("search result");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["name"], "working");
     }
 
     struct ChangingHost(AtomicBool);
