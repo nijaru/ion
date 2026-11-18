@@ -16,6 +16,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from terminal_style import program_ready
+
 
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
@@ -82,8 +84,9 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
     try:
         output = bytearray()
         deadline = time.monotonic() + 8
-        while "›".encode() not in output:
-            assert time.monotonic() < deadline, "terminal did not show its composer"
+        # The composer can paint before the initial Session refresh finishes.
+        while "›".encode() not in output or not program_ready(output):
+            assert time.monotonic() < deadline, ("terminal did not become ready", mode, coding, fault, bytes(output[-1200:]))
             if select.select([output_master], [], [], 0.05)[0]:
                 data = os.read(output_master, 65536)
                 output.extend(data)
@@ -91,7 +94,7 @@ def terminal_failure_settles_operation(workspace, env, mode, coding, fault):
                     os.write(input_master, b"\x1b[2;1R")
         os.write(input_master, ("Run the verification command.\r" if coding else f"!{command}\r").encode())
         while not (workspace / "render.ready").exists():
-            assert time.monotonic() < deadline, "shell did not become ready"
+            assert time.monotonic() < deadline, ("shell did not become ready", mode, coding, fault, requests)
             if select.select([output_master], [], [], 0.05)[0]:
                 os.read(output_master, 65536)
         pid = int((workspace / "render.pid").read_text())
@@ -236,7 +239,7 @@ for mode in ("inline", "fullscreen"):
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
                 segment = output[segment_start:]
-                if step == 0 and "›".encode() in output:
+                if step == 0 and "›".encode() in output and program_ready(output):
                     assert (b"\x1b[?1049h" in output) == (mode == "fullscreen")
                     os.write(master, b"original draft\x07")
                     step = 1
