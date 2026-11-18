@@ -94,6 +94,12 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
     def tmux(*args):
         return subprocess.check_output(["tmux", "-S", socket, *args], env=env).decode()
 
+    def composer_ready(pane):
+        # A painted composer is not sufficient during canonical Session I/O.
+        return "›" in pane and not any(message in pane for message in (
+            "Working", "Session refresh", "Reading local state", "Preparing local command",
+        ))
+
     def wait_completed_turns(count):
         # Provisional answer text can paint before Core settlement and native
         # publication. Require committed completion and the emulator's idle
@@ -104,7 +110,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             with sqlite3.connect(f"file:{sessions[0]}?mode=ro", uri=True) as db:
                 completed = db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_ended' AND json_extract(body,'$.data.reason')='completed'").fetchone()[0]
             pane = tmux("capture-pane", "-p", "-t", "ion")
-            if completed == count and "Working" not in pane:
+            if completed == count and composer_ready(pane):
                 return
             assert time.monotonic() < deadline, f"inline Turn/publication did not settle:\n{pane}"
             time.sleep(0.02)
@@ -126,8 +132,8 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "30",
              "-c", str(workspace), str(launcher))
         deadline = time.monotonic() + 35
-        while "›" not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "inline composer did not start"
+        while not composer_ready(pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"inline composer did not become ready:\n{pane}"
             time.sleep(0.02)
         tmux("send-keys", "-t", "ion", "-l", "INPUT_ONCE: read data.txt and check it")
         tmux("send-keys", "-t", "ion", "Enter")
@@ -151,8 +157,8 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         assert (workspace / "data.txt").read_text() == "UPDATED_SNAPSHOT\n"
         tmux("send-keys", "-t", "ion", "-l", "/tool 2")
         tmux("send-keys", "-t", "ion", "Enter")
-        while "Recorded edit diff" not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "recorded edit inspection did not open"
+        while "Recorded edit diff" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"recorded edit inspection did not open:\n{pane}"
             time.sleep(0.02)
         detail = tmux("capture-pane", "-p", "-t", "ion")
         assert "-observed data" in detail and "+UPDATED_SNAPSHOT" in detail, detail
