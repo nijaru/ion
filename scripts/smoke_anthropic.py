@@ -14,6 +14,8 @@ binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
 summary_requests = []
 retry_requests = []
+truncated_requests = []
+truncated_paths_before_request = []
 legacy_requests = []
 migration_requests = []
 
@@ -99,6 +101,48 @@ def response(index, *, overloaded=False):
     return b"".join(frames)
 
 
+def truncated_response(index):
+    if index > 2:
+        return response(index)
+    frames = [event("message_start", message={
+        "type": "message", "role": "assistant", "model": "mock", "content": [],
+        "stop_reason": None, "usage": {"input_tokens": 10, "output_tokens": 0},
+    })]
+    if index == 1:
+        frames.extend([
+            event("content_block_start", index=0, content_block={
+                "type": "thinking", "thinking": "Need to write the file.", "signature": "",
+            }),
+            event("content_block_delta", index=0, delta={"type": "signature_delta", "signature": "signed-truncated"}),
+            event("content_block_stop", index=0),
+            event("content_block_start", index=1, content_block={
+                "type": "tool_use", "id": "sibling", "name": "write",
+                "input": {"path": "sibling.txt", "content": "must not run"},
+            }),
+            event("content_block_stop", index=1),
+            event("content_block_start", index=2, content_block={
+                "type": "tool_use", "id": "partial", "name": "write", "input": {},
+            }),
+            event("content_block_delta", index=2, delta={
+                "type": "input_json_delta", "partial_json": '{"path":"fixed.txt","content":"partial',
+            }),
+            event("content_block_stop", index=2),
+        ])
+    else:
+        frames.extend([
+            event("content_block_start", index=0, content_block={
+                "type": "tool_use", "id": "complete", "name": "write",
+                "input": {"path": "fixed.txt", "content": "complete\n"},
+            }),
+            event("content_block_stop", index=0),
+        ])
+    frames.extend([
+        event("message_delta", delta={"stop_reason": "max_tokens" if index == 1 else "tool_use"}, usage={"output_tokens": 8}),
+        event("message_stop"),
+    ])
+    return b"".join(frames)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -116,6 +160,10 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/migration/v1/messages":
             migration_requests.append(body)
             payload = response(len(migration_requests))
+        elif self.path == "/truncated/v1/messages":
+            truncated_requests.append(body)
+            truncated_paths_before_request.append(((workspace / "sibling.txt").exists(), (workspace / "fixed.txt").exists()))
+            payload = truncated_response(len(truncated_requests))
         elif self.path == "/retry/v1/messages":
             retry_requests.append(body)
             payload = response(0, overloaded=len(retry_requests) == 1)
@@ -229,6 +277,40 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
         assert len(retry_requests) == 2, retry_requests
         assert retry_requests[0] == retry_requests[1], "retry changed the prepared request"
 
+        truncated_session = work / "truncated.sqlite"
+        truncated_endpoint = f"http://127.0.0.1:{server.server_port}/truncated/v1/messages"
+        run(binary, env, "use", "smoke", "mock", "--endpoint", truncated_endpoint, "--wire", "anthropic-messages")
+        recovered = run(binary, env, "--json", "--cwd", workspace, "--session", truncated_session, "run", "Write fixed.txt")
+        assert recovered[-1] == {"type": "run_end", "status": "completed"}, recovered
+        assert truncated_paths_before_request == [(False, False), (False, False), (False, True)], truncated_paths_before_request
+        assert (workspace / "fixed.txt").read_text() == "complete\n"
+        assert not (workspace / "sibling.txt").exists()
+        messages = truncated_requests[1]["messages"]
+        assert messages[-2]["role"] == "assistant" and messages[-1]["role"] == "user", messages
+        signed, sibling, partial = messages[-2]["content"]
+        assert signed == {"type": "thinking", "thinking": "Need to write the file.", "signature": "signed-truncated"}, signed
+        assert sibling["input"] == {"path": "sibling.txt", "content": "must not run"}, sibling
+        assert partial == {"type": "tool_use", "id": "partial", "name": "write", "input": {}}, partial
+        errors = messages[-1]["content"]
+        assert [block["tool_use_id"] for block in errors] == ["sibling", "partial"], errors
+        assert all(block["is_error"] and "Reissue the complete call" in str(block["content"]) for block in errors), errors
+        final_result = truncated_requests[2]["messages"][-1]["content"]
+        assert len(final_result) == 1 and final_result[0]["tool_use_id"] == "complete" and not final_result[0]["is_error"], final_result
+        saved = subprocess.run(
+            [binary, "--cwd", workspace, "--session", truncated_session, "inspect"],
+            env=env, check=True, capture_output=True, text=True, timeout=20,
+        )
+        entries = json.loads(saved.stdout)["entries"]
+        assert sum(entry["kind"] == "turn_started" for entry in entries) == 1, entries
+        calls = [part["ToolCall"] for entry in entries if entry["kind"] == "assistant"
+                 for part in entry["data"]["message"]["content"] if "ToolCall" in part]
+        assert [call["id"] for call in calls] == ["sibling", "partial", "complete"], calls
+        assert calls[1]["raw_arguments"] == '{"path":"fixed.txt","content":"partial', calls[1]
+        results = [entry["data"]["result"] for entry in entries if entry["kind"] == "tool_result"]
+        assert [(result["call_id"], result["outcome"]["state"]) for result in results] == [
+            ("sibling", "not_dispatched"), ("partial", "not_dispatched"), ("complete", "observed"),
+        ], results
+
         migration = work / "migration.sqlite"
         base = f"http://127.0.0.1:{server.server_port}"
         run(binary, env, "use", "smoke", "legacy", "--endpoint", f"{base}/migration-chat/v1/chat/completions", "--wire", "chat-completions")
@@ -276,4 +358,4 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
         server.server_close()
         thread.join(timeout=2)
 
-print("Anthropic signed continuation, compaction/rebase, pre-output retry and reopened tool-ID migration: ok")
+print("Anthropic signed continuation, truncated tool recovery, compaction/rebase, retry and tool-ID migration: OK")

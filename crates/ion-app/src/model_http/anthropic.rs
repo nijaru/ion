@@ -573,7 +573,11 @@ impl AnthropicState {
                         Some("thinking" | "redacted_thinking")
                     )
                 });
+                // On an explicit output limit, Core records the entire tool
+                // batch as not dispatched. Replay pairs those error results
+                // with valid JSON inputs; the partial fragments stay diagnostic.
                 if prefix_bound
+                    && termination != ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
                     && content.iter().any(|part| {
                         matches!(part, Content::ToolCall(call) if call.raw_arguments.is_some())
                     })
