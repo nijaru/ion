@@ -18,10 +18,7 @@ def exercise_queue_controls(binary, work, env, requests, release):
             def screen():
                 return "\n".join(terminal.snapshot()[0])
 
-            # The reasoning preference is published only after the canonical
-            # history refresh unblocks input, not on the first composer paint.
-            terminal.wait(lambda: terminal.editor_matches("", 0, False)
-                          and " · reasoning " in screen())
+            terminal.wait_ready()
             terminal.send("WAIT_QUEUE\r")
             terminal.wait(lambda: len(requests) == before + 1 and "Working" in screen())
             steering, follow_up, draft = "STEER_QUEUE_🦀", "FOLLOW_QUEUE_雪", "DRAFT_QUEUE_é"

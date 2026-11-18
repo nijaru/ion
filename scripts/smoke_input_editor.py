@@ -91,7 +91,7 @@ sys.exit(child.returncode if child.returncode >= 0 else 128 - child.returncode)
                     report_errors.append(error)
             reporter = threading.Thread(target=report_surface)
             reporter.start()
-        terminal.wait(lambda: terminal.editor_matches("", 0, False))
+        terminal.wait_ready()
         terminal.send(seed + "\r")
         terminal.wait_turn()
         last_answer = "DONE_" + seed

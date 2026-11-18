@@ -82,6 +82,12 @@ class FileTerminal:
             return not any("Files ·" in line for line in menu)
         return True
 
+    def wait_ready(self):
+        # The painted reasoning preference requires a fresh Session projection.
+        # A composer painted during the startup refresh cannot admit input yet.
+        self.wait(lambda: self.editor_matches("", 0, False)
+                  and any(" · reasoning " in row for row in self.snapshot()[0]))
+
     def resize(self, rows, columns):
         self.tmux("resize-window", "-t", "ion:0", "-x", str(columns), "-y", str(rows))
 
@@ -123,7 +129,7 @@ def exercise_file_input(binary, work, env, mode, requests, user_text):
     (cwd / "space dir/café🦀.rs").write_text("fixture\n")
     terminal = FileTerminal(binary, cwd, env, mode)
     try:
-        terminal.wait(lambda: terminal.editor_matches("", 0, False))
+        terminal.wait_ready()
         cases = [
             ("nick@example.com", None, "nick@example.com"),
             ("Read @m next", "dismiss", "Read @ma next"),
