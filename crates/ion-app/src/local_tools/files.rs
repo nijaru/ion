@@ -395,6 +395,15 @@ fn line_ending(text: &str) -> &'static str {
     "\n"
 }
 
+fn append_edit_part(result: &mut String, part: &str) {
+    // A lone CR and an LF from separate parts represent two line breaks.
+    // Complete the CR as CRLF before appending the second break.
+    if result.ends_with('\r') && part.starts_with('\n') {
+        result.push('\n');
+    }
+    result.push_str(part);
+}
+
 fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<String, String> {
     struct Matched<'a> {
         start: usize,
@@ -458,7 +467,7 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
             item.end,
         );
         let raw_end = raw;
-        result.push_str(&source[copied_through..raw_start]);
+        append_edit_part(&mut result, &source[copied_through..raw_start]);
         let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
             line_ending(&source[raw_start..raw_end])
         } else {
@@ -472,10 +481,13 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
         {
             result.push('\u{feff}');
         }
-        result.push_str(&normalize_newlines(item.replacement).replace('\n', style));
+        append_edit_part(
+            &mut result,
+            &normalize_newlines(item.replacement).replace('\n', style),
+        );
         copied_through = raw_end;
     }
-    result.push_str(&source[copied_through..]);
+    append_edit_part(&mut result, &source[copied_through..]);
     if result == source {
         return Err("edit made no changes".into());
     }
@@ -975,6 +987,32 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn edit_does_not_merge_line_breaks_at_replacement_boundaries() {
+        let root = std::env::temp_dir().join(format!("ion-edit-seams-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        let source = "first\rremove\nlast";
+        for (replacement, expected) in [("", "first\r\n\nlast"), ("\n", "first\r\r\n\nlast")] {
+            fs::write(&path, source).unwrap();
+            let output = edit(
+                &root,
+                &json!({"path":"file.txt", "edits":[{"old_text":"remove", "new_text":replacement}],
+                    "base_digest":hex_digest(source.as_bytes())}),
+                &CancellationToken::new(),
+                None,
+            );
+            assert!(!output.is_error, "{}", output.value);
+            let actual = fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                normalize_newlines(&actual),
+                format!("first\n{replacement}\nlast")
+            );
+            assert_eq!(actual, expected);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
