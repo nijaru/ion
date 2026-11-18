@@ -130,9 +130,15 @@ def bom_response(body):
     if step == 0:
         if fixture == "bom_code":
             return invoke("code_mode", {"code": "const r=await tools.read({path:'bom.txt',limit:1}); const e=await tools.edit({path:'bom.txt',base_digest:r.value.base_digest,edits:[{old_text:r.value.content,new_text:r.value.content.replace(' = 1;',' = 2;')}]}); return {read_error:r.is_error,edit_error:e.is_error};"})
-        return invoke("read", {"path": "bom.txt", "limit": 1})
+        return invoke("grep", {"path": "bom.txt", "pattern": "^α"})
     assert not results[-1]["is_error"], results[-1]
     if fixture == "bom_direct" and step == 1:
+        matches = results[-1]["result"]["matches"]
+        assert len(matches) == 1, matches
+        match = matches[0]
+        assert (match["line"], match["byte_offset"], match["text"]) == (1, 3, "α = 1;"), match
+        return invoke("read", {"path": match["path"], "offset": match["line"], "limit": 1})
+    if fixture == "bom_direct" and step == 2:
         page = results[-1]["result"]
         assert page["content"] == "\ufeffα = 1;\r\n", page
         return invoke("edit", {"path": "bom.txt", "base_digest": page["base_digest"], "edits": [{"old_text": page["content"], "new_text": page["content"].replace(" = 1;", " = 2;")}]})
@@ -248,7 +254,7 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
             result = subprocess.run([binary, "--cwd", workspace, *options, "run", "Read and edit the exact BOM-prefixed first line."], env=env, capture_output=True, text=True, timeout=10)
             assert not failures, failures
             assert result.returncode == 0 and result.stdout.strip() == "BOM_ROUNDTRIP_COMPLETE", result
-            assert len(requests) == (2 if fixture == "bom_code" else 3), len(requests)
+            assert len(requests) == (2 if fixture == "bom_code" else 4), len(requests)
         requests.clear()
         os.mkfifo(workspace / "AGENTS.md")
         fixture = "instructions"

@@ -275,8 +275,11 @@ impl<'a> Search<'a> {
             }
         };
         let mut line_number = 0u64;
-        let mut line_start = 0usize;
-        for segment in text.split_inclusive('\n') {
+        // Search source text without its UTF-8 signature, but keep offsets
+        // relative to the original bytes so a subsequent read can use them.
+        let source = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let mut line_start = text.len() - source.len();
+        for segment in source.split_inclusive('\n') {
             if self.stop.is_cancelled() {
                 return Err(GrepStop::Cancelled);
             }
