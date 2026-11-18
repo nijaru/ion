@@ -64,6 +64,8 @@ pub struct ControlState {
 pub struct QueuedInput {
     pub id: InputId,
     pub delivery: Delivery,
+    /// True at the sampled cut; only a Returned update confirms withdrawal.
+    pub withdrawable: bool,
     pub preview: String,
     pub truncated: bool,
     pub attachments: usize,

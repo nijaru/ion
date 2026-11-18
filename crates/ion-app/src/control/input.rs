@@ -76,6 +76,10 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.reconcile_admissions();
         let custody = lock(&self.custody);
         let active_root = self.active.as_ref().and_then(|active| active.root);
+        let pending_receipts = self
+            .active
+            .as_ref()
+            .map_or_else(Vec::new, |active| active.inbox.pending_receipts());
         custody
             .queued_inputs(active_root)
             .map(|(id, input, pending)| {
@@ -102,6 +106,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 QueuedInput {
                     id,
                     delivery: input.delivery,
+                    withdrawable: match &pending.content {
+                        InputContent::Transferred { receipt, .. } => pending_receipts
+                            .iter()
+                            .any(|pending| pending.same_input(receipt)),
+                        _ => true,
+                    },
                     preview,
                     truncated,
                     attachments,

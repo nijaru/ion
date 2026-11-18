@@ -77,6 +77,18 @@ impl<M> SteeringInbox<M> {
             .pending
             .push_back(input);
     }
+    /// Snapshot identities still in the inbox, excluding the frozen commit batch.
+    /// Membership can change immediately; only taking custody confirms withdrawal.
+    pub fn pending_receipts(&self) -> Vec<crate::InputReceipt> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pending
+            .iter()
+            .map(PreparedInput::receipt)
+            .collect()
+    }
+
     /// Withdraw unclaimed prepared custody. A frozen commit owns its inputs
     /// outside this queue: absence, stop, or an abandoned wait proves nothing
     /// about their acceptance. Resolve those inputs through their receipts.

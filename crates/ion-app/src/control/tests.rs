@@ -869,6 +869,45 @@ async fn unread_return_capacity_is_reserved_before_more_effects() {
 }
 
 #[tokio::test]
+async fn queue_distinguishes_transferred_steering_still_in_inbox_from_claimed_custody() {
+    let model = Model::new(1);
+    let mut fixture = Fixture::new(model.clone(), false);
+    fixture
+        .control
+        .submit(Delivery::Start, prompt("root"), meta("root"))
+        .unwrap();
+    model.wait_calls(1).await;
+    let operation = fixture.control.current_operation().unwrap();
+    let id = fixture
+        .control
+        .submit(
+            Delivery::Steer(operation),
+            prompt("steer"),
+            meta("original"),
+        )
+        .unwrap();
+    assert!(fixture.control.queued_inputs(10)[0].withdrawable);
+    // Hold the transferred ticket outside the inbox, as the Core commit owner
+    // does after freeze, before the Pending receipt necessarily changes.
+    let inbox = fixture.control.active.as_ref().unwrap().inbox.clone();
+    let mut claimed = inbox.take_uncommitted();
+    assert_eq!(claimed.len(), 1);
+    let queue = fixture.control.queued_inputs(10);
+    assert_eq!(queue[0].id, id);
+    assert!(!queue[0].withdrawable);
+    inbox.push_prepared(claimed.pop().unwrap());
+    assert!(fixture.control.queued_inputs(10)[0].withdrawable);
+    fixture.control.clear_queue();
+    assert!(fixture.control.queued_inputs(10).is_empty());
+    model.release();
+    let (returned, _) = settle(&mut fixture.control).await;
+    assert_eq!(returned.len(), 1);
+    assert_eq!(returned[0].id, id);
+    assert!(matches!(returned[0].reason, ReturnReason::Cleared));
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn queued_projection_and_clear_share_custody_without_stopping_the_running_root() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);

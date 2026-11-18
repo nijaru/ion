@@ -21,18 +21,27 @@ fn queue_rows(
     if queued.is_empty() || budget == 0 {
         return Vec::new();
     }
+    let waiting = queued.iter().filter(|input| input.withdrawable).count();
+    let resolving = queued.len() - waiting;
     let steering = queued
         .iter()
+        .filter(|input| input.withdrawable)
         .filter(|input| matches!(input.delivery, ion_app::Delivery::Steer(_)))
         .count();
-    let mut rows = vec![crate::display_text::fit_line(
-        &format!(
-            "Queued · {steering} steering · {} follow-up(s) · {} edits all",
-            queued.len() - steering,
+    let mut summary = if waiting > 0 {
+        format!(
+            "Queued · {steering} steering · {} follow-up(s) · {} withdraws queued input",
+            waiting - steering,
             keys.hint(crate::keybindings::KeyAction::Dequeue),
-        ),
-        width,
-    )];
+        )
+    } else {
+        String::new()
+    };
+    if resolving > 0 {
+        let prefix = if summary.is_empty() { "" } else { " · " };
+        summary.push_str(&format!("{prefix}{resolving} resolving acceptance"));
+    }
+    let mut rows = vec![crate::display_text::fit_line(&summary, width)];
     let slots = budget.saturating_sub(1);
     let shown = if queued.len() > slots {
         slots.saturating_sub(1)
@@ -52,7 +61,12 @@ fn queue_rows(
         };
         rows.push(crate::display_text::fit_line(
             &format!(
-                "{kind}: {}{}{attachments}",
+                "{kind}{}: {}{}{attachments}",
+                if input.withdrawable {
+                    ""
+                } else {
+                    " (resolving)"
+                },
                 input.preview,
                 if input.truncated { "…" } else { "" }
             ),
