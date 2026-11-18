@@ -87,6 +87,24 @@ fn authentication<T>(result: Result<T, AgentError>) {
 }
 
 #[tokio::test]
+async fn empty_compaction_does_not_require_provider_access() {
+    let service = AccessService::new();
+    service.allowed.store(false, Ordering::SeqCst);
+    let (root, session, agent) = fixture(service.clone());
+    let before = session.view().unwrap().entries;
+    let result = agent
+        .compact(None, session.clone(), CancellationToken::new(), |_| {})
+        .await;
+    assert_eq!(service.checks.load(Ordering::SeqCst), 0);
+    assert!(service.inner.requests().is_empty());
+    assert!(!result.unwrap());
+    assert_eq!(session.view().unwrap().entries, before);
+    session.shutdown().await.unwrap();
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
 async fn missing_access_returns_ordinary_input_without_a_turn_or_stream() {
     let service = AccessService::new();
     service.allowed.store(false, Ordering::SeqCst);

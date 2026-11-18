@@ -13,6 +13,13 @@ use crate::{
     session::{CompactionPlanning, Session},
 };
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CompactionMode {
+    Optional,
+    Required,
+    FirstExplicitChunk,
+}
+
 impl Agent {
     /// Summarize a settled prefix while retaining the complete raw Session.
     /// Optional literal focus applies only to this operation, including its chunks.
@@ -51,14 +58,9 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        // Only this first check can prove the command did not start compaction.
-        // An access failure at dispatch may follow a committed chunk or usage.
-        self.preflight_access(&stop)
-            .await
-            .map_err(|error| match error {
-                AgentError::Provider(error) => AgentError::CompactionAccess(error),
-                error => error,
-            })?;
+        if stop.is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
         let io = session.io()?;
         let (reasoning, context_bytes) = io
             .run(move |session| {
@@ -74,8 +76,13 @@ impl Agent {
         let keep_bytes = self.limits.compaction_keep_bytes(0).min(context_bytes / 2);
         let mut changed = false;
         loop {
+            let mode = if changed {
+                CompactionMode::Required
+            } else {
+                CompactionMode::FirstExplicitChunk
+            };
             match self
-                .compact_inner(instructions, &io, &stop, keep_bytes, false, observe)
+                .compact_inner(instructions, &io, &stop, keep_bytes, mode, observe)
                 .await?
             {
                 Some(chunked) => {
@@ -95,12 +102,13 @@ impl Agent {
         io: &crate::SessionIo,
         stop: &CancellationToken,
         keep_bytes: usize,
-        must_shrink: bool,
+        mode: CompactionMode,
         observe: &mut F,
     ) -> Result<Option<bool>, AgentError>
     where
         F: FnMut(AgentEvent) + Send,
     {
+        let mut check_access = mode == CompactionMode::FirstExplicitChunk;
         let output_tokens = self.limits.max_output_tokens.min(4096);
         let mut max_through_entry = u64::MAX;
         let focus = instructions.map(Arc::<str>::from);
@@ -159,6 +167,17 @@ impl Agent {
                 continue;
             };
             request.controls.max_output_tokens = available;
+            if check_access {
+                // Planning is read-only. Only this first preflight can prove
+                // there has been no generation, usage, or committed chunk.
+                self.preflight_access(stop)
+                    .await
+                    .map_err(|error| match error {
+                        AgentError::Provider(error) => AgentError::CompactionAccess(error),
+                        error => error,
+                    })?;
+                check_access = false;
+            }
             let attempt =
                 generate_with_retry(&self.service, &request, stop, &mut |_| {}, |observed| {
                     io.run_with(move |session| {
@@ -233,7 +252,7 @@ impl Agent {
         // Optional output-room planning must not replace a usable context with
         // a larger summary. Mandatory recovery and explicit compaction retain
         // their existing policy; their provider wire can differ from this view.
-        if must_shrink
+        if mode == CompactionMode::Optional
             && crate::json_size::encoded_len(&crate::prompt_size::NeutralMessages(&[
                 crate::session::summary_message(through_entry, &summary),
             ]))?

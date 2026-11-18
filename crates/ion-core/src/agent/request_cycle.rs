@@ -1,6 +1,6 @@
 //! Request rebuild authority for one admitted Turn. Transient retries stay in
 //! generation and retain the frozen request; rebuilds always return to intake.
-use super::{Agent, AgentError, AgentEvent, SteeringInbox};
+use super::{Agent, AgentError, AgentEvent, SteeringInbox, compaction::CompactionMode};
 use crate::{
     generation::OutputObservation,
     request::{RequestPlan, RequestStep},
@@ -138,7 +138,18 @@ impl<'a> RequestCycle<'a> {
                 }
                 match self
                     .agent
-                    .compact_inner(None, self.io, self.stop, keep_bytes, !required, observe)
+                    .compact_inner(
+                        None,
+                        self.io,
+                        self.stop,
+                        keep_bytes,
+                        if required {
+                            CompactionMode::Required
+                        } else {
+                            CompactionMode::Optional
+                        },
+                        observe,
+                    )
                     .await
                 {
                     Ok(Some(chunked)) => {
@@ -193,7 +204,14 @@ impl<'a> RequestCycle<'a> {
             {
                 match self
                     .agent
-                    .compact_inner(None, self.io, self.stop, keep_bytes, false, observe)
+                    .compact_inner(
+                        None,
+                        self.io,
+                        self.stop,
+                        keep_bytes,
+                        CompactionMode::Required,
+                        observe,
+                    )
                     .await
                 {
                     Ok(None) => {}
