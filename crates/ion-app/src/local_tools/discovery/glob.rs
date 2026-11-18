@@ -16,7 +16,13 @@ impl GlobFilter {
         // comment and a leading `!` negates the rule. Discovery accepts a
         // normal glob in both positions, so escape those prefixes rather than
         // silently producing an empty or inverted matcher.
-        let (prefix, rest) = if let Some(rest) = pattern_text.strip_prefix('#') {
+        let (prefix, rest) = if pattern_text.starts_with("./") {
+            let rest = pattern_text.trim_start_matches("./");
+            pattern(rest, "glob after ./")?;
+            // Candidates are relative and never start with ./; keep the
+            // explicit root anchor even for a basename like ./*.rs.
+            ("/", rest)
+        } else if let Some(rest) = pattern_text.strip_prefix('#') {
             ("\\#", rest)
         } else if let Some(rest) = pattern_text.strip_prefix('!') {
             ("\\!", rest)

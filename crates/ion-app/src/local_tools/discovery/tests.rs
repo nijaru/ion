@@ -154,8 +154,15 @@ fn find_honors_basename_and_nested_path_globs_with_ignore_rules() {
         ]),
         "{value}"
     );
-    let value = run(find, &root, json!({"pattern": "src/*.rs"}));
-    assert_eq!(find_paths(&value), BTreeSet::from(["src/a.rs".into()]));
+    for pattern in ["src/*.rs", "./src/*.rs"] {
+        let value = run(find, &root, json!({"pattern": pattern}));
+        assert_eq!(find_paths(&value), BTreeSet::from(["src/a.rs".into()]));
+    }
+    let value = run(find, &root, json!({"pattern": "./*.rs"}));
+    assert_eq!(
+        find_paths(&value),
+        BTreeSet::from([".hidden.rs".into(), "top.rs".into()])
+    );
 
     let value = run(find, &root, json!({"pattern": "*.tmp"}));
     assert_eq!(
@@ -375,7 +382,7 @@ fn grep_distinguishes_regex_literal_case_utf8_and_glob_filters() {
     let value = run(
         grep,
         &root,
-        json!({"pattern": "a.b", "literal": true, "glob": "*.rs", "path": "script.rs"}),
+        json!({"pattern": "a.b", "literal": true, "glob": "./*.rs", "path": "script.rs"}),
     );
     assert_eq!(grep_matches(&value).len(), 1, "{value}");
     assert_eq!(grep_matches(&value)[0]["path"], "script.rs");

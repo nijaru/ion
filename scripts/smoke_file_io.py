@@ -130,7 +130,7 @@ def bom_response(body):
     if step == 0:
         if fixture == "bom_code":
             return invoke("code_mode", {"code": "const r=await tools.read({path:'bom.txt',limit:1}); const e=await tools.edit({path:'bom.txt',base_digest:r.value.base_digest,edits:[{old_text:r.value.content,new_text:r.value.content.replace(' = 1;',' = 2;')}]}); return {read_error:r.is_error,edit_error:e.is_error};"})
-        return invoke("grep", {"path": "bom.txt", "pattern": "^α"})
+        return invoke("grep", {"glob": "./bom.txt", "pattern": "^α"})
     assert not results[-1]["is_error"], results[-1]
     if fixture == "bom_direct" and step == 1:
         matches = results[-1]["result"]["matches"]
