@@ -530,7 +530,9 @@ impl Agent {
             .await
     }
 
-    async fn preflight_access(&self, stop: &CancellationToken) -> Result<(), AgentError> {
+    /// Validate local access to the bound model without generation or model
+    /// transport. This does not grant access for a later admission or dispatch.
+    pub async fn preflight_access(&self, stop: &CancellationToken) -> Result<(), AgentError> {
         tokio::select! {
             biased;
             () = stop.cancelled() => Err(AgentError::Cancelled),
@@ -726,6 +728,9 @@ pub enum AgentError {
         "model input exceeds the context or request-size limit after available compaction; shorten the current input or, for a context-window limit, select a larger-context model"
     )]
     ContextTooLarge,
+    /// The initial explicit-compaction preflight refused before any work.
+    #[error("compaction access refused: {0}")]
+    CompactionAccess(#[source] ProviderError),
     #[error("model returned an invalid context summary: {0}")]
     InvalidSummary(&'static str),
     #[error("model did not return a complete, nonempty assistant response")]
@@ -772,6 +777,7 @@ impl AgentError {
             Self::ReplayContextChanged => TurnEndReason::Failed("replay_context_changed".into()),
             Self::InvalidToolCall => TurnEndReason::Failed("invalid_tool_call".into()),
             Self::EmptyPrompt
+            | Self::CompactionAccess(_)
             | Self::InvalidUserInput
             | Self::ImagesUnsupported
             | Self::InputQueueFull { .. }

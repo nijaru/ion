@@ -33,19 +33,32 @@ impl<T: Send + 'static> Preparation<T> {
         F: FnOnce(CancellationToken) -> W + Send + 'static,
         W: Future<Output = Result<T>> + Send + 'static,
     {
-        let preparation = Self::pending(stop);
-        let custody = preparation.retained.clone();
-        let token = preparation.stop.clone();
-        let mut state = preparation
+        let mut preparation = Self::pending(stop);
+        preparation.launch(work);
+        preparation
+    }
+
+    pub(crate) fn launch<F, W>(&mut self, work: F)
+    where
+        F: FnOnce(CancellationToken) -> W + Send + 'static,
+        W: Future<Output = Result<T>> + Send + 'static,
+    {
+        let custody = self.retained.clone();
+        let token = self.stop.clone();
+        let mut state = self
             .retained
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert!(state.task.is_none(), "preparation launched once");
         state.task = Some(tokio::spawn(async move {
+            drop(
+                custody
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
             let _custody = custody;
             work(token).await
         }));
-        drop(state);
-        preparation
     }
 
     /// Retain the actual blocking task, not an async wrapper that runtime

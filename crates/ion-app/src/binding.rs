@@ -118,7 +118,7 @@ impl BindingWork {
                     }
                 }
                 if let Some(BindingLaunch { source, change, .. }) = launch.take() {
-                    work.launch_blocking(move |stop| source.run(change, stop));
+                    source.launch(change, work);
                 }
                 work.join().await
             }
@@ -346,29 +346,49 @@ impl BindingSource {
         })
     }
 
-    // Every native lease, Store access and user callback lives in this actual
-    // blocking worker. Never move an IdleSession guard into an async future.
+    fn launch(self, change: BindingChange, work: &mut Preparation<BindingDelta>) {
+        if let BindingChange::SelectModel(model) = change {
+            work.launch(move |stop| self.select_model(model, stop));
+        } else {
+            work.launch_blocking(move |stop| self.run(change, stop));
+        }
+    }
+
+    async fn select_model(self, model: ModelRef, stop: CancellationToken) -> Result<BindingDelta> {
+        let (session, runtime, commands) =
+            Preparation::start_blocking(stop.child_token(), move |stop| {
+                check_stop(&stop)?;
+                self.session.ensure_idle()?;
+                let commands = self.application.commands(self.session.cwd())?;
+                let runtime =
+                    self.application
+                        .runtime(self.session.cwd(), Some(&model), self.questions)?;
+                validate_model(&runtime, Some(&model))?;
+                Ok((self.session, runtime, commands))
+            })
+            .join()
+            .await?;
+        // No blocking worker or idle lease is held while credentials resolve.
+        runtime.agent.preflight_access(&stop).await?;
+        Preparation::start_blocking(stop.child_token(), move |stop| {
+            check_stop(&stop)?;
+            // Agent rechecks idle, validates saved reasoning and commits under Core's gate.
+            runtime.agent.select_model(&session)?;
+            Ok(BindingDelta {
+                prepared: PreparedChange::Runtime(runtime, commands),
+                result: BindingResult::ModelSelected,
+            })
+        })
+        .join()
+        .await
+    }
+
+    // Native leases, Store access and user callbacks stay on blocking workers.
     fn run(self, change: BindingChange, stop: CancellationToken) -> Result<BindingDelta> {
         check_stop(&stop)?;
         let delta: Result<_> = match change {
             BindingChange::ReloadResources => self.reload(&stop, BindingResult::ResourcesReloaded),
-            BindingChange::SelectModel(model) => {
-                self.session.ensure_idle()?;
-                let commands = self.application.commands(self.session.cwd())?;
-                let runtime = self.application.runtime(
-                    self.session.cwd(),
-                    Some(&model),
-                    self.questions.clone(),
-                )?;
-                validate_model(&runtime, Some(&model))?;
-                check_stop(&stop)?;
-                // Agent validates saved reasoning and commits under Core's gate.
-                runtime.agent.select_model(&self.session)?;
-                Ok(BindingDelta {
-                    prepared: PreparedChange::Runtime(runtime, commands),
-                    result: BindingResult::ModelSelected,
-                })
-            }
+            BindingChange::SelectModel(_) => unreachable!("model selection has an async preflight"),
             BindingChange::SelectReasoning(reasoning) => {
                 check_stop(&stop)?;
                 self.runtime
@@ -572,7 +592,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 .is_some_and(|pending| pending.retirements.is_empty())
         {
             let BindingLaunch { source, change, .. } = launch.take().expect("pending launch");
-            work.launch_blocking(move |stop| source.run(change, stop));
+            source.launch(change, work);
         }
         Ok(operation)
     }

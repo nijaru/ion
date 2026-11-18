@@ -166,6 +166,182 @@ impl Drop for Fixture {
     }
 }
 
+#[tokio::test]
+async fn missing_access_refuses_selection_and_returns_cold_compaction_source() {
+    use ion_ai::{
+        Content, ModelResponse, ModelStreamEvent, ResponseTermination, Role, Script,
+        ScriptedModelService, Usage,
+    };
+    use ion_core::{Agent, ToolSet};
+    use tokio_util::sync::CancellationToken;
+
+    struct Routes {
+        host: Arc<Host>,
+        restricted: ion_app::Selection,
+        initial: Arc<Agent>,
+    }
+    impl ion_app::Application for Routes {
+        fn resources(&self, _: Option<&std::path::Path>) -> anyhow::Result<ion_app::Resources> {
+            Ok(ion_app::Resources::new("fixture".into()))
+        }
+        fn runtime(
+            &self,
+            _: Option<&std::path::Path>,
+            model: Option<&ModelRef>,
+            _: Option<Arc<ion_app::QuestionCustody>>,
+        ) -> anyhow::Result<ion_app::ApplicationRuntime> {
+            let agent = if model == Some(&self.restricted.identity()) {
+                self.host
+                    .agent(&self.restricted, Arc::new(ToolSet::new([])))?
+            } else {
+                self.initial.clone()
+            };
+            Ok(ion_app::ApplicationRuntime::new(agent))
+        }
+    }
+
+    let mut fixture = Fixture::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut selected = fixture
+        .host
+        .models()
+        .save_default(&SavedSelection {
+            provider: format!("fixture-{}", uuid::Uuid::now_v7()),
+            model: "restricted".into(),
+            endpoint: Some(format!("http://{}", listener.local_addr().unwrap())),
+            wire: Some(Wire::ChatCompletions),
+            api_key_env: Some("ION_TEST_ABSENT_COMPACTION_ACCESS_KEY".into()),
+            context_window_tokens: None,
+            max_output_tokens: None,
+            image_input: true,
+        })
+        .unwrap();
+    // Saved custom endpoints allow anonymous use. The fixture deliberately
+    // installs a required-key route over loopback instead of a live catalog route.
+    selected.requires_key = true;
+    let routes = Arc::new(Routes {
+        host: fixture.host.clone(),
+        restricted: selected.clone(),
+        initial: fixture.control.agent().clone(),
+    });
+    let catalog = fixture.host.sessions(
+        fixture
+            .control
+            .session()
+            .cwd()
+            .map(std::path::Path::to_path_buf),
+    );
+    let mut binding = ion_app::SessionSetup::new(
+        fixture.control.session().clone(),
+        catalog.clone(),
+        routes.clone(),
+        None,
+        None,
+        None,
+    )
+    .unwrap()
+    .into_control::<()>();
+    binding.agent().select_model(binding.session()).unwrap();
+    let old = binding.agent().model().clone();
+    let error = binding.select_model(selected.identity()).await.unwrap_err();
+    assert!(
+        matches!(error.downcast_ref::<ion_core::AgentError>(), Some(ion_core::AgentError::Provider(error)) if error.kind == ion_ai::ProviderErrorKind::Authentication)
+    );
+    assert_eq!(binding.agent().model(), &old);
+    assert_eq!(
+        Session::inspect(binding.session().path())
+            .unwrap()
+            .last_model
+            .as_ref(),
+        Some(&old)
+    );
+
+    binding.shutdown().await;
+
+    // Seed a previously selected route without contacting any provider, then
+    // reopen that saved model passively with its required credential absent.
+    let path = fixture.root.join("saved.sqlite");
+    let session = Arc::new(Session::create(&path, Some(&fixture.root)).unwrap());
+    let agent = Agent::with_tool_set(
+        Arc::new(ScriptedModelService::new([Script::Stream(vec![
+            ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("historical answer".into())],
+                    provider_replay: None,
+                },
+                usage: Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            }),
+        ])])),
+        Arc::new(ToolSet::new([])),
+        selected.identity(),
+    );
+    agent.select_model(&session).unwrap();
+    agent
+        .submit(
+            session.clone(),
+            "historical question".into(),
+            "fixture".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let before = session.view().unwrap().entries;
+    let retired = session.retirement();
+    drop(session);
+    retired.join().await.unwrap();
+    let session = Arc::new(Session::open(&path).unwrap());
+    let mut control =
+        ion_app::SessionSetup::new(session.clone(), catalog, routes, None, None, None)
+            .unwrap()
+            .into_control::<EditorDraft>();
+    assert_eq!(control.agent().model(), &selected.identity());
+    let mut ui = Frontend::default();
+    let literal = "  /compact focus on 雪  ";
+    let cursor = "  /compact focus".len();
+    ui.editor.draft = literal.into();
+    ui.editor.cursor = cursor;
+    let Action::Command(CommandInput::Editor(source)) =
+        ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None)
+    else {
+        panic!("compact editor command");
+    };
+    control.compact(Some("focus on 雪".into()), source).unwrap();
+    let settlement = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match control.next().await {
+                update @ ControlUpdate::Settled(_) => break update,
+                ControlUpdate::Idle => panic!("compaction settled without a result"),
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+    let error = activity::apply(&mut ui, &control, settlement)
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        error.downcast_ref::<ion_core::AgentError>(),
+        Some(ion_core::AgentError::CompactionAccess(_))
+    ));
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        (literal, cursor)
+    );
+    assert_eq!(session.view().unwrap().entries, before);
+    assert_eq!(
+        listener.accept().unwrap_err().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+    control.shutdown().await;
+    fixture.control.shutdown().await;
+}
+
 #[test]
 fn command_actions_own_exact_editor_sources() {
     for (literal, prefix) in [
@@ -1114,16 +1290,21 @@ async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
     let mut outcome = Err(anyhow::anyhow!("terminal output disconnected"));
     for mut update in report.updates {
         if let ControlUpdate::Settled(settlement) = &mut update {
-            // Inject a concurrent settlement failure at the actual UI boundary.
-            settlement.outcome = OperationOutcome::Compact(Err(
-                ion_core::AgentError::InvalidSummary("observation commit failed"),
-            ));
+            // Core's partial-compaction test exercises this dispatch error
+            // after a committed chunk. It must not return the command source.
+            settlement.outcome = OperationOutcome::Compact(Err(ion_core::AgentError::Provider(
+                ion_ai::ProviderError {
+                    kind: ion_ai::ProviderErrorKind::Authentication,
+                    message: "credential unavailable after dispatch".into(),
+                    retry_after_ms: None,
+                },
+            )));
         }
         activity::cleanup_update(&mut ui, &fixture.control, update, &mut outcome);
     }
     let error = format!("{:#}", outcome.unwrap_err());
     assert!(error.contains("terminal output disconnected"));
-    assert!(error.contains("observation commit failed"));
+    assert!(error.contains("credential unavailable after dispatch"));
     assert!(ui.editor.recovered.is_empty());
     assert!(
         ui.editor.draft.is_empty(),

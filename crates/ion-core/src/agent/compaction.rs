@@ -51,9 +51,14 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        if stop.is_cancelled() {
-            return Err(AgentError::Cancelled);
-        }
+        // Only this first check can prove the command did not start compaction.
+        // An access failure at dispatch may follow a committed chunk or usage.
+        self.preflight_access(&stop)
+            .await
+            .map_err(|error| match error {
+                AgentError::Provider(error) => AgentError::CompactionAccess(error),
+                error => error,
+            })?;
         let io = session.io()?;
         let (reasoning, context_bytes) = io
             .run(move |session| {

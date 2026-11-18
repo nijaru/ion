@@ -31,8 +31,8 @@ enum StartupState {
     Stopped(DelegationPreparationError),
 }
 
-// This timer has no native work. The actual blocking worker owns it, including
-// when its borrowed waiter is abandoned, and aborts it on completion or panic.
+// This timer has no native work. The retained preflight owns it through both
+// phases and aborts it on completion or panic.
 struct DeadlineMonitor(Option<JoinHandle<()>>);
 impl Drop for DeadlineMonitor {
     fn drop(&mut self) {
@@ -53,7 +53,9 @@ impl DelegationPreparation {
     pub(crate) fn start(
         timeout_ms: Option<u64>,
         parent: &CancellationToken,
-        work: impl FnOnce(CancellationToken) -> Result<PreparedDelegation> + Send + 'static,
+        work: impl FnOnce(CancellationToken) -> Result<(PreparedDelegation, Arc<ion_core::Agent>)>
+        + Send
+        + 'static,
     ) -> Result<Self> {
         let started = Instant::now();
         let deadline = timeout_ms
@@ -101,9 +103,21 @@ impl DelegationPreparation {
         let parent = parent.clone();
         Ok(Self {
             state,
-            inner: Preparation::start_blocking(stop, move |stop| {
+            inner: Preparation::start(stop, move |stop| async move {
                 let _timer = timer;
-                let result = check_stop(&stop).and_then(|()| work(stop.clone()));
+                let result = async {
+                    let (prepared, agent) =
+                        Preparation::start_blocking(stop.child_token(), move |stop| {
+                            check_stop(&stop).and_then(|()| work(stop))
+                        })
+                        .join()
+                        .await?;
+                    // Validate the captured route before publishing the cold task.
+                    // No native worker is held while the async lookup runs.
+                    agent.preflight_access(&stop).await?;
+                    Ok(prepared)
+                }
+                .await;
                 let reason = {
                     let mut state = completion
                         .lock()

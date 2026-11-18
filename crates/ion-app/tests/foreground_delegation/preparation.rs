@@ -129,6 +129,66 @@ fn error(result: anyhow::Result<PreparedDelegation>) -> anyhow::Error {
     }
 }
 
+#[test]
+fn public_child_access_refusal_precedes_gateway_admission() {
+    struct MissingAccess;
+    impl ion_ai::ModelService for MissingAccess {
+        fn validate_access(&self) -> BoxFuture<'_, Result<(), ion_ai::ProviderError>> {
+            Box::pin(async {
+                // A resolver can need both Tokio's timer and native capacity.
+                tokio::time::sleep(Duration::from_millis(1)).await;
+                Err(tokio::task::spawn_blocking(|| ion_ai::ProviderError {
+                    kind: ion_ai::ProviderErrorKind::Authentication,
+                    message: "fixture child key missing".into(),
+                    retry_after_ms: None,
+                })
+                .await
+                .unwrap())
+            })
+        }
+        fn stream(
+            &self,
+            _: ion_ai::ModelRequest,
+        ) -> BoxFuture<'_, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
+            panic!("refused child must not dispatch")
+        }
+    }
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .max_blocking_threads(1)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let mut f = Fixture::with_child_service(
+            Wait::Join,
+            false,
+            false,
+            None,
+            None,
+            None,
+            Some(Arc::new(MissingAccess)),
+        );
+        f.start().await;
+        let report = f.settle().await;
+        assert!(report.cleanup_errors.is_empty());
+        let view = f.session.view().unwrap();
+        assert!(view.delegations().is_empty());
+        let requests = f.parent.requests();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            serde_json::to_string(&requests[1].messages)
+                .unwrap()
+                .contains("fixture child key missing")
+        );
+        assert!(!f.root.join("children").exists());
+        assert_eq!(f.effect.calls.load(Ordering::SeqCst), 0);
+        f.session.shutdown().await.unwrap();
+        let root = f.root.clone();
+        drop(f);
+        std::fs::remove_dir_all(root).unwrap();
+    });
+}
+
 #[tokio::test]
 async fn child_resource_preflight_does_not_block_the_control_executor() {
     let fixture = Fixture::new(Wait::Join, false, false);

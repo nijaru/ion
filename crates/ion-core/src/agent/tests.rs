@@ -5779,7 +5779,11 @@ async fn request_pressure_rebuild_rechecks_steering_and_stop() {
 
 #[tokio::test]
 async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefixes() {
-    for (window, lengths) in [(4096, vec![10]), (42_000, vec![49_900, 13_400, 34_900])] {
+    for (window, lengths, lose_access) in [
+        (4096, vec![10], false),
+        (42_000, vec![49_900, 13_400, 34_900], false),
+        (42_000, vec![49_900, 13_400, 34_900], true),
+    ] {
         let root =
             std::env::temp_dir().join(format!("ion-summary-capacity-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -5807,10 +5811,17 @@ async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefi
                 .unwrap();
         }
         let before = session.view().unwrap().entries;
-        let scripts =
-            Arc::new(ScriptedModelService::new((0..3).map(|_| {
+        let scripts = Arc::new(ScriptedModelService::new((0..3).map(|index| {
+            if lose_access && index == 1 {
+                Script::OpenError(ProviderError {
+                    kind: ProviderErrorKind::Authentication,
+                    message: "access revoked after the first chunk".into(),
+                    retry_after_ms: None,
+                })
+            } else {
                 response(vec![Content::Text("Retained settled history.".into())])
-            })));
+            }
+        })));
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)), model())
             .with_limits(AgentLimits {
                 context_window_tokens: Some(window),
@@ -5837,10 +5848,19 @@ async fn compaction_uses_available_capacity_without_skipping_valid_settled_prefi
         let reopened_entries = reopened.view().unwrap().entries;
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
-        assert!(changed.unwrap(), "window {window}");
         assert!(after.starts_with(&before));
         assert_eq!(reopened_entries, after);
         let requests = scripts.requests();
+        if lose_access {
+            assert!(
+                matches!(changed, Err(AgentError::Provider(error)) if error.kind == ProviderErrorKind::Authentication)
+            );
+            assert_eq!(cuts.len(), 1, "first chunk committed before the refusal");
+            assert!(after.len() > before.len());
+            assert_eq!(requests.len(), 2, "no automatic replay on refusal");
+            continue;
+        }
+        assert!(changed.unwrap(), "window {window}");
         if window == 4096 {
             assert_eq!(cuts.len(), 1);
             assert!(requests[0].controls.max_output_tokens > 0);

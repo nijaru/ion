@@ -143,7 +143,7 @@ impl ToolSource for Delegate {
 impl ToolExecutor for Delegate {
     fn execute<'a>(&'a self, invocation: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
         Box::pin(async move {
-            let task = async || {
+            let task = async || -> anyhow::Result<_> {
                 let input = Message::user_input("count two characters".into(), []);
                 let (task, steering, progress) = if matches!(self.wait, Wait::Panic) {
                     (
@@ -167,11 +167,9 @@ impl ToolExecutor for Delegate {
                     let prepared = self
                         .child
                         .clone()
-                        .prepare(input, invocation.stop())
-                        .unwrap()
+                        .prepare(input, invocation.stop())?
                         .join()
-                        .await
-                        .unwrap();
+                        .await?;
                     *self.steering.lock().unwrap() = Some(prepared.steering.clone());
                     *self.progress.lock().unwrap() = Some(prepared.progress.clone());
                     (
@@ -180,7 +178,7 @@ impl ToolExecutor for Delegate {
                         Some(prepared.progress),
                     )
                 };
-                match &self.owner {
+                Ok(match &self.owner {
                     Some(owner) => {
                         let mut permit = match steering {
                             Some(steering) => owner.destination().with_steering(steering),
@@ -224,13 +222,17 @@ impl ToolExecutor for Delegate {
                         }
                     }
                     None => task,
-                }
+                })
+            };
+            let prepared = match task().await {
+                Ok(task) => task,
+                Err(error) => return output(json!({"preflight_error": error.to_string()})),
             };
             let result = match self.wait {
                 Wait::Abandon | Wait::AbandonBounded(_) => {
                     let mut started = self.effect.started.subscribe();
                     tokio::select! {
-                        result = invocation.delegate(task().await) => result,
+                        result = invocation.delegate(prepared) => result,
                         _ = started.wait_for(|started| *started) => return output(json!("wait abandoned")),
                     }
                 }
@@ -242,14 +244,17 @@ impl ToolExecutor for Delegate {
                 | Wait::CloseBeforeTransfer
                 | Wait::Bounded(_)
                 | Wait::StopAtHandoff
-                | Wait::CloseAtHandoff => invocation.delegate(task().await).await,
+                | Wait::CloseAtHandoff => invocation.delegate(prepared).await,
             };
             if let Ok(receipt) = result {
                 if matches!(self.wait, Wait::HoldAfterTransfer) {
                     invocation.stop().cancelled().await;
                 }
                 if matches!(self.wait, Wait::Repeat) {
-                    assert_eq!(invocation.delegate(task().await).await.unwrap(), receipt);
+                    assert_eq!(
+                        invocation.delegate(task().await.unwrap()).await.unwrap(),
+                        receipt
+                    );
                     let different = self
                         .child
                         .clone()

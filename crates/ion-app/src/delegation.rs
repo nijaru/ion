@@ -65,7 +65,7 @@ impl SessionDelegation {
         self,
         input: Message,
         stop: &CancellationToken,
-    ) -> Result<PreparedDelegation> {
+    ) -> Result<(PreparedDelegation, Arc<ion_core::Agent>)> {
         preparation::check_stop(stop)?;
         let directory = self
             .target
@@ -109,6 +109,7 @@ impl SessionDelegation {
         let reasoning = self.reasoning;
         let execution_timeout_ms = self.execution_timeout_ms;
         let (steering, ready) = ChildSteering::new(runtime.agent.limits());
+        let agent = runtime.agent.clone();
         let progress = ChildProgress::default();
         let observed = progress.clone();
         let task = DelegationTask::new(spec, move |child, request, stop| {
@@ -266,12 +267,15 @@ impl SessionDelegation {
             })
         })
         .map_err(anyhow::Error::msg)?;
-        Ok(PreparedDelegation {
-            task,
-            steering,
-            progress,
-            completion: None,
-        })
+        Ok((
+            PreparedDelegation {
+                task,
+                steering,
+                progress,
+                completion: None,
+            },
+            agent,
+        ))
     }
 }
 

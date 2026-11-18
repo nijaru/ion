@@ -236,7 +236,11 @@ pub(super) fn apply(
         ControlUpdate::Settled(mut settlement) => {
             ui.discard_provisional();
             ui.conversation.clear_live();
-            let not_dispatched = matches!(&settlement.outcome, OperationOutcome::NotDispatched(_));
+            let not_dispatched = matches!(
+                &settlement.outcome,
+                OperationOutcome::NotDispatched(_)
+                    | OperationOutcome::Compact(Err(ion_core::AgentError::CompactionAccess(_)))
+            );
             let result = match settlement.outcome {
                 OperationOutcome::NotDispatched(error) => {
                     Err(error.context("Operation was not dispatched; no executor invoked"))
@@ -277,9 +281,13 @@ pub(super) fn apply(
                     None
                 }
                 Err(error) => {
-                    ui.status = format!(
-                        "Operation ended: {error:#}; inspect Session and effects before retrying"
-                    );
+                    ui.status = if not_dispatched {
+                        format!("Operation not started: {error:#}")
+                    } else {
+                        format!(
+                            "Operation ended: {error:#}; inspect Session and effects before retrying"
+                        )
+                    };
                     Some(error)
                 }
             };
