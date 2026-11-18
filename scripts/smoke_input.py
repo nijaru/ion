@@ -2101,8 +2101,9 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait(lambda: "Shell was not started:" in terminal.text())
                 terminal.output.clear()
                 release.set()
-                terminal.wait(lambda: "DONE_WAIT_HISTORY" in terminal.text())
-                terminal.paint()
+                # Streamed answer text can appear before the Turn settles.
+                # The preserved shell draft must be submitted as a fresh prompt.
+                terminal.wait_ready(lambda: "DONE_WAIT_HISTORY" in terminal.text())
                 terminal.send("SAFE_\r")
                 terminal.wait(lambda: len(requests) == before + 2 or bool(list(cwd.glob("MUST_NOT_EXIST*"))))
                 assert not list(cwd.glob("MUST_NOT_EXIST*")), "refused shell input was executed"
@@ -2131,8 +2132,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait(lambda: "PREFIX_kept e\u0301 🦀" in terminal.text())
                 assert len(requests) == before + 1, "editing shortcuts admitted input"
                 release.set()
-                terminal.wait(lambda: "DONE_WAIT_HISTORY" in terminal.text())
-                terminal.paint()
+                terminal.wait_ready(lambda: "DONE_WAIT_HISTORY" in terminal.text())
                 terminal.send("\r")
                 terminal.wait(lambda: len(requests) == before + 2)
                 assert user_text(requests[-1]) == "PREFIX_kept e\u0301 🦀", user_text(requests[-1])
@@ -2151,8 +2151,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait_ready(lambda: "›" in terminal.text())
                 before = len(requests)
                 terminal.send("EARLIER\r")
-                terminal.wait(lambda: "DONE_EARLIER" in terminal.text())
-                terminal.paint()
+                terminal.wait_ready(lambda: "DONE_EARLIER" in terminal.text())
                 release.clear()
                 terminal.output.clear()
                 terminal.send("WAIT_HISTORY\r")
@@ -2161,8 +2160,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait(lambda: "› EARLIER" in terminal.text())
                 terminal.output.clear()
                 release.set()
-                terminal.wait(lambda: "DONE_WAIT_HISTORY" in terminal.text())
-                terminal.paint()
+                terminal.wait_ready(lambda: "DONE_WAIT_HISTORY" in terminal.text())
                 terminal.send("\x1b[B")
                 terminal.paint()
                 terminal.send("PREFIX_\r")
