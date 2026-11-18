@@ -378,21 +378,18 @@ fn advance_raw_offset(bytes: &[u8], raw: &mut usize, normalized: &mut usize, tar
     }
 }
 
-fn line_ending(text: &str) -> &'static str {
-    let bytes = text.as_bytes();
-    for (index, byte) in bytes.iter().enumerate() {
-        if *byte == b'\r' {
-            return if bytes.get(index + 1) == Some(&b'\n') {
-                "\r\n"
-            } else {
-                "\r"
-            };
-        }
-        if *byte == b'\n' {
-            return "\n";
-        }
+fn line_ending_at(source: &str, offset: usize) -> &'static str {
+    // Use the target line's ending, or the preceding line's if it ends at
+    // EOF. Only treat lone CR as the insertion style in files without LF.
+    match source[offset..]
+        .find('\n')
+        .map(|index| offset + index)
+        .or_else(|| source[..offset].rfind('\n'))
+    {
+        Some(index) if index > 0 && source.as_bytes()[index - 1] == b'\r' => "\r\n",
+        None if source.contains('\r') => "\r",
+        _ => "\n",
     }
-    "\n"
 }
 
 fn append_edit_part(result: &mut String, part: &str) {
@@ -468,11 +465,7 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
         );
         let raw_end = raw;
         append_edit_part(&mut result, &source[copied_through..raw_start]);
-        let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
-            line_ending(&source[raw_start..raw_end])
-        } else {
-            line_ending(source)
-        };
+        let style = line_ending_at(source, raw_start);
         // A read-back match can consume the format marker. Preserve it even
         // when the replacement omits it, without stripping literal interior BOMs.
         if raw_start == 0
@@ -990,12 +983,32 @@ mod tests {
     }
 
     #[test]
+    fn multiline_edit_uses_the_target_lines_ending() {
+        for (source, expected) in [
+            ("first\r\ntarget\nlast\r\n", "first\r\nnew\nline\nlast\r\n"),
+            ("first\ntarget\r\nlast\n", "first\nnew\r\nline\r\nlast\n"),
+            ("first\r\nsecond\ntarget", "first\r\nsecond\nnew\nline"),
+            ("first\rtarget\rlast", "first\rnew\rline\rlast"),
+        ] {
+            let actual = replace_text_preserving_format(
+                source,
+                &[TextEdit {
+                    old_text: "target".into(),
+                    new_text: "new\nline".into(),
+                }],
+            )
+            .unwrap();
+            assert_eq!(actual, expected, "source: {source:?}");
+        }
+    }
+
+    #[test]
     fn edit_does_not_merge_line_breaks_at_replacement_boundaries() {
         let root = std::env::temp_dir().join(format!("ion-edit-seams-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         let path = root.join("file.txt");
         let source = "first\rremove\nlast";
-        for (replacement, expected) in [("", "first\r\n\nlast"), ("\n", "first\r\r\n\nlast")] {
+        for (replacement, expected) in [("", "first\r\n\nlast"), ("\n", "first\r\n\n\nlast")] {
             fs::write(&path, source).unwrap();
             let output = edit(
                 &root,
