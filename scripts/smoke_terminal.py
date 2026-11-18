@@ -814,7 +814,8 @@ def exercise_active_band():
                     output.extend(data)
                     for reply in cursor.feed(data):
                         os.write(master, reply)
-                if not sent and "› ".encode() in output:
+                # The first composer can paint while the initial Session refresh blocks input.
+                if not sent and "› ".encode() in output and program_ready(output):
                     os.write(master, b"Exercise the busy activity band.\r")
                     sent = True
                 if not repainted and (work / "active.ready").exists():
