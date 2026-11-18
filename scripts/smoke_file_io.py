@@ -170,6 +170,21 @@ class Handler(BaseHTTPRequestHandler):
             except AssertionError as failure:
                 failures.append(str(failure))
                 delta, reason = {"content": "SCOPE_CONTRACT_FAILED"}, "stop"
+        elif fixture == "oversized_line":
+            if len(results) == 2:
+                page = json.loads(results[-1]["content"])
+                assert not page["is_error"], page
+                data = page["result"]
+                assert (data["content"], data["start_byte"], data["next_byte"], data["has_more"]) == ("🦀", 7, 11, True), data
+                delta, reason = {"content": "OVERSIZED_LINE_RECOVERED"}, "stop"
+            else:
+                args = {"path": "long.txt", "offset": 2, "limit": 1}
+                if results:
+                    failure = json.loads(results[0]["content"])
+                    assert failure["is_error"] and "byte_offset=7" in str(failure["result"]), failure
+                    args = {"path": "long.txt", "byte_offset": 7, "byte_limit": 4}
+                delta = {"tool_calls": [{"index": 0, "id": f"long-{len(results)}", "type": "function", "function": {"name": "read", "arguments": json.dumps(args)}}]}
+                reason = "tool_calls"
         elif fixture == "fifo":
             if results:
                 assert len(results) == 1 and "regular file" in results[0]["content"], results
@@ -246,6 +261,12 @@ with tempfile.TemporaryDirectory(prefix="ion-file-io-") as temporary:
         (workspace / "sample.txt").write_bytes(sample)
         result = subprocess.run([binary, "--cwd", workspace, "run", "Read the second line and continue to EOF."], env=env, capture_output=True, text=True, timeout=10)
         assert result.returncode == 0 and result.stdout.strip() == "LINE_RANGES_READ", result
+        assert len(requests) == 3, len(requests)
+        requests.clear()
+        fixture = "oversized_line"
+        (workspace / "long.txt").write_bytes("\ufeffα\r\n".encode() + "🦀".encode() + b"x" * 65536)
+        result = subprocess.run([binary, "--cwd", workspace, "run", "Read the start of the oversized second line."], env=env, capture_output=True, text=True, timeout=10)
+        assert result.returncode == 0 and result.stdout.strip() == "OVERSIZED_LINE_RECOVERED", result
         assert len(requests) == 3, len(requests)
         for fixture in ("bom_direct", "bom_code"):
             requests.clear()

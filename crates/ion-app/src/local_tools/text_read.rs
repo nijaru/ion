@@ -125,12 +125,17 @@ fn select_lines(
     stop: &CancellationToken,
 ) -> Result<Page, String> {
     let mut current = 1;
+    let mut start_byte = 0u64;
     while current < offset {
-        if !skip_line(reader, stop)? {
+        let skipped = skip_line(reader, stop)?;
+        if skipped == 0 {
             return Err(format!(
                 "offset {offset} is beyond end of file (EOF at line {current})"
             ));
         }
+        start_byte = start_byte
+            .checked_add(skipped)
+            .ok_or("byte offset overflow")?;
         current += 1;
     }
     let mut bytes = Vec::new();
@@ -150,7 +155,7 @@ fn select_lines(
         if line.len() > remaining {
             if bytes.is_empty() {
                 return Err(format!(
-                    "line {current} exceeds the {MAX_BYTES}-byte read bound; use byte_offset=0 and byte_limit to paginate without requiring complete lines"
+                    "line {current} exceeds the {MAX_BYTES}-byte read bound; use byte_offset={start_byte} and byte_limit to paginate without requiring complete lines"
                 ));
             }
             byte_limited = true;
@@ -170,20 +175,22 @@ fn select_lines(
     })
 }
 
-fn skip_line(reader: &mut impl BufRead, stop: &CancellationToken) -> Result<bool, String> {
-    let mut any = false;
+fn skip_line(reader: &mut impl BufRead, stop: &CancellationToken) -> Result<u64, String> {
+    let mut skipped = 0u64;
     loop {
         check_stop(stop)?;
         let available = reader.fill_buf().map_err(|e| e.to_string())?;
         if available.is_empty() {
-            return Ok(any);
+            return Ok(skipped);
         }
-        any = true;
         let newline = available.iter().position(|byte| *byte == b'\n');
         let consumed = newline.map_or(available.len(), |position| position + 1);
+        skipped = skipped
+            .checked_add(consumed as u64)
+            .ok_or("byte offset overflow")?;
         reader.consume(consumed);
         if newline.is_some() {
-            return Ok(true);
+            return Ok(skipped);
         }
     }
 }
@@ -301,7 +308,10 @@ mod tests {
         assert_eq!(page.content, "small\n");
         assert_eq!(page.next_offset, 2);
         assert!(page.has_more);
-        assert!(select_lines(&mut text.as_bytes(), 2, 1, &CancellationToken::new()).is_err());
+        let message = select_lines(&mut text.as_bytes(), 2, 1, &CancellationToken::new())
+            .err()
+            .expect("oversized line must be refused");
+        assert!(message.contains("byte_offset=6"), "{message}");
         let page = select_lines(&mut text.as_bytes(), 3, 1, &CancellationToken::new()).unwrap();
         assert_eq!(page.content, "tail");
         let exact = "x".repeat(MAX_BYTES);
