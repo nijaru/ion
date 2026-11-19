@@ -1714,10 +1714,13 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
         .unwrap();
     assert_eq!(state.complete(&request).unwrap().usage, Usage::known(8, 3));
 
-    for delta in [
-        json!({"content":"late"}),
-        json!({"refusal":"late"}),
-        json!({"refusal":42}),
+    for (delta, finish) in [
+        (json!({"content":"late"}), json!("stop")),
+        (json!({"refusal":"late"}), json!("stop")),
+        (json!({"refusal":42}), json!("stop")),
+        (json!({"content":"late"}), Value::Null),
+        (json!({"tool_calls":[{"index":0}]}), Value::Null),
+        (json!({}), json!("length")),
     ] {
         let mut state = ChatState::default();
         state
@@ -1725,7 +1728,7 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
             .unwrap();
         assert!(
             state
-                .accept(&json!({"choices":[{"index":0,"delta":delta,"finish_reason":"stop"}]}))
+                .accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"index":0,"delta":delta,"finish_reason":finish}]}))
                 .is_err()
         );
     }
@@ -1987,17 +1990,24 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     assert_eq!(response.usage, Usage::known(3, 2));
     assert_eq!(response.message.content, vec![Content::Text("hi".into())]);
 
+    // Some compatible gateways include a placeholder choice in the usage trailer.
+    let body = body.replace(
+        r#""choices":[]"#,
+        r#""choices":[{"index":0,"delta":{},"finish_reason":null}]"#,
+    );
     let endpoint = serve(body.replace("data: [DONE]\n\n", ""), "200 OK").await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
     let mut stream = model.stream(request()).await.unwrap();
-    let mut completed = false;
+    let mut completed = None;
     while let Some(event) = stream.next().await {
-        if matches!(event.unwrap(), ModelStreamEvent::Completed(_)) {
-            completed = true;
+        if let ModelStreamEvent::Completed(response) = event.unwrap() {
+            completed = Some(response);
         }
     }
-    assert!(completed);
+    let response = completed.unwrap();
+    assert_eq!(response.usage, Usage::known(3, 2));
+    assert_eq!(response.message.content, vec![Content::Text("hi".into())]);
 
     let endpoint = serve(
         "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n"

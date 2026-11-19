@@ -117,8 +117,14 @@ impl ChatState {
             self.usage.set_chat(usage)?;
             events.push(ModelStreamEvent::Usage(self.usage.value()));
         }
-        if self.finish.is_some() {
-            if finish != self.finish.as_deref() || !empty_post_finish_delta(&choice["delta"]) {
+        if let Some(previous) = self.finish.as_deref() {
+            // A usage trailer may carry an empty placeholder choice instead
+            // of an empty choices array. It cannot amend the finished choice.
+            let compatible_finish = match finish {
+                Some(reason) => reason == previous,
+                None => !events.is_empty(), // Only usage events can have been emitted here.
+            };
+            if !compatible_finish || !empty_post_finish_delta(delta) {
                 return Err(invalid("contradictory choice after finish_reason"));
             }
             return Ok(events);
