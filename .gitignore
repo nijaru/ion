@@ -15,6 +15,5 @@ __pycache__/
 *.log
 .worktrees/
 
-# Local agent harness state and handoffs
+# Local agent harness state
 .pi/
-/handoff.md
