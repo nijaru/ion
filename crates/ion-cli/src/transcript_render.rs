@@ -1,7 +1,8 @@
 //! Pure compact rendering for the typed coding transcript.
 use crate::{
     display_text::{
-        Component, Field, MappedLine, Origin, SourceKind, Wrapping, fit_line, wrap_mapped,
+        Component, Field, MappedLine, Origin, SourceKind, Wrapping, fit_line, fit_mapped,
+        wrap_mapped,
     },
     presentation_style::{Role, Theme},
     tool_output::{OutputDetail, RecordedExit, RenderOptions},
@@ -852,7 +853,7 @@ fn render_group(
             priority: item.priority(),
         });
         let mut rows = Vec::new();
-        push_activity(&mut rows, "• ", "  ", item, width, theme);
+        push_activity(&mut rows, "• ", "  ", item, width, detail);
         if group.activities[0].children.is_empty()
             && group.activities[0].activity.kind != ToolActivityKind::Command
             && let Some(detail) = &item.detail
@@ -898,7 +899,7 @@ fn render_group(
             if last { "  " } else { "│ " },
             item,
             width,
-            theme,
+            detail,
         );
         if group.activities[item.source.start].children.is_empty()
             && group.activities[item.source.start].activity.kind != ToolActivityKind::Command
@@ -1022,7 +1023,7 @@ fn render_children(
             &continuation,
             item,
             width,
-            theme,
+            detail,
         );
         crate::edit_diff::render(
             &mut rows,
@@ -1520,23 +1521,35 @@ fn push_activity(
     continuation: &str,
     item: &DisplayActivity,
     width: usize,
-    theme: &Theme,
+    detail: &RenderOptions<'_>,
 ) {
-    let mut line = Line::from(Span::raw(item.summary.clone())).style(item.style(theme));
+    let theme = detail.theme;
+    let summary_source = |line, start| {
+        if item.source.len() == 1 {
+            MappedLine::component(line, Component::Field(Field::Summary), start)
+        } else {
+            // A fold is not the concatenation of its members' summary components.
+            MappedLine::generated(line, 0)
+        }
+    };
+    let style = item.style(theme);
+    let mut source = summary_source(Line::styled(item.summary.clone(), style), 0);
     if let Some(changes) = item.changes {
-        line.spans.extend([
+        let suffix = Line::from(vec![
             Span::raw(" · "),
             Span::styled(format!("+{}", changes.added), theme.style(Role::Added)),
             Span::raw(" / "),
             Span::styled(format!("-{}", changes.removed), theme.style(Role::Removed)),
-        ]);
+        ])
+        .style(style);
+        let available = width.saturating_sub(Line::from(prefix).width());
+        if detail.detail == OutputDetail::Compact && suffix.width() <= available / 2 {
+            // Reserve the counts before clipping the label. Keep the suffix's
+            // original summary offset for anchors across resize and expansion.
+            source = fit_mapped(source, available - suffix.width()).0;
+        }
+        source.append(&summary_source(suffix, item.summary.len()));
     }
-    let source = if item.source.len() == 1 {
-        MappedLine::component(line, Component::Field(Field::Summary), 0)
-    } else {
-        // A fold is not the concatenation of its members' summary components.
-        MappedLine::generated(line, 0)
-    };
     rows.extend(wrap_mapped(
         prefix,
         continuation,

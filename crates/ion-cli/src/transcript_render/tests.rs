@@ -78,6 +78,55 @@ fn turn_terminations_are_literal_wrapped_status_not_assistant_markdown() {
 }
 
 #[test]
+fn narrow_compact_edit_header_keeps_diff_counts_on_the_action_row() {
+    let theme = distinct_theme();
+    let keys = crate::keybindings::KeyBindings::default();
+    let edit = activity(
+        "edit",
+        ToolActivityKind::Edit,
+        "crates/ion-cli/src/terminal_client/long_module_name.rs",
+        ActivityState::Completed,
+        Some(
+            serde_json::json!({"replacements":1,"diff":{"text":"-old\n+new\n","truncated":false,"added":3,"removed":1}}),
+        ),
+    );
+    let items = [TranscriptItem::ActivityGroup(ActivityGroup {
+        thinking: vec![],
+        source: ion_core::TranscriptSource { entry: 1, part: 0 },
+        turn: 1,
+        open: false,
+        activities: vec![edit],
+    })];
+    for detail in [OutputDetail::Compact, OutputDetail::Expanded] {
+        let options = RenderOptions::new(
+            detail,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        );
+        let rendered = rows(&items, 42, &options);
+        assert!(rendered.iter().all(|row| row.width() <= 42));
+        let header = rendered[0].to_string();
+        if detail == OutputDetail::Compact {
+            assert!(
+                header.starts_with("• Edited ") && header.ends_with("… · +3 / -1"),
+                "{header}"
+            );
+            assert!(has_color(&rendered[..1], "+3", Color::Rgb(13, 14, 15)));
+            assert!(has_color(&rendered[..1], "-1", Color::Rgb(16, 17, 18)));
+        } else {
+            assert!(
+                rendered
+                    .iter()
+                    .any(|row| row.to_string().contains("long_module_name.rs")),
+                "{rendered:?}"
+            );
+        }
+    }
+}
+
+#[test]
 fn mutation_totals_and_capture_omissions_remain_distinct_from_effect_state() {
     use serde_json::json;
     let theme = distinct_theme();
