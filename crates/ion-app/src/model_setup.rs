@@ -547,7 +547,7 @@ impl ModelStore {
             api_key_env: saved.api_key_env.clone(),
             max_output_tokens: saved.max_output_tokens.unwrap_or(8192),
             context_window_tokens: saved.context_window_tokens,
-            requires_key: false,
+            requires_key: saved.api_key_env.is_some(),
             image_input: saved.image_input,
             capabilities: catalog::ModelCapabilities::conservative(),
         })

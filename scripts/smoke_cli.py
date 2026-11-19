@@ -274,8 +274,15 @@ def exercise_doctor(root, base_env, endpoint):
             path.write_bytes(original)
     call("use", "fixture", "doctor-model", "--endpoint", endpoint, "--wire", "chat-completions",
          "--api-key-env", "DOCTOR_TEST_KEY")
-    doctor(terms=("ok\tcredentials", "requires no API key"))
-    # Use the actual bundled catalog, not an invented required-key custom route.
+    doctor(1, ("ok\tmodel", "fail\tcredentials", "configured environment key"))
+    before = len(requests)
+    refused = call("run", "MUST_NOT_RUN", expected=1)
+    assert b"DOCTOR_TEST_KEY" in refused.stderr, refused.stderr
+    assert len(requests) == before and not list((home / "sessions").rglob("*.sqlite"))
+    env["DOCTOR_TEST_KEY"] = secret
+    doctor(terms=("ok\tcredentials", "environment credential present"))
+    del env["DOCTOR_TEST_KEY"]
+    # The bundled catalog follows the same required-credential policy.
     route = next(line.split("\t")[0] for line in call("models", "openai").stdout.decode().splitlines()
                  if line.startswith("openai/"))
     call("use", *route.split("/", 1))
