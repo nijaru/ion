@@ -17,36 +17,32 @@ pub(crate) struct PublicationSyncError(io::Error);
 /// Serializes cooperating Ion mutations, not external editors or `exec` writes.
 /// A fresh parent-directory descriptor survives target-inode replacement and
 /// coordinates separate instances/processes without leaving lock files behind.
-pub(crate) struct FileMutation {
+pub(crate) struct FileMutation<'a> {
     target: PathBuf,
     parent: File,
+    stop: Option<&'a CancellationToken>,
 }
 
-impl FileMutation {
+impl<'a> FileMutation<'a> {
     pub(crate) fn open(
         path: &Path,
         create_parents: bool,
-        stop: &CancellationToken,
+        stop: &'a CancellationToken,
     ) -> io::Result<Self> {
-        Self::acquire(path, create_parents, stop, true)
+        Self::acquire(path, create_parents, Some(stop))
     }
 
     /// Presentation saves must not block the control loop behind another writer.
     pub(crate) fn try_open(path: &Path) -> io::Result<Self> {
-        Self::acquire(path, false, &CancellationToken::new(), false)
+        Self::acquire(path, false, None)
     }
 
     fn acquire(
         path: &Path,
         create_parents: bool,
-        stop: &CancellationToken,
-        wait: bool,
+        stop: Option<&'a CancellationToken>,
     ) -> io::Result<Self> {
-        let cancelled =
-            || io::Error::new(io::ErrorKind::Interrupted, "cancelled before file mutation");
-        if stop.is_cancelled() {
-            return Err(cancelled());
-        }
+        check_before_publish(stop)?;
         let target = match fs::symlink_metadata(path) {
             Ok(_) => fs::canonicalize(path)?,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -83,12 +79,10 @@ impl FileMutation {
         loop {
             // Parent creation above can itself be an observed effect. Stop
             // prevents target mutation, not a claim of filesystem rollback.
-            if stop.is_cancelled() {
-                return Err(cancelled());
-            }
+            check_before_publish(stop)?;
             match parent.try_lock() {
                 Ok(()) => break,
-                Err(TryLockError::WouldBlock) if wait => {
+                Err(TryLockError::WouldBlock) if stop.is_some() => {
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(TryLockError::WouldBlock) => {
@@ -100,10 +94,12 @@ impl FileMutation {
                 Err(TryLockError::Error(error)) => return Err(error),
             }
         }
-        if stop.is_cancelled() {
-            return Err(cancelled());
-        }
-        Ok(Self { target, parent })
+        check_before_publish(stop)?;
+        Ok(Self {
+            target,
+            parent,
+            stop,
+        })
     }
 
     pub(crate) fn path(&self) -> &Path {
@@ -128,6 +124,7 @@ impl FileMutation {
         content: &[u8],
         permissions: Option<Permissions>,
     ) -> io::Result<()> {
+        check_before_publish(self.stop)?;
         let temporary = self
             .target
             .parent()
@@ -147,6 +144,7 @@ impl FileMutation {
             }
             file.write_all(content)?;
             file.sync_all()?;
+            check_before_publish(self.stop)?;
             fs::rename(&temporary, &self.target)?;
             // Once renamed, finish publication even if stop arrives: report
             // the actual effect rather than implying it was cancelled away.
@@ -160,6 +158,16 @@ impl FileMutation {
         }
         result
     }
+}
+
+fn check_before_publish(stop: Option<&CancellationToken>) -> io::Result<()> {
+    if stop.is_some_and(CancellationToken::is_cancelled) {
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            "cancelled before file publication",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn open_regular(path: &Path) -> io::Result<File> {
@@ -208,6 +216,25 @@ pub fn read_bounded(path: &Path, limit: usize) -> io::Result<Vec<u8>> {
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::symlink};
+
+    #[test]
+    fn stop_after_lock_acquisition_prevents_publication() {
+        let root = std::env::temp_dir().join(format!("ion-publish-stop-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let target = root.join("file.txt");
+        fs::write(&target, "old").unwrap();
+        let stop = CancellationToken::new();
+        let mutation = FileMutation::open(&target, false, &stop).unwrap();
+        stop.cancel();
+        let result = mutation.replace(b"new", None);
+        let bytes = fs::read(&target).unwrap();
+        let entries = fs::read_dir(&root).unwrap().count();
+        drop(mutation);
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(bytes, b"old");
+        assert_eq!(entries, 1);
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+    }
 
     #[test]
     fn directory_sync_failure_reports_the_already_published_effect() {
