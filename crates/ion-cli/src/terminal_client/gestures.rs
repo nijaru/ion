@@ -56,14 +56,6 @@ impl Gestures {
 
     pub(super) fn key(&mut self, key: KeyEvent, now: Instant) {
         self.expire(now);
-        if let Some(pending) = &mut self.pending
-            && pending.consumed
-            && pending.key == crate::keybindings::key_label(key)
-        {
-            // A held/repeated chord must go quiet before it can start a new
-            // destructive intent, even after a slow stop finishes.
-            pending.deadline = now + WINDOW;
-        }
         if self
             .pending
             .as_ref()
@@ -141,7 +133,11 @@ impl Gestures {
             return false;
         }
         if let Some(pending) = &mut self.pending {
-            let confirmed = !pending.consumed && pending.target == target;
+            if pending.consumed {
+                return false;
+            }
+            let confirmed = pending.target == target;
+            // Suppress follow-on taps, but don't let those taps extend suppression.
             pending.consumed = true;
             pending.deadline = now + WINDOW;
             return confirmed;
@@ -271,17 +267,33 @@ mod tests {
     }
 
     #[test]
-    fn repeated_consumed_keys_require_a_quiet_window_before_a_fresh_intent() {
-        let mut gestures = Gestures::default();
+    fn consumed_gesture_expires_even_if_the_same_key_keeps_arriving() {
         let now = Instant::now();
-        assert!(!gestures.confirm(Target::Clear(1), key('c'), now));
-        assert!(gestures.confirm(Target::Clear(1), key('c'), now));
-        for second in 1..10 {
-            assert!(!gestures.confirm(Target::Exit, key('c'), now + Duration::from_secs(second)));
+        let press = key('c');
+        let repeat = KeyEvent {
+            repeat: true,
+            ..press
+        };
+        for confirmed in [false, true] {
+            let mut gestures = Gestures::default();
+            if confirmed {
+                assert!(!gestures.confirm(Target::Clear(1), press, now));
+                assert!(gestures.confirm(Target::Clear(1), press, now));
+            } else {
+                assert!(gestures.activate(Target::Clear(1), press, now));
+            }
+            for key in [press, repeat] {
+                let before_expiry = now + WINDOW - Duration::from_millis(1);
+                assert!(!gestures.activate(Target::Exit, key, before_expiry));
+                assert!(!gestures.confirm(Target::Exit, key, before_expiry));
+                assert!(gestures.prompt().is_none());
+            }
+            assert!(!gestures.confirm(Target::Exit, repeat, now + WINDOW));
+            assert!(gestures.prompt().is_none());
+            assert!(!gestures.confirm(Target::Exit, press, now + WINDOW));
+            assert!(gestures.prompt().is_some());
+            assert!(gestures.confirm(Target::Exit, press, now + WINDOW));
         }
-        let quiet = now + Duration::from_secs(12);
-        assert!(!gestures.confirm(Target::Exit, key('c'), quiet));
-        assert!(gestures.confirm(Target::Exit, key('c'), quiet));
     }
 
     #[test]
