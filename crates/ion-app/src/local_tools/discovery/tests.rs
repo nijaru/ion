@@ -199,6 +199,36 @@ fn find_honors_basename_and_nested_path_globs_with_ignore_rules() {
 }
 
 #[test]
+fn discovery_stops_parent_gitignore_rules_at_nested_repositories() {
+    let root = root("discovery-nested-repo");
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::create_dir_all(root.join("nested/.git")).unwrap();
+    fs::write(root.join(".gitignore"), "*.generated\n").unwrap();
+    fs::write(root.join("outer.generated"), "needle\n").unwrap();
+    fs::write(root.join("nested/kept.generated"), "needle\n").unwrap();
+    fs::write(root.join("nested/.gitignore"), "hidden.generated\n").unwrap();
+    fs::write(root.join("nested/hidden.generated"), "needle\n").unwrap();
+
+    for (path, expected) in [(".", "nested/kept.generated"), ("nested", "kept.generated")] {
+        let value = run(find, &root, json!({"path":path,"pattern":"*.generated"}));
+        assert_eq!(
+            find_paths(&value),
+            BTreeSet::from([expected.into()]),
+            "{value}"
+        );
+        let value = run(
+            grep,
+            &root,
+            json!({"path":path,"pattern":"needle","glob":"*.generated"}),
+        );
+        let matches = grep_matches(&value);
+        assert_eq!(matches.len(), 1, "{value}");
+        assert_eq!(matches[0]["path"], expected);
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn find_keeps_comment_and_negation_prefixes_as_literal_globs() {
     let root = root("find-prefixes");
     fs::write(root.join("#tag.rs"), "").unwrap();

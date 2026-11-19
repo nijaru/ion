@@ -264,13 +264,13 @@ pub(super) fn walk(
     max_depth: usize,
 ) -> impl Iterator<Item = Result<ignore::DirEntry, ignore::Error>> {
     let mut builder = WalkBuilder::new(root);
+    // Inside a checkout, keep Git's nested-repository boundaries. Outside
+    // one, still honor local ignore files, like fd with --no-require-git.
+    let inside_git = root.ancestors().any(|dir| dir.join(".git").exists());
     builder
         .hidden(false)
         .follow_links(false)
-        // Apply local ignore files even outside a Git checkout, like fd's
-        // --no-require-git. Ignore rules are traversal convenience, not a
-        // confidentiality boundary.
-        .require_git(false)
+        .require_git(inside_git)
         .git_global(false)
         .max_depth(Some(max_depth))
         .filter_entry(|entry| {
