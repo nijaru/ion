@@ -1,6 +1,6 @@
 ---
 name: ion-reference-implementation
-description: Use when implementing, refactoring, or reviewing Ion runtime, Session, tool, model-access, or native-interaction behavior against Pi/Pi Durable, fx, or Codex; not for routine mechanical edits.
+description: Use when designing, implementing, refactoring, or reviewing Ion behavior; not for routine mechanical edits.
 ---
 
 # Reference-led Ion implementation
@@ -13,14 +13,15 @@ upstream examples or translate upstream classes literally.
 
 1. Name the real user workflow and affected boundary. Inspect current reference
    source for that behavior, including its callers, not just an isolated helper.
-   Use Pi/Pi Durable for runtime, context, tools and Session semantics; Pi for
-   interaction; fx for visual presentation. Use fx, Codex or another primary
-   source for a specific mechanism when it answers the actual question. Do not
-   blend their independent runtimes into a new architecture.
-2. Record the inspected revision and relevant files in the working session.
-   A fetched revision is not necessarily the checkout HEAD: inspect the actual
-   Git blobs or verify HEAD. Historical research is navigation and provenance,
-   not current behavior or a parity checklist.
+   Start with Pi/Pi Durable and fx, using each where it is relevant. Consult
+   Codex and other agents for mechanisms that clarify the choice; use official
+   docs and specs for external contracts, and engineering writeups or papers
+   for design trade-offs and evidence. Check claims about current behavior
+   against the implementation where available. Don't blend independent runtimes.
+2. Record the inspected revision and relevant files, or cite the specific
+   document or paper, in the working session. A fetched revision is not
+   necessarily the checkout HEAD: inspect the actual Git blobs or verify HEAD.
+   Historical research is navigation and provenance, not a parity checklist.
 3. Trace the same workflow through Ion. Identify the authoritative owner of each
    mutable fact, accepted input, effect, result and publication. Follow legal
    transitions through refusal, cancellation, partial execution, settlement and

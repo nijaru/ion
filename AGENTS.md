@@ -5,13 +5,11 @@ Follow the shared `nijaru/dotfiles/instructions/AGENTS.md` rules. Source is the 
 ## Design and reference policy
 
 Ion is one reusable Rust agent engine with a complete coding application, not
-a coding-only kernel or multiple loops. Pi, including Pi Durable, is the primary
-reference family for runtime, context, tools and Session semantics. Target the
-Pi capabilities that matter in actual use, not every upstream package. User
-interaction should be Pi-like; visual presentation should be fx-like. Use
-Codex and other relevant primary sources for specific mechanisms, not competing
-product roadmaps. Model useful semantics and ownership idiomatically in Rust,
-not upstream classes or parallel runtimes.
+a coding-only kernel or multiple loops. Pi (including Pi Durable) and fx are
+Ion's primary references. Start with Pi for runtime, context, tools, Session
+semantics and interaction; start with fx for visual presentation. Target
+capabilities that matter in use, not upstream feature parity. Reimplement useful
+semantics idiomatically in Rust, not upstream classes or parallel runtimes.
 The model chooses the coding actions; inspect/edit/test is not a hard-coded
 runtime loop. Reuse working code; remove obsolete abstractions through all real
 callers. Do not claim daily-use readiness without sustained-use evidence and
@@ -19,9 +17,10 @@ maintainer acceptance. No autonomous pull requests.
 
 For Ion implementation, review, and design changes, use
 [ion-reference-implementation](.agents/skills/ion-reference-implementation/SKILL.md).
-Read the relevant Pi and fx source and its callers before choosing behavior or
-design. Record what Ion adopts and what it deliberately does differently.
-For purely mechanical edits, no fresh reference audit is needed.
+Read the relevant source and callers before choosing behavior or design. Consult
+Codex, other agents, documentation, engineering writeups, and papers where they
+inform the decision. Record what Ion adopts and what it deliberately does
+differently. Purely mechanical edits need no fresh reference audit.
 
 Maintainer-private design, execution plan and source evidence may be available
 through the owner's knowledge repository. Consult them when accessible under
