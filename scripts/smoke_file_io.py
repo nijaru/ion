@@ -141,13 +141,16 @@ def bom_response(body):
     if fixture == "bom_direct" and step == 2:
         page = results[-1]["result"]
         edit_spec = next(tool["function"] for tool in body["tools"] if tool["function"]["name"] == "edit")
-        assert "you do not need to read all pages" in edit_spec["description"], edit_spec
+        assert "base_digest" not in edit_spec["parameters"]["required"], edit_spec
         assert page["content"] == "\ufeffα = 1;\r\n" and page["has_more"], page
         assert page["base_digest"] == hashlib.sha256("\ufeffα = 1;\r\nunchanged\n".encode()).hexdigest(), page
-        return invoke("edit", {"path": "bom.txt", "base_digest": page["base_digest"], "edits": [{"old_text": page["content"], "new_text": page["content"].replace(" = 1;", " = 2;")}]})
+        # Save an unrelated change after the model's bounded read.
+        (workspace / "bom.txt").write_bytes("\ufeffα = 1;\r\nexternal change\n".encode())
+        return invoke("edit", {"path": "bom.txt", "edits": [{"old_text": page["content"], "new_text": page["content"].replace(" = 1;", " = 2;")}]})
     if fixture == "bom_code":
         assert results[-1]["result"]["result"] == {"read_error": False, "edit_error": False}, results[-1]
-    assert (workspace / "bom.txt").read_bytes() == "\ufeffα = 2;\r\nunchanged\n".encode(), "BOM or mixed newline bytes changed"
+    suffix = "unchanged\n" if fixture == "bom_code" else "external change\n"
+    assert (workspace / "bom.txt").read_bytes() == ("\ufeffα = 2;\r\n" + suffix).encode(), "edit changed untouched bytes"
     return {"content": "BOM_ROUNDTRIP_COMPLETE"}, "stop"
 
 

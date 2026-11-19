@@ -204,11 +204,6 @@ pub(super) fn edit(
     if input.edits.is_empty() {
         return error("edits must contain at least one replacement");
     }
-    let Some(base_digest) = input.base_digest else {
-        return error(
-            "edit requires the whole-file base_digest returned by read; a page covering the target text is enough",
-        );
-    };
     let path = match path(cwd, &input.path) {
         Ok(path) => path,
         Err(e) => return error(e),
@@ -229,7 +224,7 @@ pub(super) fn edit(
         return error(format!("edit {}: {e}", input.path));
     }
     let actual = hex_digest(&bytes);
-    if base_digest != actual {
+    if input.base_digest.is_some_and(|expected| expected != actual) {
         return error("base_digest does not match current file; read again before changing it");
     }
     let text = match String::from_utf8(bytes) {
@@ -1072,7 +1067,7 @@ mod tests {
             fs::write(&path, source).unwrap();
             let output = edit(
                 &tools.cwd,
-                &json!({"path":"file.txt","edits":edits,"base_digest":hex_digest(source.as_bytes())}),
+                &json!({"path":"file.txt","edits":edits}),
                 &CancellationToken::new(),
                 None,
             );

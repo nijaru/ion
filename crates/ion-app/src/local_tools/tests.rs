@@ -421,7 +421,7 @@ fn native_schema_keeps_exec_timeout_optional_and_uncapped() {
 }
 
 #[test]
-fn native_schema_requires_edit_digest_and_exposes_write_opt_out() {
+fn native_schema_allows_optional_edit_digest_and_exposes_write_opt_out() {
     let catalog = ion_core::ToolSet::new([
         Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
     ])
@@ -429,7 +429,7 @@ fn native_schema_requires_edit_digest_and_exposes_write_opt_out() {
     let specs = catalog.specs();
     let edit = specs.iter().find(|spec| spec.name == "edit").unwrap();
     assert!(
-        edit.input_schema["required"]
+        !edit.input_schema["required"]
             .as_array()
             .unwrap()
             .contains(&json!("base_digest"))
@@ -585,13 +585,11 @@ async fn concurrent_native_edits_preserve_guards_and_disjoint_changes() {
                 }
             })
         } else {
-            successful == 0
-                && final_bytes == source.as_bytes()
-                && [&outputs.0, &outputs.1].iter().all(|output| {
-                    output.value["error"].as_str().is_some_and(|error| {
-                        error.contains("input schema check failed") && error.contains("required")
-                    })
-                })
+            successful == 2
+                && final_text
+                    == source
+                        .replace("LEFT:", "LEFT:1")
+                        .replace("RIGHT:", "RIGHT:2")
         };
         if !correct {
             failures.push(format!(
