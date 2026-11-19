@@ -205,7 +205,9 @@ pub(super) fn edit(
         return error("edits must contain at least one replacement");
     }
     let Some(base_digest) = input.base_digest else {
-        return error("edit requires base_digest from a complete read");
+        return error(
+            "edit requires the whole-file base_digest returned by read; a page covering the target text is enough",
+        );
     };
     let path = match path(cwd, &input.path) {
         Ok(path) => path,

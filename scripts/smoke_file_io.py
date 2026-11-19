@@ -140,7 +140,10 @@ def bom_response(body):
         return invoke("read", {"path": match["path"], "offset": match["line"], "limit": 1})
     if fixture == "bom_direct" and step == 2:
         page = results[-1]["result"]
-        assert page["content"] == "\ufeffα = 1;\r\n", page
+        edit_spec = next(tool["function"] for tool in body["tools"] if tool["function"]["name"] == "edit")
+        assert "you do not need to read all pages" in edit_spec["description"], edit_spec
+        assert page["content"] == "\ufeffα = 1;\r\n" and page["has_more"], page
+        assert page["base_digest"] == hashlib.sha256("\ufeffα = 1;\r\nunchanged\n".encode()).hexdigest(), page
         return invoke("edit", {"path": "bom.txt", "base_digest": page["base_digest"], "edits": [{"old_text": page["content"], "new_text": page["content"].replace(" = 1;", " = 2;")}]})
     if fixture == "bom_code":
         assert results[-1]["result"]["result"] == {"read_error": False, "edit_error": False}, results[-1]
