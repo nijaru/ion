@@ -139,9 +139,9 @@ pub async fn choose_session(
                     ui.pickers.insert(&text);
                 }
                 InputEvent::Rejected(error) => ui.status = error.to_string(),
-                InputEvent::Resize(_) => {
+                InputEvent::Resize(size) => {
                     ui.pickers.invalidate_visibility();
-                    screen.note_resize();
+                    screen.note_resize((size.columns, size.rows));
                 }
                 InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
             }
@@ -300,7 +300,7 @@ async fn run(
                 ui.pickers.insert(&text);
             }
             InputEvent::Rejected(error) => ui.status = error.to_string(),
-            InputEvent::Resize(_) => screen.note_resize(),
+            InputEvent::Resize(size) => screen.note_resize((size.columns, size.rows)),
             InputEvent::Mouse(_) | InputEvent::ColorsChanged => {}
         }
     }

@@ -342,16 +342,19 @@ impl TerminalSession {
                 "inline preparation requires restored primary screen",
             ));
         }
-        if self.input.take_resize_notifications() {
-            screen.note_resize();
-        }
+        let notified = self.input.take_resize_notifications();
         let size = self.size()?;
-        if screen.needs_reconciliation(size) {
+        if notified {
+            screen.note_resize(size);
+        } else {
+            screen.observe_resize(size);
+        }
+        if screen.reconciliation_pending() {
             if !screen.reconciliation_ready() {
                 return Ok(None);
             }
             let Some((size, cursor)) = self.primary_geometry().await? else {
-                screen.note_resize();
+                screen.note_resize(self.size()?);
                 return Ok(None);
             };
             if !screen.reconcile_inline(&mut self.output()?, size.0, size.1, cursor)? {

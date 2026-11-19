@@ -435,13 +435,13 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     ui.editor.break_edit_focus();
                     ui.status = error.to_string();
                 },
-                InputEvent::Resize(_) => {
+                InputEvent::Resize(size) => {
                     ui.editor.completion.invalidate_visibility();
                     ui.pickers.invalidate_visibility();
                     if let Some(question) = &mut ui.question {
                         question.invalidate_visibility();
                     }
-                    screen.note_resize();
+                    screen.note_resize((size.columns, size.rows));
                 },
                 InputEvent::Mouse(mouse) => {
                     ui.gestures.reset();
@@ -534,15 +534,16 @@ fn invalidate_resized_input(
     ui: &mut Frontend,
 ) -> Result<()> {
     // A key or paste can beat SIGWINCH in chat and before Session admission.
+    let size = terminal.size()?;
     let published = if terminal.is_alt_screen()? {
         screen.fullscreen_size()
     } else {
+        screen.observe_resize(size);
         screen.primary_size()
     };
-    if terminal.size()? != published {
+    if size != published {
         ui.invalidate_interaction_paint();
         ui.editor.invalidate_geometry();
-        screen.note_resize();
     }
     Ok(())
 }

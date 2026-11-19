@@ -86,6 +86,14 @@ impl Surface {
     }
 }
 
+const RESIZE_SETTLE: Duration = Duration::from_millis(300);
+
+#[derive(Clone, Copy)]
+struct PendingResize {
+    size: (u16, u16),
+    after: Instant,
+}
+
 pub struct Screen {
     width: u16,
     /// Physical row where our region starts (the launch cursor). The
@@ -96,7 +104,7 @@ pub struct Screen {
     current: Option<Surface>,
     /// Invalidating cell comparisons must not discard primary ownership evidence.
     repaint: bool,
-    resize_pending: Option<Instant>,
+    resize_pending: Option<PendingResize>,
     /// Last primary cursor, including when hidden. Alternate output never changes it.
     physical_cursor: (u16, u16),
     fullscreen_size: (u16, u16),
@@ -224,27 +232,34 @@ impl Screen {
 
     /// A notification also matters when several native resizes return to the
     /// old geometry before intake. Keep custody until a primary CPR reconciles.
-    pub fn note_resize(&mut self) {
+    pub fn note_resize(&mut self, size: (u16, u16)) {
         // Kernel geometry and native reflow are not atomic: tmux throttles
-        // queued PTY sizes by 250 ms. Wait for that settling phase before
-        // destructive reconciliation, even when cursor columns happen to agree.
-        // Input/Core remain pollable; this is not a wait inside a cursor query.
-        self.resize_pending = Some(Instant::now() + Duration::from_millis(300));
+        // queued PTY sizes by 250 ms. Wait before destructive reconciliation,
+        // even when cursor columns happen to agree.
+        self.resize_pending = Some(PendingResize {
+            size,
+            after: Instant::now() + RESIZE_SETTLE,
+        });
+    }
+
+    /// Polling may see the new size before SIGWINCH is delivered. Repeated
+    /// observations (including those made for each key) are not new resizes.
+    pub fn observe_resize(&mut self, size: (u16, u16)) {
+        let observed = self
+            .resize_pending
+            .map_or(self.primary_size(), |pending| pending.size);
+        if size != observed {
+            self.note_resize(size);
+        }
     }
 
     pub fn reconciliation_pending(&self) -> bool {
         self.resize_pending.is_some()
     }
 
-    pub(crate) fn reconciliation_ready(&mut self) -> bool {
-        let after = self
-            .resize_pending
-            .get_or_insert_with(|| Instant::now() + Duration::from_millis(300));
-        Instant::now() >= *after
-    }
-
-    pub(crate) fn needs_reconciliation(&self, size: (u16, u16)) -> bool {
-        self.reconciliation_pending() || size != self.primary_size()
+    pub(crate) fn reconciliation_ready(&self) -> bool {
+        self.resize_pending
+            .is_some_and(|pending| Instant::now() >= pending.after)
     }
 
     /// Physical geometry used for fullscreen layout, independent of the primary
@@ -282,7 +297,7 @@ impl Screen {
     ) -> io::Result<bool> {
         if self
             .resize_pending
-            .is_some_and(|after| Instant::now() < after)
+            .is_some_and(|pending| Instant::now() < pending.after)
         {
             return Ok(false);
         }
@@ -1383,6 +1398,22 @@ mod tests {
     }
 
     #[test]
+    fn repeated_geometry_observations_do_not_postpone_reconciliation() {
+        let mut screen = Screen::new(100, 0, 30);
+        screen.observe_resize((80, 24));
+        let first = screen.resize_pending.as_mut().unwrap();
+        first.after = Instant::now() - RESIZE_SETTLE;
+        for _ in 0..4 {
+            screen.observe_resize((80, 24));
+            assert!(screen.reconciliation_ready());
+        }
+        // A new resize, even a return to the published size, needs settling.
+        screen.observe_resize((100, 30));
+        assert!(!screen.reconciliation_ready());
+        assert_eq!(screen.resize_pending.unwrap().size, (100, 30));
+    }
+
+    #[test]
     fn uncertain_reflow_never_erases_guessed_rows_or_discards_evidence() {
         let mut screen = Screen::with_live_height(100, 26, 30, 2);
         let mut out = Vec::new();
@@ -1395,7 +1426,7 @@ mod tests {
                 },
             )
             .unwrap();
-        screen.note_resize();
+        screen.note_resize((24, 7));
         screen.resize_fullscreen(24, 7);
         screen
             .draw_fullscreen(&mut out, &[line("modal")], Some((0, 3)))
@@ -1408,18 +1439,17 @@ mod tests {
         assert!(out.is_empty());
         assert!(!screen.reconcile_inline(&mut out, 24, 7, (24, 5)).unwrap());
         assert!(out.is_empty());
-        screen.resize_pending = Some(Instant::now() - Duration::from_millis(300));
+        screen.resize_pending.as_mut().unwrap().after = Instant::now();
         for cursor in [(24, 5), (5, 7)] {
             out.clear();
             assert!(screen.reconcile_inline(&mut out, 24, 7, cursor).is_err());
             assert!(out.is_empty());
             assert_eq!(screen.primary_size(), (100, 30));
             assert_eq!(screen.origin, 26);
-            assert!(screen.needs_reconciliation((100, 30)));
+            assert!(screen.reconciliation_pending());
             assert!(screen.current.is_some());
         }
         // Incoherence cannot defer forever after the native settling phase.
-        screen.resize_pending = Some(Instant::now() - Duration::from_millis(300));
         out.clear();
         assert!(screen.reconcile_inline(&mut out, 24, 7, (4, 5)).is_err());
         assert!(out.is_empty());
@@ -1427,7 +1457,7 @@ mod tests {
         // the footprint using the retained 100-column rows.
         screen.reconcile_inline(&mut out, 24, 7, (5, 5)).unwrap();
         assert_eq!(screen.origin, 3);
-        assert!(!screen.needs_reconciliation((24, 7)));
+        assert!(!screen.reconciliation_pending());
     }
 
     #[test]

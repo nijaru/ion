@@ -64,7 +64,7 @@ impl PreparedPaint {
         out: &mut impl Write,
     ) -> io::Result<Option<PaintReceipt>> {
         if current_geometry != self.geometry {
-            screen.note_resize();
+            screen.observe_resize(current_geometry);
             return Ok(None);
         }
         out.write_all(&self.bytes)?;
