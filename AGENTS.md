@@ -17,12 +17,11 @@ runtime loop. Reuse working code; remove obsolete abstractions through all real
 callers. Do not claim daily-use readiness without sustained-use evidence and
 maintainer acceptance. No autonomous pull requests.
 
-Before behavior-changing implementation or review, read
+For Ion implementation, review, and design changes, use
 [ion-reference-implementation](.agents/skills/ion-reference-implementation/SKILL.md).
-Establish the reference lifecycle and intended Ion differences before choosing
-abstractions; complete shared-contract changes through their real callers.
-Existing code, green fixtures and feature counts do not establish reference
-conformance. Mechanical edits do not require a reference audit.
+Read the relevant Pi and fx source and its callers before choosing behavior or
+design. Record what Ion adopts and what it deliberately does differently.
+For purely mechanical edits, no fresh reference audit is needed.
 
 Maintainer-private design, execution plan and source evidence may be available
 through the owner's knowledge repository. Consult them when accessible under
