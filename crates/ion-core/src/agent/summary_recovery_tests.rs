@@ -14,6 +14,7 @@ enum Rejection {
 struct CapacityService {
     rejection: Rejection,
     max_records: usize,
+    max_answer_messages: usize,
     requests: Mutex<Vec<ModelRequest>>,
 }
 
@@ -34,11 +35,15 @@ impl ModelService for CapacityService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let summary = request.route.reason == ModelRouteReason::Auxiliary;
-            let rejected = summary && history_records(&request) > self.max_records;
+            let rejected = if summary {
+                history_records(&request) > self.max_records
+            } else {
+                request.messages.len() > self.max_answer_messages
+            };
             self.requests.lock().unwrap().push(request);
             let capacity = || ProviderError {
                 kind: ProviderErrorKind::ContextLength,
-                message: "fixture summary capacity exceeded".into(),
+                message: "fixture provider capacity exceeded".into(),
                 retry_after_ms: None,
             };
             if rejected {
@@ -116,6 +121,7 @@ async fn optional_compaction_continues_after_a_partial_cut_if_output_room_is_sti
     let service = Arc::new(CapacityService {
         rejection: Rejection::Open,
         max_records: 3,
+        max_answer_messages: usize::MAX,
         requests: Mutex::new(Vec::new()),
     });
     let agent = Agent::with_tool_set(service.clone(), Arc::new(ToolSet::new(Vec::new())), model())
@@ -161,6 +167,70 @@ async fn optional_compaction_continues_after_a_partial_cut_if_output_room_is_sti
 }
 
 #[tokio::test]
+async fn provider_overflow_finishes_partial_cuts_before_the_only_retry() {
+    for max_answer_messages in [9, 0] {
+        let (root, session) = history();
+        let before = session.view().unwrap().entries;
+        let service = Arc::new(CapacityService {
+            rejection: Rejection::Open,
+            max_records: 3,
+            max_answer_messages,
+            requests: Mutex::new(Vec::new()),
+        });
+        let agent =
+            Agent::with_tool_set(service.clone(), Arc::new(ToolSet::new(Vec::new())), model())
+                .with_limits(AgentLimits {
+                    max_request_bytes: 5_200,
+                    ..AgentLimits::default()
+                });
+        let result = agent
+            .submit(
+                session.clone(),
+                "continue".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await;
+        let after = session.view().unwrap();
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+        assert!(after.entries.starts_with(&before));
+        assert!(
+            after.entries[before.len()..]
+                .iter()
+                .filter(|entry| matches!(entry, SessionEntry::Compacted { .. }))
+                .count()
+                > 1
+        );
+        let requests = service.requests.lock().unwrap();
+        let [first, summaries @ .., last] = requests.as_slice() else {
+            panic!("expected two answer requests with summaries in between");
+        };
+        assert_ne!(first.route.reason, ModelRouteReason::Auxiliary);
+        assert_ne!(last.route.reason, ModelRouteReason::Auxiliary);
+        assert!(!summaries.is_empty());
+        assert!(
+            summaries
+                .iter()
+                .all(|request| request.route.reason == ModelRouteReason::Auxiliary)
+        );
+        if max_answer_messages == 0 {
+            assert!(matches!(
+                result,
+                Err(AgentError::Provider(ProviderError {
+                    kind: ProviderErrorKind::ContextLength,
+                    ..
+                }))
+            ));
+        } else {
+            assert_eq!(result.unwrap(), "continued");
+            assert!(last.messages.len() <= max_answer_messages);
+        }
+    }
+}
+
+#[tokio::test]
 async fn automatic_compaction_shrinks_provider_rejected_summary_prefixes() {
     for rejection in [Rejection::Open, Rejection::Completed] {
         let (root, session) = history();
@@ -168,6 +238,7 @@ async fn automatic_compaction_shrinks_provider_rejected_summary_prefixes() {
         let service = Arc::new(CapacityService {
             rejection,
             max_records: 3,
+            max_answer_messages: usize::MAX,
             requests: Mutex::new(Vec::new()),
         });
         let agent =
@@ -239,6 +310,7 @@ async fn summary_recovery_stops_without_replacing_context_on_refusal_output_or_c
         let service = Arc::new(CapacityService {
             rejection,
             max_records: 0,
+            max_answer_messages: usize::MAX,
             requests: Mutex::new(Vec::new()),
         });
         let agent =

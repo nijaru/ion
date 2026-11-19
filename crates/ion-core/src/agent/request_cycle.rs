@@ -234,7 +234,25 @@ impl<'a> RequestCycle<'a> {
                                 })
                                 .await?;
                         }
-                        let _ = recovery?;
+                        let mut chunked = recovery?.unwrap_or(false);
+                        // Finish the bounded cuts before issuing the one recovery
+                        // request. Every successful cut advances the committed
+                        // boundary through settled history; no model/tool step
+                        // can add new settled history inside this loop.
+                        while chunked {
+                            chunked = self
+                                .agent
+                                .compact_inner(
+                                    None,
+                                    self.io,
+                                    self.stop,
+                                    keep_bytes,
+                                    CompactionMode::Required,
+                                    observe,
+                                )
+                                .await?
+                                .unwrap_or(false);
+                        }
                         recovered_overflow = true;
                         if recoverable_length {
                             self.length_recovery_attempted = true;
