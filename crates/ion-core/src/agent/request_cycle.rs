@@ -133,9 +133,6 @@ impl<'a> RequestCycle<'a> {
                 // Every outcome rebuilds or exits. Do not retain this unused
                 // request while the summary builds another context view.
                 drop(plan);
-                if !required {
-                    reserve_handled = true;
-                }
                 match self
                     .agent
                     .compact_inner(
@@ -160,10 +157,14 @@ impl<'a> RequestCycle<'a> {
                     }
                     // Even a discarded summary may have awaited I/O. Return
                     // through intake for newly queued steering/stop.
-                    Ok(None) | Err(AgentError::ContextTooLarge) if !required => continue,
+                    Ok(None) | Err(AgentError::ContextTooLarge) if !required => {
+                        reserve_handled = true;
+                        continue;
+                    }
                     Ok(None) => return Err(AgentError::ContextTooLarge),
                     Err(error) => {
                         if !required && let Some(reason) = optional_compaction_failure(&error) {
+                            reserve_handled = true;
                             observe(AgentEvent::ContextCompactionSkipped { reason });
                             continue;
                         }

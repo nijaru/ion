@@ -1,5 +1,6 @@
 //! Provider capacity, not just local estimates, bounds a summary prefix.
 use super::*;
+use crate::SessionEntry;
 use futures_util::stream;
 use ion_ai::{BoxFuture, ModelStream, ModelStreamEvent, ToolChoice, Usage};
 
@@ -106,6 +107,57 @@ fn history() -> (std::path::PathBuf, Arc<Session>) {
             .unwrap();
     }
     (root, session)
+}
+
+#[tokio::test]
+async fn optional_compaction_continues_after_a_partial_cut_if_output_room_is_still_low() {
+    let (root, session) = history();
+    let before = session.view().unwrap().entries;
+    let service = Arc::new(CapacityService {
+        rejection: Rejection::Open,
+        max_records: 3,
+        requests: Mutex::new(Vec::new()),
+    });
+    let agent = Agent::with_tool_set(service.clone(), Arc::new(ToolSet::new(Vec::new())), model())
+        .with_limits(AgentLimits {
+            context_window_tokens: Some(1_800),
+            ..AgentLimits::default()
+        });
+    let result = agent
+        .submit(
+            session.clone(),
+            "continue".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await;
+    let after = session.view().unwrap();
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+    assert_eq!(result.unwrap(), "continued");
+    assert!(after.entries.starts_with(&before));
+    let cuts: Vec<_> = after.entries[before.len()..]
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::Compacted { through_entry, .. } => Some(*through_entry),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        cuts.len() > 1,
+        "expected multiple committed cuts, got {cuts:?}"
+    );
+    assert!(cuts.windows(2).all(|pair| pair[0] < pair[1]));
+    let requests = service.requests.lock().unwrap();
+    let (answer, summaries) = requests.split_last().unwrap();
+    assert!(
+        summaries
+            .iter()
+            .all(|request| request.route.reason == ModelRouteReason::Auxiliary)
+    );
+    assert_ne!(answer.route.reason, ModelRouteReason::Auxiliary);
+    assert!(answer.controls.max_output_tokens >= 850);
 }
 
 #[tokio::test]
