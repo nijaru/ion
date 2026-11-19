@@ -185,7 +185,7 @@ impl Screen {
     }
 
     /// Grow the mutable inline band without ever scrolling mutable content
-    /// into native history. The band only grows during one inline session.
+    /// into native history. Shrinking is handled separately by `set_live_height`.
     pub fn ensure_live_height(&mut self, out: &mut impl Write, rows: usize) -> io::Result<()> {
         let rows = rows.max(1).min(self.screen_height as usize);
         if rows <= self.live_height() {
@@ -391,7 +391,7 @@ impl Screen {
     }
 
     /// Change the reservation without publishing or scrolling live rows.
-    /// Frontends should shrink it after publication or a surface reset.
+    /// The next draw clears any rows freed by shrinking the reservation.
     pub fn set_live_height(&mut self, live_height: usize) {
         self.live_height = Some(live_height.max(1).min(self.avail() as usize));
         // Retain the old physical surface so freed rows are erased on redraw.

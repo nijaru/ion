@@ -155,6 +155,24 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
 
         check_history()
         assert (workspace / "data.txt").read_text() == "UPDATED_SNAPSHOT\n"
+
+        # Dismissing a tall inline completion menu must reclaim its rows
+        # immediately, without a new Turn or a fullscreen round-trip.
+        tmux("send-keys", "-t", "ion", "-l", "/")
+        while "Tab complete" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"slash completion did not open:\n{pane}"
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "C-u")
+        collapse_deadline = time.monotonic() + 2
+        while True:
+            pane = tmux("capture-pane", "-p", "-t", "ion")
+            rows = pane.splitlines()
+            final = next((i for i, row in enumerate(rows) if "FINAL_ONCE" in row), None)
+            if final is not None and rows[final + 1].startswith("›") and "Tab complete" not in pane:
+                break
+            assert time.monotonic() < collapse_deadline, f"completion left a gap after dismissal:\n{pane}"
+            time.sleep(0.02)
+        check_history()
         tmux("send-keys", "-t", "ion", "-l", "/tool 2")
         tmux("send-keys", "-t", "ion", "Enter")
         while "Recorded edit diff" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):

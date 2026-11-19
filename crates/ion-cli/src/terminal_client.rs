@@ -1320,24 +1320,20 @@ async fn prepare_draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &Frontend,
-) -> Result<Option<(u16, u16, bool)>> {
+) -> Result<Option<(u16, u16)>> {
     if ui.input_target() == interaction::InputTarget::Details || ui.mode == TuiMode::Fullscreen {
         terminal.enter_alt_screen(screen).await?;
         let (width, height) = terminal.size()?;
         screen.resize_fullscreen(width, height);
-        return Ok(Some((width, height, false)));
+        return Ok(Some((width, height)));
     }
-    let surface_reset = terminal.is_alt_screen()?;
-    if surface_reset {
+    if terminal.is_alt_screen()? {
         // Restore first: the alternate cursor is not evidence about primary
         // ownership. Reconcile the parked, cleared primary tail before repaint.
         terminal.leave_alt_screen()?;
         screen.invalidate();
     }
-    let Some((width, height)) = terminal.prepare_inline(screen).await? else {
-        return Ok(None);
-    };
-    Ok(Some((width, height, surface_reset)))
+    Ok(terminal.prepare_inline(screen).await?)
 }
 
 async fn draw(
@@ -1369,7 +1365,7 @@ fn draw_prepared(
     operation: Option<ActiveOperation>,
     model: Option<&ModelRef>,
     queued: &[ion_app::QueuedInput],
-    (width, height, surface_reset): (u16, u16, bool),
+    (width, height): (u16, u16),
 ) -> Result<bool> {
     if ui.input_target() == interaction::InputTarget::Details {
         return draw_modal_fullscreen(terminal, screen, ui, operation, width, height);
@@ -1388,7 +1384,6 @@ fn draw_prepared(
 
     let publication = ui.conversation.prepare_publication();
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
-    let history_committed = !commit_rows.is_empty();
     let width = width.max(1) as usize;
     let physical_budget = height.max(1) as usize;
     let dock = dock::Dock::prepare(ui, operation, model, queued, width, physical_budget);
@@ -1415,13 +1410,10 @@ fn draw_prepared(
     };
     let desired_live_height = frame.required_rows(width as u16).min(physical_budget);
     let painted = terminal.paint_inline(screen, |screen, out| {
-        if history_committed {
-            screen.commit_lines(out, &commit_rows)?;
-        }
+        screen.commit_lines(out, &commit_rows)?;
         if desired_live_height > screen.live_height() {
             screen.ensure_live_height(out, desired_live_height)?;
-        } else if desired_live_height < screen.live_height() && (history_committed || surface_reset)
-        {
+        } else if desired_live_height < screen.live_height() {
             screen.set_live_height(desired_live_height);
         }
         screen.draw(out, &frame)
