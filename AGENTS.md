@@ -56,5 +56,3 @@ Use `scripts/smoke.sh` for an offline built headless/reopen path; relevant `scri
 Before **live Ion model tests** read private `projects/ion/preferred-models.md`: it governs approved routes, cost/privacy and isolation. Synthetic model fixtures suffice for routine mechanical checks. Never silently spend on unapproved routes.
 
 Multiple sessions may share a worktree. Inspect status, stage only owned changes, and preserve unrelated files and secrets.
-
-`./handoff.md` is the local agent handoff note. Create or update it when the maintainer asks to prepare a handoff or transfer work to a new session. Read it when asked to resume from it. Keep it out of commits and leave it alone during unrelated work.
