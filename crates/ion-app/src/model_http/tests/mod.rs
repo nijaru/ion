@@ -1198,7 +1198,7 @@ fn direct_flash_profiles_keep_default_thinking_with_replay() {
         chat_body(&thinking, HttpWire::OpenRouterChat).unwrap()["reasoning"]["enabled"],
         false
     );
-    let mut state = ChatState::default();
+    let mut state = ChatState::new(HttpWire::LlamaCppNoThinking);
     assert_eq!(
         state
             .accept(
@@ -1331,7 +1331,7 @@ fn openrouter_replays_fragmented_plain_details() {
     let mut generic = ChatState::default();
     assert_eq!(
         generic
-            .accept(&json!({"choices":[{"delta":{"reasoning":"hidden"},"finish_reason":null}]}))
+            .accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"hidden"}]},"finish_reason":null}]}))
             .unwrap_err()
             .kind,
         ProviderErrorKind::Unsupported
@@ -2048,6 +2048,41 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
         stream.next().await.unwrap().unwrap(),
         ModelStreamEvent::Completed(_)
     ));
+}
+
+#[tokio::test]
+async fn generic_chat_displays_reasoning_once_without_replaying_it() {
+    let body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"working\",\"reasoning\":\"working\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_text\":\" it out\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let endpoint = serve(body.into(), "200 OK").await;
+    let wire = HttpWire::ChatCompletions;
+    let model = HttpModelService::new(&endpoint, wire, Arc::new(|| None)).unwrap();
+    let mut request = request();
+    let mut stream = model.stream(request.clone()).await.unwrap();
+    let mut thinking = String::new();
+    let message = loop {
+        match stream.next().await.unwrap().unwrap() {
+            ModelStreamEvent::ThinkingDelta { text, .. } => thinking.push_str(&text),
+            ModelStreamEvent::Completed(response) => break response.message,
+            _ => {}
+        }
+    };
+    assert_eq!(thinking, "working it out");
+    assert_eq!(
+        message.content,
+        vec![Content::Thinking(thinking), Content::Text("answer".into())]
+    );
+    assert!(message.provider_replay.is_none());
+    request.messages.push(message);
+    let next = chat_body(&request, wire).unwrap();
+    assert_eq!(
+        next["messages"].as_array().unwrap().last().unwrap(),
+        &json!({"role":"assistant", "content":"answer"})
+    );
 }
 
 #[tokio::test]

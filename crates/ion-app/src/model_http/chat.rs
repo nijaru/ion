@@ -315,7 +315,9 @@ impl ChatState {
                         OPENROUTER_DETAILS_REPLAY,
                         Value::Array(self.reasoning_details),
                     ))
-                } else if !self.reasoning_content.is_empty() {
+                } else if self.wire != HttpWire::ChatCompletions
+                    && !self.reasoning_content.is_empty()
+                {
                     Some(ProviderReplay::new(
                         &request.route.effective.provider,
                         if self.wire == HttpWire::OpenRouterChat {
@@ -448,6 +450,16 @@ pub(super) fn chat_reasoning_delta(
     let reasoning = optional_string(delta, "reasoning")?.filter(|s| !s.is_empty());
     let content = optional_string(delta, "reasoning_content")?.filter(|s| !s.is_empty());
     let other = optional_string(delta, "reasoning_text")?.filter(|s| !s.is_empty());
+    if wire == HttpWire::ChatCompletions {
+        // Generic endpoints use several spellings, sometimes emitting the
+        // same text under multiple keys. Display one, without claiming replay.
+        let mut aliases = [content, reasoning, other].into_iter().flatten();
+        let selected = aliases.next();
+        if aliases.any(|alias| Some(alias) != selected) {
+            return Err(invalid("conflicting Chat Completions reasoning aliases"));
+        }
+        return Ok(selected);
+    }
     if other.is_some() {
         return Err(unsupported("unexpected reasoning field for route"));
     }
