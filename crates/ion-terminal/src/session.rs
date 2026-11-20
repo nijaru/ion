@@ -5,6 +5,7 @@ use std::sync::{
     Arc, LazyLock, Mutex, MutexGuard, Once, TryLockError, Weak,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::Duration;
 
 #[cfg(test)]
 use crossterm::SynchronizedUpdate;
@@ -282,15 +283,21 @@ impl TerminalSession {
         self.leave_alt_screen()?;
         screen.invalidate();
         loop {
-            if self.prepare_inline(screen).await?.is_some()
-                && self
-                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
-                    .is_some()
-            {
+            if self.try_release_inline(screen).await? {
                 return Ok(());
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
         }
+    }
+
+    /// An unqualified primary grid is yielded without erasing any cells.
+    pub async fn try_release_inline(&mut self, screen: &mut Screen) -> io::Result<bool> {
+        let ready = self.prepare_inline(screen).await?.is_some();
+        Ok(screen.inline_unavailable()
+            || (ready
+                && self
+                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
+                    .is_some()))
     }
 
     /// Pop only the alternate push before restoring the primary surface.
@@ -342,6 +349,9 @@ impl TerminalSession {
                 "inline preparation requires restored primary screen",
             ));
         }
+        if screen.inline_unavailable() {
+            return Ok(None);
+        }
         let notified = self.input.take_resize_notifications();
         let size = self.size()?;
         if notified {
@@ -373,6 +383,9 @@ impl TerminalSession {
         screen: &mut Screen,
         paint: impl FnOnce(&mut Screen, &mut Vec<u8>) -> io::Result<()>,
     ) -> io::Result<Option<PaintReceipt>> {
+        if screen.inline_unavailable() {
+            return Ok(None);
+        }
         self.paint_screen(screen, false, paint)
     }
 

@@ -105,6 +105,7 @@ pub struct Screen {
     /// Invalidating cell comparisons must not discard primary ownership evidence.
     repaint: bool,
     resize_pending: Option<PendingResize>,
+    inline_unavailable: bool,
     /// Last primary cursor, including when hidden. Alternate output never changes it.
     physical_cursor: (u16, u16),
     fullscreen_size: (u16, u16),
@@ -130,6 +131,7 @@ impl Screen {
             current: self.current.clone(),
             repaint: self.repaint,
             resize_pending: self.resize_pending,
+            inline_unavailable: self.inline_unavailable,
             physical_cursor: self.physical_cursor,
             fullscreen_size: self.fullscreen_size,
             cursor_shown: self.cursor_shown,
@@ -152,6 +154,7 @@ impl Screen {
             current: None,
             repaint: true,
             resize_pending: None,
+            inline_unavailable: false,
             physical_cursor: (origin, 0),
             fullscreen_size: (width.max(1), screen_height),
             cursor_shown: None,
@@ -253,6 +256,12 @@ impl Screen {
         }
     }
 
+    /// An ambiguous resize leaves the primary grid untouched and unavailable
+    /// until the terminal is reacquired with a fresh Screen.
+    pub fn inline_unavailable(&self) -> bool {
+        self.inline_unavailable
+    }
+
     pub fn reconciliation_pending(&self) -> bool {
         self.resize_pending.is_some()
     }
@@ -287,7 +296,7 @@ impl Screen {
     /// cannot undo the emulator's earlier scrolling. Recognized coordinates
     /// include display cells, compact glyph indexes, and bottom-retaining
     /// clipping that resets a cropped caret to top-left. Other incoherent
-    /// evidence is rejected before output or ownership changes.
+    /// evidence retires inline output without touching the primary grid.
     pub fn reconcile_inline(
         &mut self,
         out: &mut impl Write,
@@ -295,14 +304,39 @@ impl Screen {
         height: u16,
         cursor: (u16, u16),
     ) -> io::Result<bool> {
-        if self
-            .resize_pending
-            .is_some_and(|pending| Instant::now() < pending.after)
+        if self.inline_unavailable
+            || self
+                .resize_pending
+                .is_some_and(|pending| Instant::now() < pending.after)
         {
             return Ok(false);
         }
         let width = width.max(1);
         let height = height.max(1);
+        let Ok(origin) = self.reflowed_origin(width, height, cursor) else {
+            self.inline_unavailable = true;
+            self.resize_pending = None;
+            return Ok(false);
+        };
+        // The invisible part of the old footprint stays terminal-owned;
+        // erase only the visible owned rows, never the emulator's history.
+        write!(out, "\x1b[0m")?;
+        for row in origin..height {
+            write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
+        }
+        out.flush()?;
+        self.width = width;
+        self.screen_height = height;
+        self.origin = origin;
+        self.resize_pending = None;
+        self.live_height = self.live_height.map(|rows| rows.min(self.avail() as usize));
+        self.current = None;
+        self.physical_cursor = (height - 1, 0);
+        self.invalidate();
+        Ok(true)
+    }
+
+    fn reflowed_origin(&self, width: u16, height: u16, cursor: (u16, u16)) -> io::Result<u16> {
         if cursor.0 >= width || cursor.1 >= height {
             return Err(io::Error::other(
                 "resize cursor is outside terminal geometry",
@@ -315,7 +349,7 @@ impl Screen {
             .ok_or_else(|| {
                 io::Error::other("primary cursor is outside the owned inline footprint")
             })?;
-        let origin = match &self.current {
+        Ok(match &self.current {
             Some(window) => {
                 let buffer = &window.buffer;
                 let display = reflow_cursor(buffer, offset, self.physical_cursor.1, width)?;
@@ -367,27 +401,7 @@ impl Screen {
                     "resize has no retained inline cursor evidence",
                 ));
             }
-        };
-        // The invisible part of the old footprint stays terminal-owned;
-        // never clear or reconstruct native history to recover its boundary.
-        // There can be no committed content below the primary live anchor.
-        // Erase rows, never ED: even ED at row one can archive provisional cells.
-        write!(out, "\x1b[0m")?;
-        for row in origin..height {
-            write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
-        }
-        out.flush()?;
-        self.width = width;
-        self.screen_height = height;
-        self.origin = origin;
-        self.resize_pending = None;
-        self.live_height = self.live_height.map(|rows| rows.min(self.avail() as usize));
-        self.current = None;
-        // Subsequent publication/growth/paint is synchronous; no query uses
-        // this cleared intermediate surface as reflow evidence.
-        self.physical_cursor = (height - 1, 0);
-        self.invalidate();
-        Ok(true)
+        })
     }
 
     /// Change the reservation without publishing or scrolling live rows.
@@ -1440,19 +1454,17 @@ mod tests {
         assert!(!screen.reconcile_inline(&mut out, 24, 7, (24, 5)).unwrap());
         assert!(out.is_empty());
         screen.resize_pending.as_mut().unwrap().after = Instant::now();
-        for cursor in [(24, 5), (5, 7)] {
-            out.clear();
-            assert!(screen.reconcile_inline(&mut out, 24, 7, cursor).is_err());
+        for cursor in [(24, 5), (5, 7), (4, 5)] {
+            let mut ambiguous = screen.staged();
+            assert!(!ambiguous.reconcile_inline(&mut out, 24, 7, cursor).unwrap());
             assert!(out.is_empty());
-            assert_eq!(screen.primary_size(), (100, 30));
-            assert_eq!(screen.origin, 26);
-            assert!(screen.reconciliation_pending());
-            assert!(screen.current.is_some());
+            assert!(ambiguous.inline_unavailable());
+            assert_eq!(ambiguous.primary_size(), (100, 30));
+            assert_eq!(ambiguous.origin, 26);
+            // A later reply cannot authorize a primary write on this surface.
+            assert!(!ambiguous.reconcile_inline(&mut out, 24, 7, (5, 5)).unwrap());
+            assert!(out.is_empty());
         }
-        // Incoherence cannot defer forever after the native settling phase.
-        out.clear();
-        assert!(screen.reconcile_inline(&mut out, 24, 7, (4, 5)).is_err());
-        assert!(out.is_empty());
         // A reply from the restored primary, not the modal cursor, locates
         // the footprint using the retained 100-column rows.
         screen.reconcile_inline(&mut out, 24, 7, (5, 5)).unwrap();
@@ -1506,7 +1518,8 @@ mod tests {
             )
             .unwrap();
         out.clear();
-        assert!(screen.reconcile_inline(&mut out, 2, 5, (0, 3)).is_err());
+        assert!(!screen.reconcile_inline(&mut out, 2, 5, (0, 3)).unwrap());
+        assert!(screen.inline_unavailable());
         assert!(out.is_empty());
         assert_eq!(screen.origin, 3);
         assert_eq!(screen.primary_size(), (10, 10));
@@ -1631,10 +1644,11 @@ mod tests {
                 .unwrap();
             out.clear();
             assert!(
-                screen
+                !screen
                     .reconcile_inline(&mut out, 24, height, reported)
-                    .is_err()
+                    .unwrap()
             );
+            assert!(screen.inline_unavailable());
             assert!(out.is_empty());
             assert_eq!(screen.primary_size(), (80, 24));
             assert_eq!(screen.origin, 2);

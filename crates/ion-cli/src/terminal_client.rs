@@ -558,11 +558,7 @@ async fn release_surface(terminal: &mut TerminalSession, screen: &mut Screen) ->
     // indefinitely when the terminal stops answering geometry queries.
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if terminal.prepare_inline(screen).await?.is_some()
-                && terminal
-                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
-                    .is_some()
-            {
+            if terminal.try_release_inline(screen).await? {
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1319,21 +1315,27 @@ impl Frontend {
 async fn prepare_draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    ui: &Frontend,
+    ui: &mut Frontend,
 ) -> Result<Option<(u16, u16)>> {
-    if ui.input_target() == interaction::InputTarget::Details || ui.mode == TuiMode::Fullscreen {
-        terminal.enter_alt_screen(screen).await?;
-        let (width, height) = terminal.size()?;
-        screen.resize_fullscreen(width, height);
-        return Ok(Some((width, height)));
+    if !screen.inline_unavailable()
+        && ui.input_target() != interaction::InputTarget::Details
+        && ui.mode != TuiMode::Fullscreen
+    {
+        if terminal.is_alt_screen()? {
+            // Only the restored primary cursor can locate the inline footprint.
+            terminal.leave_alt_screen()?;
+            screen.invalidate();
+        }
+        let geometry = terminal.prepare_inline(screen).await?;
+        if !screen.inline_unavailable() {
+            return Ok(geometry);
+        }
+        ui.status = "Resize fallback: fullscreen".into();
     }
-    if terminal.is_alt_screen()? {
-        // Restore first: the alternate cursor is not evidence about primary
-        // ownership. Reconcile the parked, cleared primary tail before repaint.
-        terminal.leave_alt_screen()?;
-        screen.invalidate();
-    }
-    Ok(terminal.prepare_inline(screen).await?)
+    terminal.enter_alt_screen(screen).await?;
+    let (width, height) = terminal.size()?;
+    screen.resize_fullscreen(width, height);
+    Ok(Some((width, height)))
 }
 
 async fn draw(
@@ -1370,7 +1372,7 @@ fn draw_prepared(
     if ui.input_target() == interaction::InputTarget::Details {
         return draw_modal_fullscreen(terminal, screen, ui, operation, width, height);
     }
-    if ui.mode == TuiMode::Fullscreen {
+    if terminal.is_alt_screen()? {
         return draw_chat_fullscreen(
             terminal,
             screen,
@@ -1386,7 +1388,14 @@ fn draw_prepared(
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
     let width = width.max(1) as usize;
     let physical_budget = height.max(1) as usize;
-    let dock = dock::Dock::prepare(ui, operation, model, queued, width, physical_budget);
+    let dock = dock::Dock::prepare_for_surface(
+        ui,
+        operation,
+        model,
+        queued,
+        (width, physical_budget),
+        false,
+    );
     let mut live_rows = ui.presenter.window(
         &ui.conversation,
         &mut ui.view,
@@ -1556,7 +1565,7 @@ fn draw_chat_fullscreen(
 ) -> Result<bool> {
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let dock = dock::Dock::prepare(ui, operation, model, queued, width, height);
+    let dock = dock::Dock::prepare_for_surface(ui, operation, model, queued, (width, height), true);
     let content = ui.presenter.window(
         &ui.conversation,
         &mut ui.view,

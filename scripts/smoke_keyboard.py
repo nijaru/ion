@@ -29,6 +29,7 @@ class KeyboardTerminal:
         self.typeahead = typeahead
         self.keyboard_queries = self.cursor_queries = 0
         self.alternate = False
+        self.cursor_reply = b"\x1b[2;1R"
         # The caller already owns entries on both independent surfaces.
         self.stacks = [[4], [8]]
         self.pending = b""
@@ -65,7 +66,7 @@ class KeyboardTerminal:
                 self.cursor_queries += 1
                 if self.typeahead and self.cursor_queries == 2:
                     os.write(self.master, b"RESUME_")
-                os.write(self.master, b"\x1b[2;1R")
+                os.write(self.master, self.cursor_reply)
             elif final == b"c" and parameters in (b"", b"0") and not self.supported:
                 os.write(self.master, b"\x1b[?1;2c")
         # Preserve an incomplete escape sequence, not arbitrary rendered text.
@@ -73,7 +74,7 @@ class KeyboardTerminal:
         self.pending = self.pending[start:] if start >= 0 else b""
 
 
-def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode=2):
+def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode=2, ambiguous_resize=False):
     with tempfile.TemporaryDirectory(prefix="ion-keyboard-") as temporary:
         work = Path(temporary)
         requests = []
@@ -192,6 +193,33 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                 drain()
                 assert child.wait() != 0
                 assert b"ION smoke panic" in output
+            elif ambiguous_resize:
+                until(lambda: "›".encode() in output)
+                terminal.typeahead = False
+                os.write(master, b"ACTIVE_TURN\r")
+                until(lambda: len(requests) == 1 and b"done" in output)
+                os.write(master, b"UNSENT_RESIZE_DRAFT")
+                until(lambda: b"UNSENT_RESIZE_DRAFT" in output)
+                # Report a column the resized terminal cannot have. The
+                # original primary viewport must not be erased or replayed.
+                terminal.cursor_reply = b"\x1b[2;80R"
+                checkpoint = len(output)
+                fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 65, 0, 0))
+                until(lambda: terminal.alternate and b"UNSENT_RESIZE_DRAFT" in output[checkpoint:])
+                before_alt = bytes(output[checkpoint:]).split(b"\x1b[?1049h", 1)[0]
+                assert not re.search(rb"\x1b\[[0-9]*[JK]", before_alt), before_alt
+                assert b"ACTIVE_TURN" not in before_alt, before_alt
+                assert b"Resize fallback: fullscreen" in output[checkpoint:], output[checkpoint:]
+                release_completion.set()
+                until(lambda: b"\x1b]7501;state=done:app=ion\x1b\\" in output)
+                assert len(requests) == 1 and child.poll() is None
+                os.write(master, b"\x15/quit\r")
+                until(lambda: child.poll() is not None)
+                assert child.wait() == 0
+                drain()
+                assert not terminal.alternate
+                after_alt = bytes(output[checkpoint:]).rsplit(b"\x1b[?1049l", 1)[-1]
+                assert not re.search(rb"\x1b\[[0-9]*[JK]", after_alt), after_alt
             else:
                 until(lambda: "›".encode() in output)
                 expected = 3 if supported else (8 if mode == "fullscreen" else 4)
@@ -382,6 +410,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
 
 
 exercise("inline")
+exercise("inline", ambiguous_resize=True)
 exercise("fullscreen", grapheme_mode=1)
 exercise("fullscreen", panic=True)
 exercise("fullscreen", supported=False, panic=True, grapheme_mode=0)
