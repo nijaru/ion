@@ -87,13 +87,20 @@ impl OrderedBatch {
                 }
                 let dispatch = catalog.execute_model_call(invocation).await;
                 if !matches!(dispatch, ToolDispatch::Rejected(_)) {
-                    self.never_dispatched.remove(&call.id);
                     observe(AgentEvent::ToolStarted {
                         call_id: call.id.clone(),
                         name: call.name.clone(),
                         arguments: call.arguments.clone(),
                         activity: activity.clone(),
                     });
+                    // The observer can cancel the Turn (including on panic).
+                    // Every route is still cold before this dispatch boundary.
+                    if stop.is_cancelled() {
+                        return Ok(ToolExecution::NotDispatched {
+                            reason: "stopped before tool dispatch".into(),
+                        });
+                    }
+                    self.never_dispatched.remove(&call.id);
                 }
                 match dispatch {
                     ToolDispatch::History => Ok(ToolExecution::output(

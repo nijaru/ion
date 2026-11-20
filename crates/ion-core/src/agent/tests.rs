@@ -3782,6 +3782,63 @@ async fn idle_preferences_survive_unfinished_shell_without_recovering_it() {
 }
 
 #[tokio::test]
+async fn observer_panic_before_history_dispatch_records_no_effect() {
+    let root = std::env::temp_dir().join(format!("ion-history-stop-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
+    let scripts = Arc::new(ScriptedModelService::new([response(vec![
+        Content::ToolCall(ToolCall {
+            id: "list".into(),
+            name: "history".into(),
+            arguments: serde_json::json!({"action":"list"}),
+            raw_arguments: None,
+        }),
+    ])]));
+    let agent = Agent::with_tool_set(
+        scripts.clone(),
+        Arc::new(ToolSet::new([]).with_history()),
+        model(),
+    );
+    let result = agent
+        .submit(
+            session.clone(),
+            "recover evidence".into(),
+            "test".into(),
+            CancellationToken::new(),
+            |event| {
+                if matches!(event, AgentEvent::ToolStarted { .. }) {
+                    panic!("observer failed before dispatch");
+                }
+            },
+        )
+        .await;
+    let view = session.view().unwrap();
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+    assert!(
+        matches!(result, Err(AgentError::ObserverPanicked)),
+        "{result:?}"
+    );
+    assert_eq!(view.unfinished_turn, None);
+    assert_eq!(scripts.requests().len(), 1);
+    let outcomes: Vec<_> = view
+        .entries
+        .into_iter()
+        .filter_map(|entry| match entry {
+            crate::SessionEntry::ToolResult { result, .. } => Some(result.outcome),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(
+            outcomes.as_slice(),
+            [crate::ToolOutcome::NotDispatched { .. }]
+        ),
+        "{outcomes:?}"
+    );
+}
+
+#[tokio::test]
 async fn history_batch_reads_exclude_the_issuing_request_and_sibling_results() {
     let root = std::env::temp_dir().join(format!("ion-history-batch-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
