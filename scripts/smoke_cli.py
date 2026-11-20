@@ -556,7 +556,9 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
             assert denied.returncode != 0 and not database.exists()
             assert not marker.exists() and len(requests) == calls, "later prompt preflight admitted effects"
         (prompts / "bulk.md").write_text("b" * (1024 * 1024))
-        for label, operands in (("capacity", ["small"] * 65), ("retained-bytes", ["/bulk"] * 11)):
+        # Each retained expansion is charged once. Exceed the 32 MiB budget
+        # without hitting the independent 64-input limit first.
+        for label, operands in (("capacity", ["small"] * 65), ("retained-bytes", ["/bulk"] * 33)):
             database = root / f"batch-{label}.sqlite"
             denied = run("--cwd", workspace, "--session", database, "run", *operands, check=False)
             assert denied.returncode != 0 and not database.exists() and not marker.exists(), (label, "batch bounds admitted setup effects", denied.stderr)
