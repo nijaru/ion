@@ -540,18 +540,13 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 custody.push_update(ControlUpdate::Activity(observation));
             }
         }
-        // Never leak a previous operation's unread stream into the next Turn.
-        let skipped = self.observer.receiver.len();
+        // Start the next Turn with a fresh receiver. Intentional discard is
+        // not a gap in a delivered stream and must not enqueue any activity.
         self.observer = ControlObserver {
             receiver: self.observations.subscribe(),
             suppress: false,
             initial: false,
         };
-        if skipped > 0 {
-            lock(&self.custody).push_update(ControlUpdate::Activity(Observation::Gap {
-                skipped: u64::try_from(skipped).expect("observation capacity fits u64"),
-            }));
-        }
         let returned: Vec<_> = active
             .inbox
             .take_uncommitted()

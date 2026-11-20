@@ -703,6 +703,36 @@ async fn joined_operations_deliver_ready_activity_before_settlement() {
 }
 
 #[tokio::test]
+async fn discarding_a_joined_activity_tail_retains_only_reliable_updates() {
+    let model = Model::new(OBSERVATION_CAPACITY * 4);
+    let mut fixture = Fixture::new(model.clone(), false);
+    fixture
+        .control
+        .submit(Delivery::Start, prompt("root"), meta("root"))
+        .unwrap();
+    model.wait_calls(1).await;
+    model.release();
+    let outcome = fixture.control.active.as_mut().unwrap().work.join().await;
+    assert!(!fixture.control.observer.receiver.is_empty());
+    fixture
+        .control
+        .finish_operation(outcome, ActivityRetention::Discard);
+    let mut settled = false;
+    while let Some(update) = fixture.control.take_update() {
+        match update {
+            ControlUpdate::Activity(_) => panic!("discarded activity leaked into reliable updates"),
+            ControlUpdate::Settled(settlement) => {
+                assert!(!settlement.outcome.failed());
+                settled = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(settled);
+    assert!(fixture.control.observer.receiver.is_empty());
+}
+
+#[tokio::test]
 async fn lag_and_dropped_passive_observers_do_not_cancel_work() {
     let model = Model::new(OBSERVATION_CAPACITY * 4);
     let mut fixture = Fixture::new(model.clone(), false);
