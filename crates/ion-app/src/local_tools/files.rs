@@ -398,6 +398,54 @@ fn append_edit_part(result: &mut String, part: &str) {
     result.push_str(part);
 }
 
+fn ambiguous_edit(source: &str, old: &str, index: usize, first: usize, second: usize) -> String {
+    const PREVIEW: usize = 4;
+    let mut positions = [0; PREVIEW];
+    positions[..2].copy_from_slice(&[first, second]);
+    let mut count = 2;
+    let mut last = second;
+    let more = loop {
+        // Advance by one character so overlapping matches count as well.
+        let from = last + old.chars().next().expect("nonempty match").len_utf8();
+        let Some(relative) = source[from..].find(old) else {
+            break false;
+        };
+        if count == PREVIEW {
+            break true;
+        }
+        last = from + relative;
+        positions[count] = last;
+        count += 1;
+    };
+    let mut line = 1;
+    let mut previous = 0;
+    let lines = positions[..count]
+        .iter()
+        .map(|&start| {
+            line += source.as_bytes()[previous..start]
+                .iter()
+                .filter(|&&b| b == b'\n')
+                .count();
+            previous = start;
+            line.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let occurrences = if more {
+        format!("at least {}", PREVIEW + 1)
+    } else {
+        count.to_string()
+    };
+    let preview = if more {
+        "first start lines"
+    } else {
+        "start lines"
+    };
+    format!(
+        "edits[{index}].old_text is ambiguous: found {occurrences} matches ({preview}: {lines}); include more surrounding text"
+    )
+}
+
 fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<String, String> {
     struct Matched<'a> {
         start: usize,
@@ -423,8 +471,14 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
                 .next()
                 .expect("match is nonempty")
                 .len_utf8();
-        if normalized[next..].contains(&old) {
-            return Err(format!("edits[{index}].old_text is ambiguous"));
+        if let Some(relative) = normalized[next..].find(&old) {
+            return Err(ambiguous_edit(
+                &normalized,
+                &old,
+                index,
+                start,
+                next + relative,
+            ));
         }
         matched.push(Matched {
             start,
@@ -977,6 +1031,38 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn ambiguous_edit_reports_bounded_match_lines_without_writing() {
+        let root =
+            std::env::temp_dir().join(format!("ion-edit-ambiguous-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        let source = "header\r\nααα\r\nαα\r\nαα\r\nαα\r\nαα\r\n";
+        fs::write(&path, source).unwrap();
+        let run = |old_text| {
+            edit(
+                &root,
+                &json!({"path":"file.txt", "edits":[{"old_text":old_text, "new_text":"updated"}]}),
+                &CancellationToken::new(),
+                None,
+            )
+        };
+        let rejected = run("αα");
+        assert!(rejected.is_error);
+        assert_eq!(
+            rejected.value["error"],
+            "edits[0].old_text is ambiguous: found at least 5 matches (first start lines: 2, 2, 3, 4); include more surrounding text"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        let retried = run("header\nααα");
+        assert!(!retried.is_error, "{}", retried.value);
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            source.replacen("header\r\nααα", "updated", 1)
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
