@@ -22,15 +22,25 @@ pub(super) struct Window {
     pub first_available: u64,
     pub offset: u64,
     pub next_offset: u64,
-    pub total_bytes: u64,
     pub gap_bytes: u64,
-    pub complete: bool,
+    pub meta: Meta,
 }
 
+#[derive(Debug)]
 pub(super) struct Meta {
     pub total_bytes: u64,
     pub complete: bool,
     pub capture_error: Option<String>,
+}
+
+impl RingState {
+    fn meta(&self) -> Meta {
+        Meta {
+            total_bytes: self.total,
+            complete: self.eof,
+            capture_error: self.error.clone(),
+        }
+    }
 }
 
 impl Ring {
@@ -67,12 +77,7 @@ impl Ring {
     }
 
     pub(super) fn meta(&self) -> Meta {
-        let state = self.lock();
-        Meta {
-            total_bytes: state.total,
-            complete: state.eof,
-            capture_error: state.error.clone(),
-        }
+        self.lock().meta()
     }
 
     /// Copy one requested window. A future offset is a caller error; an evicted
@@ -106,9 +111,8 @@ impl Ring {
             bytes,
             first_available,
             offset: actual,
-            total_bytes: state.total,
             gap_bytes: gap,
-            complete: state.eof,
+            meta: state.meta(),
         })
     }
 
@@ -138,7 +142,7 @@ mod tests {
         assert_eq!(window.first_available, 100);
         assert_eq!(window.offset, 100);
         assert_eq!(window.next_offset, 116);
-        assert_eq!(window.total_bytes, CAPTURE_BYTES as u64 + 100);
+        assert_eq!(window.meta.total_bytes, CAPTURE_BYTES as u64 + 100);
         assert_eq!(window.bytes.len(), 16);
         assert!(window.bytes.iter().all(|byte| *byte == b'a'));
 
@@ -148,13 +152,13 @@ mod tests {
         assert_eq!(tail.gap_bytes, 0);
         assert_eq!(tail.offset, CAPTURE_BYTES as u64 + 90);
         assert_eq!(tail.bytes, vec![b'b'; 10]);
-        assert_eq!(tail.next_offset, tail.total_bytes);
+        assert_eq!(tail.next_offset, tail.meta.total_bytes);
 
-        let empty = ring.read(tail.total_bytes, 32, CAPTURE_BYTES).unwrap();
+        let empty = ring.read(tail.next_offset, 32, CAPTURE_BYTES).unwrap();
         assert!(empty.bytes.is_empty());
-        assert_eq!(empty.next_offset, empty.total_bytes);
+        assert_eq!(empty.next_offset, empty.meta.total_bytes);
         assert!(
-            ring.read(tail.total_bytes + 1, 32, CAPTURE_BYTES)
+            ring.read(tail.next_offset + 1, 32, CAPTURE_BYTES)
                 .unwrap_err()
                 .contains("beyond captured bytes")
         );
@@ -164,14 +168,15 @@ mod tests {
     fn eof_is_only_observed_completion_and_large_appends_keep_the_tail() {
         let ring = Ring::default();
         ring.append(&[b'x'; CAPTURE_BYTES + 10]);
-        assert_eq!(
-            ring.read(0, CAPTURE_BYTES, CAPTURE_BYTES).unwrap().bytes,
-            vec![b'x'; CAPTURE_BYTES]
-        );
-        assert!(!ring.meta().complete);
-        ring.mark_eof();
-        assert!(ring.meta().complete);
+        let before = ring.read(0, CAPTURE_BYTES, CAPTURE_BYTES).unwrap();
+        assert_eq!(before.bytes, vec![b'x'; CAPTURE_BYTES]);
         ring.mark_error("read fault");
-        assert_eq!(ring.meta().capture_error.as_deref(), Some("read fault"));
+        ring.mark_eof();
+        let after = ring.read(before.next_offset, 1, CAPTURE_BYTES).unwrap();
+        assert!(!before.meta.complete);
+        assert_eq!(before.meta.capture_error, None);
+        assert!(after.bytes.is_empty());
+        assert!(after.meta.complete);
+        assert_eq!(after.meta.capture_error.as_deref(), Some("read fault"));
     }
 }

@@ -387,17 +387,16 @@ impl ProcessTools {
             Ok(window) => window,
             Err(failure) => return error(failure),
         };
-        let meta = ring.meta();
         let mut output = json!({
             "id": id,
             "stream": stream_name,
             "first_available": window.first_available,
             "offset": window.offset,
             "next_offset": window.next_offset,
-            "total_bytes": window.total_bytes,
+            "total_bytes": window.meta.total_bytes,
             "gap_bytes": window.gap_bytes,
-            "complete": window.complete,
-            "capture_error": meta.capture_error,
+            "complete": window.meta.complete,
+            "capture_error": window.meta.capture_error,
             "captured_bytes": window.bytes.len(),
         });
         match encoding {
