@@ -94,6 +94,13 @@ impl Theme {
             ]
         };
         Self::build(|role| {
+            if role == Role::Secondary {
+                return if dark {
+                    Color::Rgb(157, 166, 181)
+                } else {
+                    Color::Rgb(93, 102, 118)
+                };
+            }
             let [r, g, b] = colors[slot(role).unwrap_or(0)];
             Color::Rgb(r, g, b)
         })
@@ -112,6 +119,21 @@ impl Theme {
             let source = slot(role)
                 .and_then(|slot| palette[slot])
                 .or_else(|| slot(role).is_none().then_some(foreground).flatten());
+            if role == Role::Secondary
+                && let Some(bg) = background
+            {
+                let Color::Rgb(r, g, b) = fallback.style(Role::Text).fg.expect("fixed foreground")
+                else {
+                    unreachable!()
+                };
+                let fg = readable(foreground.unwrap_or([r, g, b]), bg);
+                let muted = std::array::from_fn(|i| {
+                    ((u16::from(fg[i]) * 65 + u16::from(bg[i]) * 35 + 50) / 100) as u8
+                });
+                // Keep the original foreground's direction even near mid-gray.
+                let [r, g, b] = contrast_toward(muted, bg, fg);
+                return Color::Rgb(r, g, b);
+            }
             match (source, background) {
                 (Some(source), Some(bg)) => {
                     let [r, g, b] = readable(source, bg);
@@ -195,12 +217,22 @@ fn readable(source: [u8; 3], background: [u8; 3]) -> [u8; 3] {
         return source;
     }
     let extreme = if contrast([255; 3], background) >= contrast([0; 3], background) {
-        255.0
+        [255; 3]
     } else {
-        0.0
+        [0; 3]
     };
+    contrast_toward(source, background, extreme)
+}
+
+fn contrast_toward(source: [u8; 3], background: [u8; 3], target: [u8; 3]) -> [u8; 3] {
+    if contrast(source, background) >= 4.5 {
+        return source;
+    }
     let blend = |amount: f64| {
-        source.map(|c| (f64::from(c) + (extreme - f64::from(c)) * amount).round() as u8)
+        std::array::from_fn(|i| {
+            let start = f64::from(source[i]);
+            (start + (f64::from(target[i]) - start) * amount).round() as u8
+        })
     };
     let (mut low, mut high) = (0.0, 1.0);
     for _ in 0..24 {
@@ -244,6 +276,18 @@ mod tests {
         let theme = Theme::system(Some([245; 3]), Some([16; 3]), &palette);
         assert_eq!(theme.style(Role::Error).fg, Some(Color::Rgb(255, 150, 160)));
         assert_eq!(theme.style(Role::Text).fg, Some(Color::Rgb(245, 245, 245)));
+        for (fg, bg) in [([245; 3], [16; 3]), ([20; 3], [248; 3])] {
+            let theme = Theme::system(Some(fg), Some(bg), &palette);
+            let Some(Color::Rgb(r, g, b)) = theme.style(Role::Secondary).fg else {
+                panic!("expected RGB secondary text")
+            };
+            assert!(contrast([r, g, b], bg) >= 4.5);
+            assert!(contrast([r, g, b], bg) < contrast(fg, bg));
+        }
+        for dark in [false, true] {
+            let theme = Theme::fixed(dark);
+            assert_ne!(theme.style(Role::Secondary).fg, theme.style(Role::Text).fg);
+        }
         let fallback = Theme::default();
         assert_eq!(fallback.style(Role::Secondary).fg, Some(Color::Reset));
         assert!(

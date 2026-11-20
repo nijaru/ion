@@ -357,6 +357,7 @@ impl Completion {
         if menu.items.is_empty() {
             return CompletionFrame {
                 candidate: None,
+                selected_row: None,
                 rows: if menu.loading && budget > 0 {
                     vec![fit_line(
                         &format!(
@@ -426,7 +427,11 @@ impl Completion {
                 ));
             }
         }
-        CompletionFrame { rows, candidate }
+        CompletionFrame {
+            rows,
+            selected_row: Some(1 + menu.selected - start),
+            candidate,
+        }
     }
 
     pub(crate) fn observe_paint(&mut self, frame: CompletionFrame) {
@@ -454,6 +459,7 @@ impl Completion {
 #[derive(Default)]
 pub(crate) struct CompletionFrame {
     pub rows: Vec<String>,
+    pub selected_row: Option<usize>,
     candidate: Option<Prepared<CompletionCandidate>>,
 }
 

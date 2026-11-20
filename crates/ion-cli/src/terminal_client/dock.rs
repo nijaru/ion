@@ -305,11 +305,15 @@ impl Dock {
         for text in status {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::Secondary)));
         }
-        for text in &completion.rows {
-            rows.push(Line::styled(
-                text.clone(),
-                ui.themes.theme().style(Role::Text),
-            ));
+        for (index, text) in completion.rows.iter().enumerate() {
+            let role = if completion.selected_row == Some(index) {
+                Role::Selected
+            } else if index == 0 {
+                Role::Secondary
+            } else {
+                Role::Text
+            };
+            rows.push(Line::styled(text.clone(), ui.themes.theme().style(role)));
         }
         let composer_top = rows.len();
         for text in composer.lines {
