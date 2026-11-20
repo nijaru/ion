@@ -1240,7 +1240,15 @@ fn completion_acceptance_requires_a_press_but_literal_tabs_still_repeat() {
             assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("/hel", 4));
             assert!(ui.editor.completion.active());
         }
-        assert!(matches!(ui.key(accept, None, None), Action::None));
+        let accepted = ui.key(accept, None, None);
+        if accept.code != KeyCode::Tab {
+            assert!(
+                matches!(accepted, Action::Command(CommandInput::Editor(source)) if source.literal == "/help ")
+            );
+            assert!(ui.editor.draft.is_empty());
+            continue;
+        }
+        assert!(matches!(accepted, Action::None));
         assert_eq!(ui.editor.draft, "/help ");
         assert!(matches!(
             ui.key(
@@ -1278,7 +1286,7 @@ fn completion_acceptance_requires_a_press_but_literal_tabs_still_repeat() {
 }
 
 #[test]
-fn command_completion_edits_without_dispatch_or_argument_loss() {
+fn command_completion_preserves_arguments_and_requires_visible_selection() {
     let mut ui = published_ui();
     for ch in "/hel".chars() {
         assert!(matches!(
@@ -1331,9 +1339,8 @@ fn command_completion_edits_without_dispatch_or_argument_loss() {
     ui.editor.completion.painted_rows(80, 5, &ui.keys);
     assert!(matches!(
         ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), None, None),
-        Action::None
+        Action::Command(CommandInput::Editor(source)) if source.literal == "/fork-after "
     ));
-    assert_eq!(ui.editor.draft, "/fork-after ");
     ui.editor.draft.clear();
     ui.editor.cursor = 0;
     ui.insert("/re");

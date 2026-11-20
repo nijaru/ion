@@ -322,6 +322,12 @@ impl Completion {
         }
     }
 
+    pub(crate) fn completes_command(&self) -> bool {
+        self.menu
+            .as_ref()
+            .is_some_and(|menu| menu.kind == Kind::Commands)
+    }
+
     pub(crate) fn replacement(&self, draft: &str) -> Option<(Range<usize>, String, usize)> {
         if !self.visible() {
             return None;
@@ -378,12 +384,16 @@ impl Completion {
         let start = menu.selected.saturating_sub(visible.saturating_sub(1));
         let accept = if menu.kind == Kind::Files {
             format!(
-                "{} / {}",
+                "{} / {} complete",
                 keys.hint(KeyAction::Tab),
                 keys.hint(KeyAction::Confirm)
             )
         } else {
-            keys.hint(KeyAction::Tab)
+            format!(
+                "{} complete · {} run",
+                keys.hint(KeyAction::Tab),
+                keys.hint(KeyAction::Confirm)
+            )
         };
         let title = if menu.kind == Kind::Files {
             "Files"
@@ -392,7 +402,7 @@ impl Completion {
         };
         let mut rows = vec![fit_line(
             &format!(
-                "{title} · {} / {} select · {accept} complete · {} close",
+                "{title} · {} / {} select · {accept} · {} close",
                 keys.hint(KeyAction::SelectUp),
                 keys.hint(KeyAction::SelectDown),
                 keys.hint(KeyAction::Cancel)

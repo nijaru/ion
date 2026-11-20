@@ -1049,7 +1049,7 @@ impl Frontend {
                 .key(key, &self.keys)
                 .map_or(Action::None, Action::Pick);
         }
-        let input = self.keys.action(COMPOSER, key);
+        let mut input = self.keys.action(COMPOSER, key);
         let completion_key = self.keys.action(COMPLETION, key);
         self.refresh_completion(resources, commands, input == Some(KeyAction::Tab));
         if (self.editor.completion.active() || self.editor.completion.wants_files())
@@ -1079,13 +1079,20 @@ impl Frontend {
                     if !self.editor.completion.visible() {
                         return Action::None;
                     }
-                    if let Some((range, text, cursor)) =
+                    let Some((range, text, cursor)) =
                         self.editor.completion.replacement(&self.editor.draft)
-                    {
-                        self.editor.replace_text(range, &text, cursor);
-                    }
+                    else {
+                        return Action::None;
+                    };
+                    let run = completion_key == Some(KeyAction::Confirm)
+                        && self.editor.completion.completes_command();
+                    self.editor.replace_text(range, &text, cursor);
                     self.editor.completion.clear();
-                    return Action::None;
+                    if !run {
+                        return Action::None;
+                    }
+                    // Use the same submission path as a fully typed command.
+                    input = Some(KeyAction::Submit);
                 }
                 _ => {}
             }

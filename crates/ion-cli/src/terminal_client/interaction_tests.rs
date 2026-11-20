@@ -705,6 +705,35 @@ fn hidden_question_never_paints_or_enables_composer_and_preserves_literal_draft(
 }
 
 #[test]
+fn confirm_runs_painted_slash_completion_but_not_on_repeat() {
+    let mut ui = Frontend::default();
+    ui.insert("/he keys");
+    ui.editor.cursor = 3;
+    ui.refresh_completion(None, None, false);
+    let layout = Dock::prepare(&mut ui, None, None, &[], 80, 20);
+    publish_to(&mut ui, layout, (80, 20), &mut Vec::new()).unwrap();
+    let enter = KeyEvent::new(KeyCode::Enter, Modifiers::NONE);
+    assert!(matches!(
+        ui.key(
+            KeyEvent {
+                repeat: true,
+                ..enter
+            },
+            None,
+            None
+        ),
+        Action::None
+    ));
+    assert_eq!(ui.editor.draft, "/he keys");
+    assert!(matches!(
+        ui.key(enter, None, None),
+        Action::Command(crate::terminal_client::command::CommandInput::Editor(source))
+            if source.literal == "/help keys"
+    ));
+    assert!(ui.editor.draft.is_empty());
+}
+
+#[test]
 fn completion_layout_does_not_authorize_and_only_normal_composer_paint_publishes_width() {
     let mut ui = Frontend::default();
     ui.insert("/he");
