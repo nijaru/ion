@@ -418,19 +418,30 @@ impl InputStream {
         self.replies.begin_color_probe(query_mode)
     }
 
-    pub(crate) async fn color_observations(&mut self, query_mode: bool) -> io::Result<Option<u8>> {
+    pub(crate) async fn visual_observations(
+        &mut self,
+        appearance: bool,
+        graphemes: bool,
+    ) -> io::Result<(Option<u8>, Option<u8>)> {
         // DA1 is untagged: a keyboard query can have completed on flags while
         // its DA1 is still in flight. Do not mistake that old reply for a color
         // fence. All eighteen replies settle early; otherwise use one 100ms
         // absolute budget, including the optional DECRQM observation.
         self.await_reply(
-            |replies| replies.color_probe_complete(query_mode).then_some(()),
+            |replies| {
+                (replies.color_probe_complete(appearance)
+                    && (!graphemes || replies.grapheme_mode.value.is_some()))
+                .then_some(())
+            },
             false,
             Duration::from_millis(100),
         )
         .await?;
         self.replies.finish_color_probe();
-        Ok(self.replies.appearance_mode.value)
+        Ok((
+            self.replies.appearance_mode.value.filter(|_| appearance),
+            self.replies.grapheme_mode.value.filter(|_| graphemes),
+        ))
     }
 
     pub(crate) fn begin_grapheme_probe(&mut self) -> bool {

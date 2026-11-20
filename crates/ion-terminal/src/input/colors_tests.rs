@@ -153,7 +153,10 @@ async fn late_mode_report_wakes_one_safe_fresh_capture_without_authorizing_stale
     let (sender, chunks) = mpsc::channel(4);
     let mut input = stream(chunks);
     assert!(input.begin_color_probe(true));
-    assert_eq!(input.color_observations(true).await.unwrap(), None);
+    assert_eq!(
+        input.visual_observations(true, false).await.unwrap().0,
+        None
+    );
     assert!(
         !input.colors_need_refresh(),
         "absence must not cause a draw/query loop"
@@ -162,7 +165,7 @@ async fn late_mode_report_wakes_one_safe_fresh_capture_without_authorizing_stale
     // RGB, but cannot send another DECRQM or keep the refresh flag set.
     assert!(!input.begin_color_probe(true));
     sender.send(Ok(all_replies())).await.unwrap();
-    input.color_observations(false).await.unwrap();
+    input.visual_observations(false, false).await.unwrap();
     input.pending.clear();
     assert!(!input.colors_need_refresh());
     sender
@@ -184,7 +187,10 @@ async fn late_mode_report_wakes_one_safe_fresh_capture_without_authorizing_stale
         "the next explicit normal-UI refresh can recapture"
     );
     sender.send(Ok(b"\x1b[?2031;1$y".to_vec())).await.unwrap();
-    assert_eq!(input.color_observations(true).await.unwrap(), Some(1));
+    assert_eq!(
+        input.visual_observations(true, false).await.unwrap().0,
+        Some(1)
+    );
     assert!(!input.colors_need_refresh());
     assert!(
         !input.begin_color_probe(true),
@@ -199,9 +205,12 @@ async fn cancelled_mode_capture_can_drain_in_ordinary_or_secret_intake_then_retr
         let mut input = stream(chunks);
         assert!(input.begin_color_probe(true));
         assert!(
-            tokio::time::timeout(Duration::from_millis(5), input.color_observations(true))
-                .await
-                .is_err()
+            tokio::time::timeout(
+                Duration::from_millis(5),
+                input.visual_observations(true, false)
+            )
+            .await
+            .is_err()
         );
         sender.send(Ok(b"\x1b[?2031;2$y".to_vec())).await.unwrap();
         if quarantined {
@@ -226,7 +235,10 @@ async fn cancelled_mode_capture_can_drain_in_ordinary_or_secret_intake_then_retr
         let mut fresh = all_replies();
         fresh.extend_from_slice(b"\x1b[?2031;1$y");
         sender.send(Ok(fresh)).await.unwrap();
-        assert_eq!(input.color_observations(true).await.unwrap(), Some(1));
+        assert_eq!(
+            input.visual_observations(true, false).await.unwrap().0,
+            Some(1)
+        );
         assert!(!input.colors_need_refresh());
     }
 }
@@ -245,11 +257,11 @@ async fn unsupported_and_malformed_mode_answers_do_not_rearm_capture() {
         let mut input = stream(chunks);
         assert!(input.begin_color_probe(true));
         if late {
-            input.color_observations(true).await.unwrap();
+            input.visual_observations(true, false).await.unwrap();
             input.parse(report, false);
         } else {
             sender.send(Ok(report.to_vec())).await.unwrap();
-            input.color_observations(true).await.unwrap();
+            input.visual_observations(true, false).await.unwrap();
         }
         assert!(!input.colors_need_refresh());
         assert!(
@@ -292,7 +304,10 @@ async fn grapheme_reports_preserve_typeahead_and_cannot_claim_another_modes_capt
     let mut replies = all_replies();
     replies.extend_from_slice(b"\x1b[?2027;2$y\x1b[?2031;1$y");
     sender.send(Ok(replies)).await.unwrap();
-    assert_eq!(input.color_observations(true).await.unwrap(), Some(1));
+    assert_eq!(
+        input.visual_observations(true, false).await.unwrap().0,
+        Some(1)
+    );
     assert_eq!(input.replies.grapheme_mode.value, None);
     input.reacquire_observations();
     assert!(
@@ -519,18 +534,25 @@ async fn full_probe_settles_early_with_typeahead_and_protocol_event_order() {
     let (sender, chunks) = mpsc::channel(4);
     let mut input = stream(chunks);
     assert!(input.begin_color_probe(true));
+    assert!(input.begin_grapheme_probe());
     let mut bytes = b"a\x1b[?2031;2$y".to_vec();
     bytes.extend(all_replies());
-    bytes.extend_from_slice(b"b");
     sender.send(Ok(bytes)).await.unwrap();
+    let mut probe = Box::pin(input.visual_observations(true, true));
+    assert!(
+        std::future::poll_fn(|cx| std::task::Poll::Ready(probe.as_mut().poll(cx).is_pending()))
+            .await
+    );
+    sender.send(Ok(b"\x1b[?2027;1$yb".to_vec())).await.unwrap();
     // Keep the channel open: completion cannot depend on EOF or the timeout.
     assert_eq!(
-        tokio::time::timeout(Duration::from_millis(50), input.color_observations(true))
+        tokio::time::timeout(Duration::from_millis(50), &mut probe)
             .await
             .unwrap()
             .unwrap(),
-        Some(2)
+        (Some(2), Some(1))
     );
+    drop(probe);
     assert!(!input.colors_need_refresh());
     assert_eq!(input.colors().foreground, Some([255; 3]));
     assert_eq!(input.colors().background, Some([0; 3]));
@@ -551,7 +573,10 @@ async fn absent_partial_and_late_colors_are_normal_and_do_not_flood_events() {
         .send(Ok(b"x\x1b]11;rgb:1/2/3\x07\x1b[?1;2c".to_vec()))
         .await
         .unwrap();
-    assert_eq!(input.color_observations(false).await.unwrap(), None);
+    assert_eq!(
+        input.visual_observations(false, false).await.unwrap().0,
+        None
+    );
     assert_eq!(input.colors().background, Some([17, 34, 51]));
     assert!(!input.colors_need_refresh());
     assert_eq!(input.next().await.unwrap().unwrap(), key('x'));
@@ -575,7 +600,7 @@ async fn absent_partial_and_late_colors_are_normal_and_do_not_flood_events() {
     assert!(input.pending.is_empty());
     input.begin_color_probe(false);
     // No replies is also successful, retaining still-current observations.
-    input.color_observations(false).await.unwrap();
+    input.visual_observations(false, false).await.unwrap();
     assert!(!input.colors_need_refresh());
     assert_eq!(input.colors().background, Some([17, 34, 51]));
 }
@@ -591,7 +616,7 @@ async fn color_query_errors_are_errors_and_cancellation_preserves_intake() {
         .unwrap();
     assert_eq!(
         input
-            .color_observations(false)
+            .visual_observations(false, false)
             .await
             .unwrap_err()
             .to_string(),
@@ -600,9 +625,12 @@ async fn color_query_errors_are_errors_and_cancellation_preserves_intake() {
     assert!(input.colors_need_refresh());
     sender.send(Ok(b"a\x1b]11;rgb:0/0".to_vec())).await.unwrap();
     assert!(
-        tokio::time::timeout(Duration::from_millis(10), input.color_observations(false))
-            .await
-            .is_err()
+        tokio::time::timeout(
+            Duration::from_millis(10),
+            input.visual_observations(false, false)
+        )
+        .await
+        .is_err()
     );
     assert!(input.colors_need_refresh());
     sender.send(Ok(b"/0\x07b".to_vec())).await.unwrap();
@@ -612,7 +640,11 @@ async fn color_query_errors_are_errors_and_cancellation_preserves_intake() {
     input.begin_color_probe(false);
     drop(sender);
     assert_eq!(
-        input.color_observations(false).await.unwrap_err().kind(),
+        input
+            .visual_observations(false, false)
+            .await
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::UnexpectedEof
     );
 }
@@ -624,7 +656,7 @@ async fn absolute_color_and_mode_budget_cannot_be_extended_by_ready_input() {
     let (sender, chunks) = mpsc::channel(4);
     let mut input = stream(chunks);
     assert!(input.begin_color_probe(true));
-    let mut probe = Box::pin(input.color_observations(true));
+    let mut probe = Box::pin(input.visual_observations(true, false));
     let mut context = Context::from_waker(Waker::noop());
     assert!(probe.as_mut().poll(&mut context).is_pending());
     std::thread::sleep(Duration::from_millis(120));
@@ -633,7 +665,7 @@ async fn absolute_color_and_mode_budget_cannot_be_extended_by_ready_input() {
     sender.try_send(Ok(bytes)).unwrap();
     assert!(matches!(
         probe.as_mut().poll(&mut context),
-        Poll::Ready(Ok(None))
+        Poll::Ready(Ok((None, None)))
     ));
     drop(probe);
     assert_eq!(
@@ -679,7 +711,7 @@ async fn appearance_invalidates_rgb_and_refresh_is_explicit_not_intake_driven() 
         .send(Ok(b"\x1b]11;rgb:f/f/f\x07".to_vec()))
         .await
         .unwrap();
-    input.color_observations(false).await.unwrap();
+    input.visual_observations(false, false).await.unwrap();
     assert_eq!(input.colors().background, Some([255; 3]));
     assert!(!input.colors_need_refresh());
     input.pending.clear();
@@ -699,7 +731,7 @@ async fn notification_during_probe_defers_a_new_probe_and_drops_old_samples() {
     bytes.extend_from_slice(b"\x1b[?997;1n");
     bytes.extend(all_replies());
     sender.send(Ok(bytes)).await.unwrap();
-    input.color_observations(false).await.unwrap();
+    input.visual_observations(false, false).await.unwrap();
     assert!(input.colors_need_refresh());
     assert_eq!(
         input.colors(),
@@ -841,7 +873,7 @@ async fn expired_or_cancelled_mode_capture_cannot_authorize_a_new_mode_change() 
     let (_sender, chunks) = mpsc::channel(4);
     let mut input = stream(chunks);
     assert!(input.begin_color_probe(true));
-    input.color_observations(true).await.unwrap();
+    input.visual_observations(true, false).await.unwrap();
     assert!(
         !input.begin_color_probe(true),
         "an old DECRQM is still outstanding"

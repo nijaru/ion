@@ -141,8 +141,7 @@ impl TerminalSession {
         };
         session.lock().activate()?;
         session.negotiate_keyboard().await?;
-        session.negotiate_graphemes().await?;
-        session.refresh_colors().await?;
+        session.probe_visual_modes(true).await?;
         Ok(session)
     }
 
@@ -241,26 +240,39 @@ impl TerminalSession {
     /// Incomplete framing is reported through ordinary input rejection. Call
     /// only while owning ordinary UI output, not during secrets or attachment.
     pub async fn refresh_colors(&mut self) -> io::Result<()> {
+        self.probe_visual_modes(false).await
+    }
+
+    async fn probe_visual_modes(&mut self, include_graphemes: bool) -> io::Result<()> {
         self.check_active()?;
-        let query_mode = self.input.begin_color_probe(true);
+        // Start colors first: starting a probe retires any older mode captures.
+        // The two new DECRQM replies are identified by different mode numbers.
+        let query_appearance = self.input.begin_color_probe(true);
+        let query_graphemes = include_graphemes && self.input.begin_grapheme_probe();
         {
             let mut output = self.output()?;
-            if query_mode {
+            if query_graphemes {
+                output.write_all(b"\x1b[?2027$p")?;
+            }
+            if query_appearance {
                 output.write_all(crate::colors::MODE_QUERY)?;
             }
             output.write_all(crate::colors::QUERY)?;
             output.flush()?;
         }
         // Never hold physical output custody across a read/await.
-        let mode = self
+        let (appearance, graphemes) = self
             .input
-            .color_observations(query_mode)
+            .visual_observations(query_appearance, query_graphemes)
             .await
             .inspect_err(|_| self.lock().fail())?;
-        self.check_active()?;
-        if query_mode {
-            self.lock()
-                .set_mode(PrivateMode::AppearanceNotifications, mode)?;
+        let mut state = self.lock();
+        state.usable()?;
+        if query_graphemes {
+            state.set_mode(PrivateMode::Graphemes, graphemes)?;
+        }
+        if query_appearance {
+            state.set_mode(PrivateMode::AppearanceNotifications, appearance)?;
         }
         Ok(())
     }
