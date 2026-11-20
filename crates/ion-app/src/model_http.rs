@@ -56,6 +56,7 @@ use responses_request::responses_body;
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_ERROR_BODY: usize = 16 * 1024;
+const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(5);
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
 const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
@@ -367,10 +368,11 @@ impl ModelService for HttpModelService {
                 let retry_after_ms = parse_retry_after(response.headers());
                 let mut body = Vec::new();
                 let mut body_failure = None;
+                // Diagnostics are optional and cannot hold a known failure
+                // open indefinitely by trickling bytes below the size cap.
+                let deadline = tokio::time::Instant::now() + ERROR_BODY_TIMEOUT;
                 while body.len() < MAX_ERROR_BODY {
-                    let chunk = match tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, response.chunk())
-                        .await
-                    {
+                    let chunk = match tokio::time::timeout_at(deadline, response.chunk()).await {
                         Ok(Ok(Some(chunk))) => chunk,
                         Ok(Ok(None)) => break,
                         Ok(Err(_)) => {

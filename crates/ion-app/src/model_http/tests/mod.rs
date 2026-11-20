@@ -69,6 +69,42 @@ async fn http_error_status_survives_truncated_diagnostic_body() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn http_error_diagnostic_deadline_does_not_reset_on_body_progress() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().unwrap()
+    );
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        read_request_body(&mut socket).await;
+        socket
+            .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 100\r\n\r\n{")
+            .await
+            .unwrap();
+        started_tx.send(tokio::time::Instant::now()).unwrap();
+        loop {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if socket.write_all(b" ").await.is_err() {
+                break;
+            }
+        }
+    });
+    let model =
+        HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+    let (failure, started) = tokio::join!(model.stream(request()), started_rx);
+    let Err(failure) = failure else {
+        panic!("HTTP error admitted a stream")
+    };
+    assert_eq!(failure.kind, ProviderErrorKind::Authentication);
+    assert!(failure.message.contains("body timed out"), "{failure:?}");
+    assert!(started.unwrap().elapsed() < Duration::from_secs(6));
+    server.abort();
+    let _ = server.await;
+}
+
 async fn serve(body: String, status: &str) -> String {
     serve_split(body, status, usize::MAX).await
 }
