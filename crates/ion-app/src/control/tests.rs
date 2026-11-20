@@ -38,6 +38,29 @@ async fn compaction_focus_is_charged_before_admission_and_returns_exact_metadata
 }
 
 #[tokio::test]
+async fn batch_admission_charges_each_owned_input_once() {
+    let mut fixture = Fixture::new(Model::new(1), false);
+    let text = "budgeted text ".repeat(512);
+    let message = Message::user_input(text.clone(), []);
+    let inputs = vec![
+        (UserInput::Message(message.clone()), meta("literal")),
+        (prompt(&text), meta("prompt")),
+    ];
+    let originals: usize = inputs
+        .iter()
+        .map(|original| serde_json::to_vec(original).unwrap().len())
+        .sum();
+    let prepared = serde_json::to_vec(&(&message, InputId(u64::MAX)))
+        .unwrap()
+        .len();
+    fixture.control.budget = InputBudget::new(originals + 2 * prepared);
+
+    let ids = fixture.control.submit_batch(inputs).unwrap();
+    assert_eq!(ids.len(), 2);
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn failed_operation_returns_follow_ups_without_fabricating_stop() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
@@ -399,11 +422,7 @@ async fn batch_admission_preserves_all_originals_and_rolls_back_before_start() {
     let message = Message::user_input(original, []);
     let originals: usize = inputs
         .iter()
-        .map(|(input, metadata)| {
-            serde_json::to_vec(&(&message, &(input, metadata)))
-                .unwrap()
-                .len()
-        })
+        .map(|original| serde_json::to_vec(original).unwrap().len())
         .sum();
     let limit = originals + serde_json::to_vec(&(&message, u64::MAX)).unwrap().len();
     fixture.control.budget = ion_core::InputBudget::new(limit);

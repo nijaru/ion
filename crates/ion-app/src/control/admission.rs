@@ -39,7 +39,7 @@ pub fn preflight_messages(
         let UserInput::Message(message) = &original else {
             unreachable!("preflight constructs literal messages")
         };
-        reservations.push(budget.reserve(message, &(&original, ()), limits)?);
+        reservations.push(budget.reserve_retained(&(&original, ()))?);
         reservations.push(budget.reserve(message, &InputId(u64::MAX), limits)?);
         let UserInput::Message(message) = original else {
             unreachable!("preflight constructs literal messages")
@@ -884,13 +884,20 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 )
             }
         };
-        let reservation = self.budget.reserve(&message, &(input, metadata), limits)?;
+        let (reservation, content) = match attachment_text {
+            Some(text) => (
+                self.budget.reserve(&message, &(input, metadata), limits)?,
+                AdmissionContent::Attachments(text),
+            ),
+            // Staging charges and validates the model-ready message separately.
+            None => (
+                self.budget.reserve_retained(&(input, metadata))?,
+                AdmissionContent::Ready(message),
+            ),
+        };
         Ok(Admission {
             reservation,
-            content: match attachment_text {
-                Some(message) => AdmissionContent::Attachments(message),
-                None => AdmissionContent::Ready(message),
-            },
+            content,
         })
     }
 

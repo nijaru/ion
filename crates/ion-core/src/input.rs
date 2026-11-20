@@ -62,11 +62,18 @@ impl InputBudget {
         metadata: &impl Serialize,
         limits: AgentLimits,
     ) -> Result<InputReservation, AgentError> {
+        validate_input(message, limits)?;
+        self.reserve_retained(&(message, metadata))
+    }
+
+    /// Charge a retained value that is not itself ready for model dispatch,
+    /// such as an original input kept for recovery. Does not validate messages.
+    pub fn reserve_retained(&self, value: &impl Serialize) -> Result<InputReservation, AgentError> {
         let mut reservation = InputReservation {
             budget: self.clone(),
             bytes: 0,
         };
-        reservation.replace(message, metadata, limits)?;
+        reservation.set_bytes(encoded_len(value)?)?;
         Ok(reservation)
     }
 }
@@ -203,7 +210,10 @@ impl InputReservation {
         limits: AgentLimits,
     ) -> Result<(), AgentError> {
         validate_input(message, limits)?;
-        let bytes = encoded_len(&(message, metadata))?;
+        self.set_bytes(encoded_len(&(message, metadata))?)
+    }
+
+    fn set_bytes(&mut self, bytes: usize) -> Result<(), AgentError> {
         let state = &self.budget.state;
         let mut used = state
             .used

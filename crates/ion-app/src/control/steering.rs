@@ -117,41 +117,35 @@ impl<M: Serialize + Send + 'static> TurnSteering<M> {
         let input = UserInput::Message(message);
         // Validate/serialize caller data outside the custody lock. Recheck the
         // lease and capacity at the actual mutation, including racing producers.
-        let admitted = (|| {
-            let UserInput::Message(message) = &input else {
-                unreachable!()
-            };
-            let reservation = self
-                .budget
-                .reserve(message, &(&input, &metadata), self.limits)?;
-            Ok::<_, anyhow::Error>(reservation)
-        })();
+        let original = self.budget.reserve_retained(&(&input, &metadata));
         let mut custody = lock(&self.custody);
-        let admitted = admitted.and_then(|reservation| {
-            ensure!(
-                caller_stop.is_none_or(|stop| !stop.is_cancelled()),
-                "steering stopped; child continues"
-            );
-            ensure!(
-                custody
-                    .steering_target
-                    .as_ref()
-                    .is_some_and(|target| target.operation == self.operation
-                        && !target.stop.is_cancelled()
-                        && !target.fence.is_finished()),
-                "steering target is no longer accepting input"
-            );
-            ensure!(
-                custody.occupied < MAX_ADMISSIONS,
-                "session result/admission capacity is full"
-            );
-            let id = InputId(identity());
-            let UserInput::Message(message) = &input else {
-                unreachable!("literal steering")
-            };
-            let prepared = self.budget.prepare(message.clone(), id, self.limits)?;
-            Ok((id, reservation, prepared))
-        });
+        let admitted = original
+            .map_err(anyhow::Error::from)
+            .and_then(|reservation| {
+                ensure!(
+                    caller_stop.is_none_or(|stop| !stop.is_cancelled()),
+                    "steering stopped; child continues"
+                );
+                ensure!(
+                    custody
+                        .steering_target
+                        .as_ref()
+                        .is_some_and(|target| target.operation == self.operation
+                            && !target.stop.is_cancelled()
+                            && !target.fence.is_finished()),
+                    "steering target is no longer accepting input"
+                );
+                ensure!(
+                    custody.occupied < MAX_ADMISSIONS,
+                    "session result/admission capacity is full"
+                );
+                let id = InputId(identity());
+                let UserInput::Message(message) = &input else {
+                    unreachable!("literal steering")
+                };
+                let prepared = self.budget.prepare(message.clone(), id, self.limits)?;
+                Ok((id, reservation, prepared))
+            });
         let (id, reservation, prepared) = match admitted {
             Ok(admitted) => admitted,
             Err(reason) => {
