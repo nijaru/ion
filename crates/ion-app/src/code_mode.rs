@@ -3,8 +3,12 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashSet,
+    future::Future,
     panic::{AssertUnwindSafe, catch_unwind},
+    pin::{Pin, pin},
     rc::Rc,
+    sync::Arc,
+    task::{Context as TaskContext, Poll, Wake, Waker},
     thread,
     time::{Duration, Instant},
 };
@@ -351,24 +355,29 @@ fn start_guest<'js>(
     Ok(Persistent::save(&ctx, root))
 }
 
-fn poll_replies(ctx: &Ctx<'_>, bridge: &Bridge) -> rquickjs::Result<()> {
+fn poll_replies(
+    ctx: &Ctx<'_>,
+    bridge: &Bridge,
+    task: &mut TaskContext<'_>,
+) -> rquickjs::Result<bool> {
     let mut ready = Vec::new();
     {
         let mut pending = bridge.pending.borrow_mut();
         let mut index = 0;
         while index < pending.len() {
-            let reply = match pending[index].reply.try_recv() {
-                Ok(reply) => reply,
-                Err(oneshot::error::TryRecvError::Empty) => {
+            let reply = match Pin::new(&mut pending[index].reply).poll(task) {
+                Poll::Ready(Ok(reply)) => reply,
+                Poll::Pending => {
                     index += 1;
                     continue;
                 }
-                Err(oneshot::error::TryRecvError::Closed) => Err("host reply closed".into()),
+                Poll::Ready(Err(_)) => Err("host reply closed".into()),
             };
             ready.push((pending.swap_remove(index), reply));
         }
     }
     // Resolving can execute a guest `then` getter and reenter the bridge.
+    let progressed = !ready.is_empty();
     for (item, reply) in ready {
         match reply {
             Ok(text) if text.len() <= bridge.limits.max_json_bytes => {
@@ -390,10 +399,22 @@ fn poll_replies(ctx: &Ctx<'_>, bridge: &Bridge) -> rquickjs::Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(progressed)
 }
 
-/// One worker-local clock shared with the VM interrupt. Only idle sleeps with
+struct WakeWorker(thread::Thread);
+
+impl Wake for WakeWorker {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
+
+/// One worker-local clock shared with the VM interrupt. Only idle waits with
 /// pending bridge replies earn time back; evaluation, reply resolution, getters,
 /// serialization and jobs remain charged, even while a host call is pending.
 struct GuestBudget {
@@ -425,14 +446,17 @@ impl GuestBudget {
             return Err("JavaScript execution budget exceeded".into());
         }
         let began = Instant::now();
-        thread::sleep(Duration::from_millis(1));
         if host_pending {
+            // A reply or cancellation between poll and park leaves a token.
+            thread::park();
             self.deadline.set(
                 self.deadline
                     .get()
                     .checked_add(began.elapsed())
                     .ok_or("QuickJS execution budget overflow")?,
             );
+        } else {
+            thread::park_timeout(self.deadline.get().saturating_duration_since(began));
         }
         Ok(())
     }
@@ -495,8 +519,11 @@ fn run_guest(
         let root = context
             .with(|ctx| start_guest(ctx, &code, &tools_json, &bridge, output))
             .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
+        let waker = Waker::from(Arc::new(WakeWorker(thread::current())));
+        let mut task = TaskContext::from_waker(&waker);
+        let mut cancelled = pin!(stop.cancelled());
         loop {
-            if stop.is_cancelled() {
+            if cancelled.as_mut().poll(&mut task).is_ready() {
                 return Err("JavaScript cancelled".into());
             }
             if budget.exhausted() {
@@ -516,18 +543,21 @@ fn run_guest(
                             json_text(&ctx, value, limits.max_json_bytes)
                         })?;
                         output.finish(&ctx, json.len())?;
-                        return Ok(Some(json));
+                        return Ok((Some(json), false));
                     }
-                    poll_replies(&ctx, &bridge)?;
-                    Ok(None)
+                    Ok((None, poll_replies(&ctx, &bridge, &mut task)?))
                 })
                 .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
+            let (result, progressed) = result;
             if let Some(json) = result {
                 return Ok(json);
             }
             // Outside Context::with: this API acquires the same runtime lock.
             match runtime.execute_pending_job() {
                 Ok(true) => (),
+                // A resolver can enqueue a new host call whose receiver has
+                // not yet been polled. Register it before parking.
+                Ok(false) if progressed => (),
                 Ok(false) => {
                     let host_pending = !bridge.pending.borrow().is_empty();
                     budget.wait_for_work(host_pending)?;
@@ -923,6 +953,39 @@ mod tests {
             assert!(stop.is_cancelled());
             assert!(task.requests.recv().await.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn resolver_can_register_new_host_work_before_parking() {
+        let (mut task, stop) = start_named(
+            r#"
+            let finish;
+            const gate = new Promise(resolve => { finish = resolve; });
+            Object.defineProperty(Object.prototype, 'then', {
+                configurable: true,
+                get() {
+                    delete Object.prototype.then;
+                    tools.second({}).then(() => finish(7));
+                },
+            });
+            void tools.first({});
+            return await gate;
+            "#,
+            &["first", "second"],
+            limits(),
+        );
+        let first = request(&mut task).await;
+        assert!(matches!(first.kind, CodeRequestKind::Call { name, .. } if name == "first"));
+        first.reply.send(Ok("{}".into())).unwrap();
+        let second = request(&mut task).await;
+        assert!(matches!(second.kind, CodeRequestKind::Call { name, .. } if name == "second"));
+        second.reply.send(Ok("null".into())).unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(3), &mut task.result).await;
+        if result.is_err() {
+            stop.cancel();
+            let _ = finish(&mut task).await;
+        }
+        assert_eq!(result.unwrap().unwrap().result, Ok("7".into()));
     }
 
     #[tokio::test]
