@@ -160,7 +160,10 @@ fn image(image: &ion_ai::ImageContent) -> Value {
     json!({"type":"input_image", "image_url":format!("data:{};base64,{}",image.mime_type().as_str(),image.data()), "detail":"auto"})
 }
 
-pub(super) fn responses_body(request: &ModelRequest) -> Result<Value, ProviderError> {
+pub(super) fn responses_body(
+    request: &ModelRequest,
+    endpoint: &reqwest::Url,
+) -> Result<Value, ProviderError> {
     validate_request(request)?;
     let mut body = control_fields(
         &request.route.effective,
@@ -169,6 +172,21 @@ pub(super) fn responses_body(request: &ModelRequest) -> Result<Value, ProviderEr
         false,
     )?;
     let mut input = Vec::new();
+    if let Some(instructions) = &request.instructions {
+        if endpoint.scheme() == "https"
+            && endpoint.host_str() == Some("api.openai.com")
+            && matches!(
+                request.route.effective.model.as_str(),
+                "gpt-6.2-sol" | "gpt-6.2-astra"
+            )
+        {
+            // GPT-6.2 places top-level instructions after input in the cache
+            // prefix. A leading developer item stays ahead of the growing history.
+            input.push(json!({"type":"message","role":"developer","content":[{"type":"input_text","text":instructions}]}));
+        } else {
+            body["instructions"] = json!(instructions);
+        }
+    }
     let mut transcript = Transcript::default();
     let mut ids = ToolIds::default();
     for message in &request.messages {
@@ -235,9 +253,6 @@ pub(super) fn responses_body(request: &ModelRequest) -> Result<Value, ProviderEr
     transcript.finish()?;
     body["model"] = json!(request.route.effective.model);
     body["input"] = Value::Array(input);
-    if let Some(instructions) = &request.instructions {
-        body["instructions"] = json!(instructions);
-    }
     body["stream"] = json!(true);
     body["store"] = json!(false);
     body["include"] = json!(["reasoning.encrypted_content"]);

@@ -1,5 +1,41 @@
-use super::super::responses_request::{RESPONSES_REPLAY, project_output};
+use super::super::responses_request::{RESPONSES_REPLAY, project_output, responses_body as encode};
 use super::*;
+
+fn responses_body(request: &ModelRequest) -> Result<Value, ProviderError> {
+    encode(
+        request,
+        &reqwest::Url::parse("http://localhost/v1/responses").unwrap(),
+    )
+}
+
+#[test]
+fn native_gpt_62_instructions_stay_at_the_front_of_growing_input() {
+    let native = reqwest::Url::parse("https://api.openai.com/v1/responses").unwrap();
+    let proxy = reqwest::Url::parse("https://api.openai.com.example/v1/responses").unwrap();
+    let leading = json!({"type":"message","role":"developer","content":[{"type":"input_text","text":"instructions"}]});
+    for model in ["gpt-6.2-sol", "gpt-6.2-astra"] {
+        let mut r = request();
+        r.route.effective.model = model.into();
+        let first = encode(&r, &native).unwrap();
+        assert!(first.get("instructions").is_none());
+        assert_eq!(first["input"][0], leading);
+        assert_eq!(first["input"][1]["role"], "user");
+        r.messages
+            .push(Message::user_input("next request".into(), []));
+        let next = encode(&r, &native).unwrap();
+        assert!(
+            next["input"]
+                .as_array()
+                .unwrap()
+                .starts_with(first["input"].as_array().unwrap())
+        );
+        assert_eq!(encode(&r, &proxy).unwrap()["instructions"], "instructions");
+    }
+    let r = request();
+    let other_model = encode(&r, &native).unwrap();
+    assert_eq!(other_model["instructions"], "instructions");
+    assert_eq!(other_model["input"][0]["role"], "user");
+}
 
 fn text_item(text: &str) -> Value {
     json!({"id":"msg_1","type":"message","role":"assistant","status":"completed","phase":"final_answer",

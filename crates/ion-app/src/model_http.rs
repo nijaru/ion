@@ -296,7 +296,7 @@ impl ModelService for HttpModelService {
         Box::pin(async move {
             let native_anthropic = self.native_anthropic();
             let mut body = match self.wire {
-                HttpWire::OpenAiResponses => responses_body(&request)?,
+                HttpWire::OpenAiResponses => responses_body(&request, &self.endpoint)?,
                 HttpWire::AnthropicMessages => anthropic_body_for_route(
                     &request,
                     native_anthropic,
