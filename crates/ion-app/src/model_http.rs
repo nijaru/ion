@@ -353,7 +353,16 @@ impl ModelService for HttpModelService {
                     )
                 })?
                 .map_err(|_| transport("provider HTTP request failed"))?;
-            if !response.status().is_success() {
+            let mime = response
+                .headers()
+                .get("content-type")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|h| h.split(';').next())
+                .map(str::trim);
+            let is_sse = mime.is_some_and(|mime| mime.eq_ignore_ascii_case("text/event-stream"));
+            let is_json = mime.is_some_and(|mime| mime.eq_ignore_ascii_case("application/json"));
+            let success = response.status().is_success();
+            if !success || is_json {
                 let status = response.status().as_u16();
                 let retry_after_ms = parse_retry_after(response.headers());
                 let mut body = Vec::new();
@@ -373,6 +382,20 @@ impl ModelService for HttpModelService {
                     append_error_prefix(&mut body, &chunk);
                 }
                 let value = serde_json::from_slice::<Value>(&body).ok();
+                if success {
+                    // A gateway can return a JSON error envelope despite 2xx.
+                    // Preserve bounded diagnostics, not arbitrary response data
+                    // or retry/recovery semantics inferred from a success status.
+                    let detail = value
+                        .as_ref()
+                        .filter(|value| value.get("error").is_some_and(Value::is_object))
+                        .and_then(provider_error_detail_value);
+                    let message = detail.map_or_else(
+                        || "provider response is not text/event-stream".into(),
+                        |detail| format!("provider returned a JSON error instead of a stream (HTTP {status}): {detail}"),
+                    );
+                    return Err(invalid(&message));
+                }
                 let kind = classify_status_error(status, value.as_ref());
                 let detail = value.as_ref().and_then(provider_error_detail_value);
                 let mut message = detail.map_or_else(
@@ -388,12 +411,6 @@ impl ModelService for HttpModelService {
                     retry_after_ms,
                 });
             }
-            let is_sse = response
-                .headers()
-                .get("content-type")
-                .and_then(|h| h.to_str().ok())
-                .and_then(|h| h.split(';').next())
-                .is_some_and(|mime| mime.trim().eq_ignore_ascii_case("text/event-stream"));
             if !is_sse {
                 return Err(invalid("provider response is not text/event-stream"));
             }

@@ -40,6 +40,10 @@ async fn serve(body: String, status: &str) -> String {
 }
 
 async fn serve_split(body: String, status: &str, chunk_size: usize) -> String {
+    serve_typed(body, status, "text/event-stream", chunk_size).await
+}
+
+async fn serve_typed(body: String, status: &str, mime: &'static str, chunk_size: usize) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}/v1/messages", listener.local_addr().unwrap());
     let status = status.to_owned();
@@ -47,7 +51,7 @@ async fn serve_split(body: String, status: &str, chunk_size: usize) -> String {
         let (mut socket, _) = listener.accept().await.unwrap();
         read_request_body(&mut socket).await;
         let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "HTTP/1.1 {status}\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         for chunk in response.as_bytes().chunks(chunk_size) {
@@ -2094,6 +2098,37 @@ fn numeric_stream_status_keeps_context_and_quota_semantics() {
     ] {
         let failure = ChatState::default().accept(&envelope).unwrap_err();
         assert_eq!(failure.kind, expected);
+    }
+}
+
+#[tokio::test]
+async fn ok_json_reports_only_structured_error_diagnostics_without_opening_a_stream() {
+    for (body, expected) in [
+        (
+            json!({"error": {"code":"context_length_exceeded", "message":"upstream rejected route"}, "request":"private input"}),
+            "provider returned a JSON error instead of a stream (HTTP 200): upstream rejected route",
+        ),
+        (
+            json!({"message":"private input", "choices":[]}),
+            "provider response is not text/event-stream",
+        ),
+    ] {
+        let endpoint = serve_typed(
+            body.to_string(),
+            "200 OK",
+            "application/json; charset=utf-8",
+            12,
+        )
+        .await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+        let failure = match model.stream(request()).await {
+            Ok(_) => panic!("non-SSE response opened a model stream"),
+            Err(error) => error,
+        };
+        assert_eq!(failure.kind, ProviderErrorKind::InvalidRequest);
+        assert_eq!(failure.message, expected);
+        assert!(failure.retry_after_ms.is_none());
     }
 }
 
