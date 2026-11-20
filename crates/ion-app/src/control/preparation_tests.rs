@@ -583,6 +583,76 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
 }
 
 #[test]
+fn ready_steering_joins_the_first_request_after_root_preparation() {
+    runtime().block_on(async {
+        let (release, blocker) = block_decoder().await;
+        let model = Model::new(1);
+        let mut fixture = Fixture::new(model.clone(), true);
+        fixture
+            .control
+            .submit(Delivery::Start, image_prompt(), meta("root"))
+            .unwrap();
+        let target = fixture.control.current_operation().unwrap();
+        assert!(fixture.control.starting.is_some());
+        for text in ["first steer", "second steer"] {
+            fixture
+                .control
+                .submit(Delivery::Steer(target), prompt(text), meta(text))
+                .unwrap();
+        }
+        release.send(()).unwrap();
+        blocker.await.unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while fixture.control.active.is_none() {
+                fixture.control.drive(ActivityRetention::Retain).await;
+            }
+            // Do not drive the control again. The spawned Turn can request a
+            // response independently of its host polling for updates.
+            model.wait_calls(1).await;
+        })
+        .await
+        .unwrap();
+        {
+            let requests = model.requests.lock().unwrap();
+            let steering: Vec<_> = requests[0]
+                .messages
+                .iter()
+                .flat_map(|message| &message.content)
+                .filter_map(|part| match part {
+                    Content::Text(text) if text.ends_with(" steer") => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(steering, ["first steer", "second steer"]);
+        }
+        let view = fixture
+            .control
+            .session()
+            .reader()
+            .unwrap()
+            .view()
+            .await
+            .unwrap();
+        let durable_steering: Vec<_> = view
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                ion_core::SessionEntry::Steering { input, .. } => Some(input),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            durable_steering,
+            ["first steer", "second steer"]
+                .map(|text| Message::user_input(text.into(), []))
+                .iter()
+                .collect::<Vec<_>>()
+        );
+        fixture.control.shutdown().await;
+    });
+}
+
+#[test]
 fn clear_preserves_initial_preparation_and_abandoned_shutdown_joins_it() {
     runtime().block_on(async {
         let (release, blocker) = block_decoder().await;

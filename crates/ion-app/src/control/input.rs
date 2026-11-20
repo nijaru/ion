@@ -265,35 +265,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 ),
             ));
         }
-        // Transfer prepared steering in admission order. A later ready steer
-        // cannot overtake an earlier still-preparing steer.
         if let Some(active) = &self.active {
-            let ids: Vec<_> = custody
-                .inputs
-                .iter()
-                .filter_map(|(&id, input)| {
-                    (input.delivery == Delivery::Steer(active.id)
-                        && input.pending().is_some_and(|pending| {
-                            !matches!(pending.content, InputContent::Transferred { .. })
-                        }))
-                    .then_some(id)
-                })
-                .collect();
-            for id in ids {
-                let pending = custody
-                    .inputs
-                    .get_mut(&id)
-                    .unwrap()
-                    .pending_mut()
-                    .expect("selected pending steering");
-                if pending.withdrawn.is_some() {
-                    continue;
-                }
-                let Some(prepared) = pending.take_ready(active.id) else {
-                    break;
-                };
-                active.inbox.push_prepared(prepared);
-            }
+            Self::transfer_steering(&mut custody, active.id, &active.inbox);
         }
         if self.active.is_none()
             && self.admitting.is_none()
@@ -324,6 +297,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     .expect("dispatched root retains its original until acceptance");
                 let instructions = pending.instructions.clone();
                 let inbox = self.turn_inbox();
+                // The spawned Turn can build its first request before the
+                // host polls again. Hand it already queued steering now.
+                Self::transfer_steering(&mut custody, operation, &inbox);
                 let observations = self.observations.clone();
                 custody.push_update(ControlUpdate::Dispatched {
                     id: root,
@@ -361,6 +337,32 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         drop(custody);
         self.advance_completions();
+    }
+
+    fn transfer_steering(
+        custody: &mut Custody<M>,
+        operation: OperationId,
+        inbox: &SteeringInbox<InputId>,
+    ) {
+        // Admission order: a later ready steer cannot overtake an earlier
+        // still-preparing steer.
+        for input in custody.inputs.values_mut() {
+            if input.delivery != Delivery::Steer(operation) {
+                continue;
+            }
+            let Some(pending) = input.pending_mut() else {
+                continue;
+            };
+            if pending.withdrawn.is_some()
+                || matches!(pending.content, InputContent::Transferred { .. })
+            {
+                continue;
+            }
+            let Some(prepared) = pending.take_ready(operation) else {
+                break;
+            };
+            inbox.push_prepared(prepared);
+        }
     }
 
     pub(super) fn finish_preparation(&mut self, result: Result<Message>) {
