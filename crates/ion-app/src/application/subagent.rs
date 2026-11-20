@@ -117,13 +117,13 @@ impl ToolSource for Subagent {
             json!({"type":"object","additionalProperties":false,"required":["action","task"],"properties":{
                 "action":{"const":"start"}, "task":{"type":"string","minLength":1,"maxLength":65536},
                 "mode":{"enum":["foreground","background"],"default":"foreground"},
-                "join_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_JOIN_MS,"description":"Foreground only. Join this same run for at most this budget after live admission (including child setup). If still joining, commit transfer to the application owner and return its running handle. No restart, stop or execution deadline change. Capacity is reserved before work; parent stop before transfer still stops and fully joins."},
-                "resume":{"type":"string","minLength":1,"maxLength":4096,"description":"Existing settled Session file to continue under a new run ID. Relative to the parent workspace; mutually exclusive with context. Requires its original cwd and exclusive writer. Current call configuration supplies authority, model and reasoning; saved metadata is not a grant."},
+                "join_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_JOIN_MS,"description":"Foreground only. Join budget after admission, including child setup. Before ownership transfers, parent stop stops and joins the child."},
+                "resume":{"type":"string","minLength":1,"maxLength":4096,"description":"Settled Session file, relative to the parent workspace or absolute. Mutually exclusive with context. Requires exclusive writer access; uses current authority and configuration."},
                 "cwd":{"type":"string","minLength":1,"maxLength":4096,"description":"Child workspace relative to the parent or absolute; omitted inherits the parent. Resume must use its original workspace."},
-                "startup_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_STARTUP_TIMEOUT_MS,"default":DEFAULT_STARTUP_TIMEOUT_MS,"description":"One budget for model/workspace/resume/resource/runtime preflight before child admission. Expiry cancels preparation and joins all started work, which can outlive the budget. No child is admitted on expiry; startup_timed_out is distinct from execution timeout."},
-                "execution_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_EXECUTION_TIMEOUT_MS,"default":DEFAULT_EXECUTION_TIMEOUT_MS,"description":"Child runtime budget from task submission, independent of parent wait budgets. Expiry requests stop and joins cleanup; the retained outcome records execution_timed_out. Not rollback or a hard cleanup deadline."},
-                "model":{"type":"string","description":"Exact provider/model identifier from the known catalog or configured routes; omitted inherits the captured parent route. No endpoints or credentials."},
-                "reasoning":{"type":"string","description":"Generation effort for the child: default, off, low, medium, high or budget:TOKENS. Omitted inherits the parent's effort, even with a different model. Unsupported controls fail before child admission."},
+                "startup_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_STARTUP_TIMEOUT_MS,"default":DEFAULT_STARTUP_TIMEOUT_MS,"description":"Preflight budget. Expiry reports startup_timed_out after cleanup, without admitting a child."},
+                "execution_timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_EXECUTION_TIMEOUT_MS,"default":DEFAULT_EXECUTION_TIMEOUT_MS,"description":"Runtime budget from task submission. Expiry stops the child and records execution_timed_out after cleanup, which can outlive the budget."},
+                "model":{"type":"string","description":"Exact provider/model from the catalog or configured routes. Omit to inherit the parent route."},
+                "reasoning":{"type":"string","description":"default, off, low, medium, high or budget:TOKENS. Omit to inherit parent effort, even when overriding the model."},
                 "context":{"oneOf":[
                     {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"fresh"}}},
                     {"type":"object","additionalProperties":false,"required":["type"],"properties":{"type":{"const":"fork"},"point":point}}
@@ -134,11 +134,11 @@ impl ToolSource for Subagent {
         choices.push(json!({"type":"object","additionalProperties":false,"required":["action","ids"],"properties":{
             "action":{"const":"wait"},
             "ids":{"type":"array","items":{"type":"string","format":"uuid"},"minItems":1,"maxItems":64,"uniqueItems":true},
-            "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_WAIT_MS,"description":"One shared wait budget, not a child execution deadline. Returns all selected reports/statuses when any child joins, or expires with children still running. No cancellation or acknowledgement."}
+            "timeout_ms":{"type":"integer","minimum":1,"maximum":MAX_WAIT_MS,"default":DEFAULT_WAIT_MS,"description":"Shared wait budget for all selected IDs. Expiry neither stops children nor consumes results."}
         }}));
         choices.push(json!({"type":"object","additionalProperties":false,"required":["action","id","message"],"properties":{
             "action":{"const":"steer"}, "id":{"type":"string","format":"uuid"},
-            "message":{"type":"string","minLength":1,"maxLength":65536,"description":"Literal guidance for the owned running child, queued at the existing safe model-step boundary. No new Turn, route, instructions or authority. Queued is not committed; inspect steering status for commitment or returned input."}
+            "message":{"type":"string","minLength":1,"maxLength":65536,"description":"Literal guidance for the child's next safe model step. Queued is not committed; check for delivery or returned input."}
         }}));
         for action in ["status", "cancel", "acknowledge"] {
             choices.push(json!({"type":"object","additionalProperties":false,"required":["action","id"],"properties":{"action":{"const":action},"id":{"type":"string","format":"uuid"}}}));
