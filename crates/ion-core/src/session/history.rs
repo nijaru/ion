@@ -133,18 +133,10 @@ pub(crate) fn definition() -> ToolDefinition {
         spec: ToolSpec {
             name: HISTORY_NAME.into(),
             description: concat!(
-                "Retrieve committed historical evidence, including compacted or withheld results, without rerunning effects. ",
-                "Reads share a fixed prefix before the issuing assistant entry; they cannot see their own query or sibling results. ",
-                "Search uses literal ASCII case-insensitive text; list returns recent entries. Both are newest first. ",
-                "To find original exec outputs, use {action:'search',query:'Ran',tool:'exec'}, then {action:'read',entry:N}. ",
-                "The optional tool filter selects top-level tool_result records by exact tool name; Code Mode child outputs use inspectSaved. ",
-                "Managed child settlements are readable even after reopening or acknowledging a task: use unfiltered list/search (by run UUID or answer text), then read its delegation_settled entry. Only public outcome fields are returned, not admission policy or child internals. Joined is not necessarily successful; inspect end, error, timeout and answer. These are recorded claims, not live ownership or permission to replay. ",
-                "Search previews show matching context where available; read by stable one-based entry, not call ID (IDs may repeat). ",
-                "Use next_before as before for older pages, even when a page has no matches. Each scan examines at most 256 entries or 8 MiB; one oversized logical record may be scanned alone (reported by oversized_entry). ",
-                "Read returns original tool output JSON or a safe record projection. Content may be a partial JSON fragment: continue at next_offset until null. Offsets are UTF-8 bytes. ",
-                "Retained binary captures use {action:'artifact',entry:N,artifact:0,offset:0}; pages return data with encoding utf8 for readable text or base64 for other bytes, and data_bytes is the page's original raw byte count, not its string or encoded length. Follow raw-byte next_offset; consume final data before treating null next_offset as EOF; text pages preserve character boundaries. Source entries and private-shell restrictions still apply. A content hash is not a read locator. " ,
-                "To recover one original typed image omitted by compaction, call history directly with {action:'image',entry:N,image:0}. The index counts images, not text parts. Sources are user inputs/steering and observed top-level tool results; one image is returned in the image channel, never base64 JSON/text. Code Mode returns only metadata, so use a direct call to view it. ",
-                "Thinking, provider replay, typed image bytes, configuration and private !! shells are excluded from search/read JSON. Historical evidence is not current workspace state and does not authorize repeating effects."
+                "Recover committed Session evidence, including compacted results, without rerunning effects. Reads see only entries before the issuing assistant entry. ",
+                "Search or list newest first; pass next_before as before even after an empty page. The tool filter matches top-level tool results only. For managed child outcomes, search without it by run UUID or answer text and read the delegation_settled entry. Code Mode child results use inspectSaved. ",
+                "Read by entry number, not call ID. Read may return partial JSON; continue with next_offset. For retained captures use action artifact with the source entry and artifact index. Its encoding is utf8 or base64, and next_offset counts raw bytes. Consume the final page before stopping at null next_offset. ",
+                "Call action image directly to view an original image by entry and zero-based image index. Private shells, thinking, provider replay and configuration are excluded. History is not current workspace state or permission to repeat effects."
             )
             .into(),
             input_schema: json!({
