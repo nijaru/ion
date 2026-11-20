@@ -6,7 +6,7 @@
 //! Fullscreen rendering is a separate transient surface.
 
 use std::io::{self, Write};
-
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ratatui::buffer::{Buffer, CellWidth};
@@ -102,7 +102,9 @@ pub struct Screen {
     /// is native terminal scrollback.
     origin: u16,
     screen_height: u16,
-    current: Option<Surface>,
+    // A painted surface is immutable. Staging can share the committed cells
+    // for comparison without copying them or changing the rollback boundary.
+    current: Option<Arc<Surface>>,
     /// Invalidating cell comparisons must not discard primary ownership evidence.
     repaint: bool,
     resize_pending: Option<PendingResize>,
@@ -121,7 +123,7 @@ pub struct Screen {
     /// Previous fullscreen (alt-screen) frame, if the frontend is in
     /// fullscreen mode. Inline frames and fullscreen frames never
     /// compare: entering fullscreen forces a full repaint.
-    fullscreen: Option<Surface>,
+    fullscreen: Option<Arc<Surface>>,
 }
 
 impl Screen {
@@ -578,7 +580,7 @@ impl Screen {
         self.cursor_shown = Some(cursor.is_some());
         self.cursor_at = Some(physical_cursor);
         self.physical_cursor = physical_cursor;
-        self.current = Some(next);
+        self.current = Some(Arc::new(next));
         Ok(())
     }
 
@@ -594,7 +596,7 @@ impl Screen {
         rows: &[Line<'_>],
         cursor: Option<(usize, u16)>,
     ) -> io::Result<()> {
-        let previous = self.fullscreen.take();
+        let previous = self.fullscreen.as_deref();
         let (w, height) = self.fullscreen_size;
         let h = height as usize;
         let mut next = Surface::new(w, height);
@@ -603,17 +605,9 @@ impl Screen {
         }
         let mut painted = false;
         for r in 0..h as u16 {
-            let comparable = previous
-                .as_ref()
-                .is_some_and(|prev| r < prev.buffer.area.height);
-            if !comparable
-                || row_differs(
-                    &next.buffer,
-                    r,
-                    &previous.as_ref().expect("checked").buffer,
-                    r,
-                )
-            {
+            if previous.is_none_or(|prev| {
+                r >= prev.buffer.area.height || row_differs(&next.buffer, r, &prev.buffer, r)
+            }) {
                 emit_buffer_row(out, &next.buffer, r, 0, None)?;
                 painted = true;
             }
@@ -632,7 +626,7 @@ impl Screen {
             write!(out, "\x1b[0m")?;
         }
         out.flush()?;
-        self.fullscreen = Some(next);
+        self.fullscreen = Some(Arc::new(next));
         Ok(())
     }
 
