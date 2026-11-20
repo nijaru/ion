@@ -400,8 +400,18 @@ fn grep_distinguishes_regex_literal_case_utf8_and_glob_filters() {
 
     let value = run(grep, &root, json!({"pattern": "a.b"}));
     assert_eq!(grep_matches(&value).len(), 3, "{value}");
-    assert_eq!(value["exhaustive"], false, "binary/NUL files are reported");
+    assert_eq!(value["exhaustive"], true, "{value}");
     assert_eq!(value["skipped"]["binary"], 2, "{value}");
+    assert_eq!(value["omissions"], json!([]), "{value}");
+    let value = run(grep, &root, json!({"pattern":"needle", "path":"nul.txt"}));
+    assert_eq!(value["exhaustive"], false, "{value}");
+    assert_eq!(value["skipped"]["binary"], 1, "{value}");
+    assert!(
+        value["omissions"][0]
+            .as_str()
+            .unwrap()
+            .contains("requested file")
+    );
     let value = run(grep, &root, json!({"pattern": "a.b", "literal": true}));
     assert_eq!(grep_matches(&value).len(), 2, "{value}");
     assert!(

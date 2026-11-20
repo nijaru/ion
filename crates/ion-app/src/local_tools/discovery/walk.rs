@@ -115,7 +115,6 @@ pub(super) fn check_stop(stop: &CancellationToken) -> Result<(), String> {
 
 #[derive(Default)]
 pub(super) struct Skips {
-    pub binary: usize,
     pub oversized: usize,
     pub byte_budget: usize,
     pub non_utf8: usize,
@@ -125,8 +124,7 @@ pub(super) struct Skips {
 
 impl Skips {
     fn any(&self) -> bool {
-        self.binary > 0
-            || self.oversized > 0
+        self.oversized > 0
             || self.byte_budget > 0
             || self.non_utf8 > 0
             || self.path_too_long > 0
@@ -199,12 +197,6 @@ impl Scan {
             omissions.push(format!(
                 "maximum traversal depth {} reached; refine the root",
                 self.max_depth
-            ));
-        }
-        if self.skips.binary > 0 {
-            omissions.push(format!(
-                "{} binary or invalid UTF-8 file(s) excluded",
-                self.skips.binary
             ));
         }
         if self.skips.oversized > 0 {

@@ -196,6 +196,7 @@ struct Search<'a> {
     scan: Scan,
     found: usize,
     inspected: usize,
+    binary: usize,
     result_limited: bool,
     output_limited: bool,
     total_byte_limited: bool,
@@ -218,6 +219,7 @@ impl<'a> Search<'a> {
             scan: Scan::new(limits),
             found: 0,
             inspected: 0,
+            binary: 0,
             result_limited: false,
             output_limited: false,
             total_byte_limited: false,
@@ -270,7 +272,7 @@ impl<'a> Search<'a> {
         let text = match std::str::from_utf8(&bytes) {
             Ok(text) if !bytes.contains(&0) => text,
             _ => {
-                self.scan.skips.binary += 1;
+                self.binary += 1;
                 return Ok(());
             }
         };
@@ -319,6 +321,7 @@ impl<'a> Search<'a> {
             output,
             scan,
             inspected,
+            binary,
             result_limited,
             output_limited,
             total_byte_limited,
@@ -331,8 +334,16 @@ impl<'a> Search<'a> {
         let returned = matches.len();
         // A stopped total-byte scan is incomplete even when the last file was
         // searched normally and no per-file skip was recorded.
-        let exhaustive = scan.exhaustive(result_limited, output_limited) && !total_byte_limited;
+        // Non-text descendants are outside a recursive text search's scope.
+        // If the caller named the non-text file itself, surface that refusal.
+        let excluded_target = root_is_file && binary > 0;
+        let exhaustive = scan.exhaustive(result_limited, output_limited)
+            && !total_byte_limited
+            && !excluded_target;
         let mut omissions = scan.omissions();
+        if excluded_target {
+            omissions.push("requested file is binary or not UTF-8; it was not searched".into());
+        }
         if result_limited {
             omissions.push(format!(
                 "match limit {limit} reached; refine the root, glob or pattern"
@@ -351,7 +362,7 @@ impl<'a> Search<'a> {
             omissions.push("no matching line was observed, but this search is incomplete".into());
         }
         let skipped = json!({
-            "binary": scan.skips.binary,
+            "binary": binary,
             "oversized": scan.skips.oversized,
             "byte_budget": scan.skips.byte_budget,
             "non_utf8_paths": scan.skips.non_utf8,
