@@ -525,13 +525,13 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
     if let Some(value) = headers
         .get("retry-after-ms")
         .and_then(|value| value.to_str().ok())
-        && let Ok(ms) = value.trim().parse::<u64>()
+        && let Some(ms) = retry_delay_digits(value.trim())
     {
         return Some(ms);
     }
     let value = headers.get("retry-after")?.to_str().ok()?.trim();
-    if let Ok(seconds) = value.parse::<u64>() {
-        return seconds.checked_mul(1000);
+    if let Some(seconds) = retry_delay_digits(value) {
+        return Some(seconds.saturating_mul(1000));
     }
     let instant = httpdate::parse_http_date(value).ok()?;
     Some(
@@ -542,6 +542,15 @@ fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
             .try_into()
             .unwrap_or(u64::MAX),
     )
+}
+
+// Preserve a syntactically valid delay even when it exceeds our integer range.
+// The retry owner declines long waits; losing the header would retry earlier.
+fn retry_delay_digits(value: &str) -> Option<u64> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    Some(value.parse().unwrap_or(u64::MAX))
 }
 
 fn error(kind: ProviderErrorKind, message: &str) -> ProviderError {

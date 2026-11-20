@@ -960,7 +960,16 @@ fn server_retry_headers_are_parsed_without_unbounded_arithmetic() {
         "retry-after",
         HeaderValue::from_static("18446744073709551615"),
     );
-    assert_eq!(parse_retry_after(&headers), None);
+    assert_eq!(parse_retry_after(&headers), Some(u64::MAX));
+    let oversized = HeaderValue::from_static("18446744073709551616");
+    headers.insert("retry-after", oversized.clone());
+    assert_eq!(parse_retry_after(&headers), Some(u64::MAX));
+    headers.insert("retry-after", HeaderValue::from_static("2"));
+    headers.insert("retry-after-ms", oversized);
+    assert_eq!(parse_retry_after(&headers), Some(u64::MAX));
+    headers.insert("retry-after-ms", HeaderValue::from_static("+75"));
+    assert_eq!(parse_retry_after(&headers), Some(2000));
+    headers.remove("retry-after-ms");
     let date = httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(5));
     headers.insert("retry-after", HeaderValue::from_str(&date).unwrap());
     assert!(parse_retry_after(&headers).is_some_and(|delay| delay <= 5000));
