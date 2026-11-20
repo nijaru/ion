@@ -35,6 +35,40 @@ async fn read_request_body(socket: &mut tokio::net::TcpStream) -> Vec<u8> {
     body
 }
 
+#[tokio::test]
+async fn http_error_status_survives_truncated_diagnostic_body() {
+    for (status, kind) in [
+        ("401 Unauthorized", ProviderErrorKind::Authentication),
+        ("429 Too Many Requests", ProviderErrorKind::RateLimited),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!(
+            "http://{}/v1/chat/completions",
+            listener.local_addr().unwrap()
+        );
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            read_request_body(&mut socket).await;
+            let reply = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: 100\r\nRetry-After: 2\r\nConnection: close\r\n\r\n{{\"error\":"
+            );
+            socket.write_all(reply.as_bytes()).await.unwrap();
+        });
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+        let failure = match model.stream(request()).await {
+            Ok(_) => panic!("HTTP error admitted a stream"),
+            Err(failure) => failure,
+        };
+        assert_eq!(failure.kind, kind, "{failure:?}");
+        assert_eq!(failure.retry_after_ms, Some(2000));
+        assert!(
+            failure.message.contains("body could not be read"),
+            "{failure:?}"
+        );
+    }
+}
+
 async fn serve(body: String, status: &str) -> String {
     serve_split(body, status, usize::MAX).await
 }

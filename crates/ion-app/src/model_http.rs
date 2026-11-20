@@ -366,23 +366,37 @@ impl ModelService for HttpModelService {
                 let status = response.status().as_u16();
                 let retry_after_ms = parse_retry_after(response.headers());
                 let mut body = Vec::new();
+                let mut body_failure = None;
                 while body.len() < MAX_ERROR_BODY {
-                    let Some(chunk) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, response.chunk())
+                    let chunk = match tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, response.chunk())
                         .await
-                        .map_err(|_| {
-                            error(
+                    {
+                        Ok(Ok(Some(chunk))) => chunk,
+                        Ok(Ok(None)) => break,
+                        Ok(Err(_)) => {
+                            body_failure =
+                                Some(transport("provider error response body could not be read"));
+                            break;
+                        }
+                        Err(_) => {
+                            body_failure = Some(error(
                                 ProviderErrorKind::Timeout,
-                                "provider error response timed out",
-                            )
-                        })?
-                        .map_err(|_| transport("provider HTTP error response failed"))?
-                    else {
-                        break;
+                                "provider error response body timed out",
+                            ));
+                            break;
+                        }
                     };
                     append_error_prefix(&mut body, &chunk);
                 }
-                let value = serde_json::from_slice::<Value>(&body).ok();
+                let value = if body_failure.is_none() {
+                    serde_json::from_slice::<Value>(&body).ok()
+                } else {
+                    None
+                };
                 if success {
+                    if let Some(failure) = body_failure {
+                        return Err(failure);
+                    }
                     // A gateway can return a JSON error envelope despite 2xx.
                     // Preserve bounded diagnostics, not arbitrary response data
                     // or retry/recovery semantics inferred from a success status.
@@ -402,6 +416,11 @@ impl ModelService for HttpModelService {
                     || format!("provider returned HTTP {status}"),
                     |detail| format!("provider returned HTTP {status}: {detail}"),
                 );
+                // Headers are authoritative even if the optional diagnostic
+                // body fails. In particular, a 401 must not turn retryable.
+                if let Some(failure) = body_failure {
+                    message.push_str(&format!("; {}", failure.message));
+                }
                 if let Some(delay_ms) = retry_after_ms {
                     message.push_str(&format!("; retry after {} ms", delay_ms));
                 }
