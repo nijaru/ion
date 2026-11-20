@@ -361,7 +361,7 @@ impl ModelService for HttpModelService {
                 .and_then(|h| h.split(';').next())
                 .map(str::trim);
             let is_sse = mime.is_some_and(|mime| mime.eq_ignore_ascii_case("text/event-stream"));
-            let is_json = mime.is_some_and(|mime| mime.eq_ignore_ascii_case("application/json"));
+            let is_json = mime.is_some_and(is_json_media_type);
             let success = response.status().is_success();
             if !success || is_json {
                 let status = response.status().as_u16();
@@ -514,6 +514,17 @@ fn normalize_capacity(
         }
     }
     event
+}
+
+fn is_json_media_type(mime: &str) -> bool {
+    let Some((kind, subtype)) = mime.split_once('/') else {
+        return false;
+    };
+    kind.eq_ignore_ascii_case("application")
+        && (subtype.eq_ignore_ascii_case("json")
+            || subtype.rsplit_once('+').is_some_and(|(prefix, suffix)| {
+                !prefix.is_empty() && suffix.eq_ignore_ascii_case("json")
+            }))
 }
 
 fn append_error_prefix(body: &mut Vec<u8>, chunk: &[u8]) {

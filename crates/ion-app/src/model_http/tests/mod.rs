@@ -69,14 +69,13 @@ async fn http_error_status_survives_truncated_diagnostic_body() {
     }
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn http_error_diagnostic_deadline_does_not_reset_on_body_progress() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!(
         "http://{}/v1/chat/completions",
         listener.local_addr().unwrap()
     );
-    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         read_request_body(&mut socket).await;
@@ -84,9 +83,10 @@ async fn http_error_diagnostic_deadline_does_not_reset_on_body_progress() {
             .write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 100\r\n\r\n{")
             .await
             .unwrap();
-        started_tx.send(tokio::time::Instant::now()).unwrap();
-        loop {
-            tokio::time::sleep(Duration::from_secs(3)).await;
+        // Keep progress frequent enough to defeat a per-chunk timeout,
+        // then close early enough that a regression cannot hang the suite.
+        for _ in 0..7 {
+            tokio::time::sleep(Duration::from_secs(1)).await;
             if socket.write_all(b" ").await.is_err() {
                 break;
             }
@@ -94,13 +94,11 @@ async fn http_error_diagnostic_deadline_does_not_reset_on_body_progress() {
     });
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let (failure, started) = tokio::join!(model.stream(request()), started_rx);
-    let Err(failure) = failure else {
+    let Err(failure) = model.stream(request()).await else {
         panic!("HTTP error admitted a stream")
     };
     assert_eq!(failure.kind, ProviderErrorKind::Authentication);
     assert!(failure.message.contains("body timed out"), "{failure:?}");
-    assert!(started.unwrap().elapsed() < Duration::from_secs(6));
     server.abort();
     let _ = server.await;
 }
@@ -2262,23 +2260,29 @@ fn numeric_stream_status_keeps_context_and_quota_semantics() {
 
 #[tokio::test]
 async fn ok_json_reports_only_structured_error_diagnostics_without_opening_a_stream() {
-    for (body, expected) in [
+    for (mime, body, expected) in [
         (
+            "application/json; charset=utf-8",
             json!({"error": {"code":"context_length_exceeded", "message":"upstream rejected route"}, "request":"private input"}),
             "provider returned a JSON error instead of a stream (HTTP 200): upstream rejected route",
         ),
         (
+            "Application/vnd.gateway.error+JSON",
+            json!({"error":{"message":"upstream rejected route"}}),
+            "provider returned a JSON error instead of a stream (HTTP 200): upstream rejected route",
+        ),
+        (
+            "application/json",
             json!({"message":"private input", "choices":[]}),
             "provider response is not text/event-stream",
         ),
+        (
+            "text/html",
+            json!({"error":{"message":"private input"}}),
+            "provider response is not text/event-stream",
+        ),
     ] {
-        let endpoint = serve_typed(
-            body.to_string(),
-            "200 OK",
-            "application/json; charset=utf-8",
-            12,
-        )
-        .await;
+        let endpoint = serve_typed(body.to_string(), "200 OK", mime, 12).await;
         let model =
             HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
         let failure = match model.stream(request()).await {
