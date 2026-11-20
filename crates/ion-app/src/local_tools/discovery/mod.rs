@@ -40,7 +40,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             work: 20_000,
-            max_depth: 9,
+            max_depth: 32,
             grep_file_bytes: 8 * 1024 * 1024,
             grep_total_bytes: 32 * 1024 * 1024,
         }

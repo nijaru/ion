@@ -386,6 +386,27 @@ fn find_reports_result_caps_depth_and_non_utf8_paths_without_losing_partial_resu
 }
 
 #[test]
+fn discovery_reaches_nested_source_packages_by_default() {
+    let root = root("deep-source");
+    let package = "src/main/java/com/example/platform/service/account/internal/model/v1";
+    let file = format!("{package}/Account.java");
+    fs::create_dir_all(root.join(package)).unwrap();
+    fs::write(root.join(&file), "final class Account {}\n").unwrap();
+
+    let found = run(find, &root, json!({"pattern":"*.java"}));
+    assert!(find_paths(&found).contains(file.as_str()), "{found}");
+    assert_eq!(found["exhaustive"], true, "{found}");
+    let searched = run(
+        grep,
+        &root,
+        json!({"pattern":"class Account", "glob":"*.java"}),
+    );
+    assert_eq!(grep_matches(&searched)[0]["path"], file, "{searched}");
+    assert_eq!(searched["exhaustive"], true, "{searched}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn grep_distinguishes_regex_literal_case_utf8_and_glob_filters() {
     let root = root("grep-modes");
     fs::write(root.join("literal.txt"), "a.b\naxb\n").unwrap();
