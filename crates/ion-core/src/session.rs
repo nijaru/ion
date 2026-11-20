@@ -1233,18 +1233,40 @@ impl Session {
     }
 
     pub fn view(&self) -> Result<SessionView, SessionError> {
+        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        let (snapshot, mut view, sequence) = self.pin_view(&connection)?;
+        view.entries = read_entries(&snapshot)?;
+        if view.entries.len() as u64 != sequence {
+            return Err(SessionError::InvalidHistory);
+        }
+        drop(snapshot);
+        view.messages =
+            selected_messages(&view.entries, &view.context_path, MessageAudience::Model);
+        Ok(view)
+    }
+
+    fn pin_view<'a>(
+        &self,
+        connection: &'a Connection,
+    ) -> Result<(rusqlite::Transaction<'a>, SessionView, u64), SessionError> {
         let store = self.lock_store()?;
-        let entries = read_entries(&store.connection)?;
-        let header = read_header(&store.connection)?;
+        // Pin the WAL read with the first SELECT while holding the same lock
+        // that publishes writer state. Decode journal payloads only after it
+        // is released; header, cursor and hot state belong to this one cut.
+        let snapshot = connection.unchecked_transaction()?;
+        let header = read_header(&snapshot)?;
+        if header.id != self.id() || header.provider_session_id != self.provider_session_id() {
+            return Err(SessionError::InvalidHistory);
+        }
         let context_path = store.context_index.path(store.context_index.head());
-        let messages = selected_messages(&entries, &context_path, MessageAudience::Model);
-        Ok(SessionView {
+        let view = SessionView {
             id: header.id,
             cwd: header.cwd,
             name: header.name,
             context_path,
-            entries,
-            messages,
+            entries: Vec::new(),
+            messages: Vec::new(),
             unfinished_turn: store.state.active,
             unfinished_user_shell: store.state.pending_shell.as_ref().map(|shell| {
                 UnobservedUserShell {
@@ -1259,7 +1281,8 @@ impl Session {
             compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
             last_execution: store.state.last_execution.clone(),
             last_usage: store.state.last_usage,
-        })
+        };
+        Ok((snapshot, view, store.state.sequence))
     }
 
     /// Commit display metadata and return its canonical name. History remains append-only.

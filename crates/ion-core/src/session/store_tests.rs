@@ -25,6 +25,54 @@ impl Drop for Fixture {
     }
 }
 
+#[tokio::test]
+async fn pinned_view_does_not_block_commits_or_mix_journal_versions() {
+    let fixture = Fixture::new();
+    let session = Arc::new(fixture.session());
+    let writer = session.io().unwrap();
+    writer
+        .run(|session| {
+            session.set_name(Some("before"))?;
+            session.select_model(model("before"))
+        })
+        .await
+        .unwrap();
+
+    let connection =
+        Connection::open_with_flags(session.path(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let (snapshot, view, sequence) = session.pin_view(&connection).unwrap();
+    // Keep the durable snapshot open while independently committing both a
+    // header update and an append through the normal writer lane.
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        writer.run(|session| {
+            session.set_name(Some("after"))?;
+            session.select_model(model("after"))
+        }),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let entries = read_entries(&snapshot).unwrap();
+    assert_eq!(
+        read_header(&snapshot).unwrap().name.as_deref(),
+        Some("before")
+    );
+    assert_eq!(view.name.as_deref(), Some("before"));
+    assert_eq!(view.last_model, Some(model("before")));
+    assert_eq!(entries.len() as u64, sequence);
+    assert!(
+        matches!(entries.as_slice(), [SessionEntry::ModelSelected { model: selected }] if *selected == model("before"))
+    );
+    drop(snapshot);
+
+    let latest = session.reader().unwrap().view().await.unwrap();
+    assert_eq!(latest.name.as_deref(), Some("after"));
+    assert_eq!(latest.last_model, Some(model("after")));
+    assert_eq!(latest.entries.len(), entries.len() + 1);
+    session.shutdown().await.unwrap();
+}
+
 fn model(name: &str) -> ModelRef {
     ModelRef {
         provider: "fixture".into(),
