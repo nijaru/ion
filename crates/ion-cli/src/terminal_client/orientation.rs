@@ -21,7 +21,7 @@ pub(super) fn rows(
         let context = ui
             .context_estimate
             .as_ref()
-            .filter(|_| settled && ui.conversation.live().is_none())
+            .filter(|_| settled && !ui.session_io.refreshing() && ui.conversation.live().is_none())
             .and_then(|estimate| match estimate {
                 Ok(report) if &report.model == model && report.turn.is_none() => Some(format!(
                     "context ~{}/{}",

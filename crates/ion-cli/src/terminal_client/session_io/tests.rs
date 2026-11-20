@@ -681,7 +681,8 @@ async fn context_footer_tracks_planning_without_admitting_input() {
     );
     ui.insert("unsent 🦀");
     assert!(footer(&ui, &fixture.control).contains(&expected));
-    ui.session_io.request_refresh();
+    ui.session_io.schedule_refresh();
+    assert!(!ui.session_io.blocks_input());
     assert!(
         !footer(&ui, &fixture.control).contains("context"),
         "pending snapshots are not current"
@@ -785,7 +786,8 @@ async fn stale_history_cut_does_not_erase_newer_publication() {
             .is_none()
     );
     assert_eq!(ui.conversation.revision(), changed);
-    assert!(ui.session_io.blocked);
+    assert!(!ui.session_io.blocks_input());
+    assert!(ui.session_io.refreshing());
     settle_io(&mut fixture.control, &mut ui).await;
     assert!(!ui.session_io.blocked);
     assert!(

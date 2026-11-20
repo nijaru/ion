@@ -160,7 +160,21 @@ impl SessionIo {
 
     pub(super) fn request_refresh(&mut self) {
         self.blocked = true;
+        self.schedule_refresh();
+    }
+
+    /// Refresh the view without revoking input admission for a settled Turn
+    /// whose committed transcript is already present.
+    pub(super) fn schedule_refresh(&mut self) {
         self.refresh_pending = true;
+    }
+
+    pub(super) fn refreshing(&self) -> bool {
+        self.refresh_pending
+            || self
+                .read
+                .as_ref()
+                .is_some_and(|read| read.projection_revision.is_some())
     }
 
     pub(super) fn start_refresh(
@@ -168,7 +182,11 @@ impl SessionIo {
         control: &SessionControl<EditorDraft>,
         projection_revision: u64,
     ) -> Result<()> {
-        if !self.refresh_pending || self.read.is_some() || self.binding.is_some() {
+        if !self.refresh_pending
+            || self.read.is_some()
+            || self.binding.is_some()
+            || (!self.blocked && control.is_busy())
+        {
             return Ok(());
         }
         self.refresh_pending = false;
@@ -428,10 +446,12 @@ pub(super) fn apply(
     let source = read.source;
     match result {
         Ok(ReadOutput::History(history)) => {
-            if read.projection_revision != Some(ui.conversation.revision()) {
-                // Live publication may have advanced after this native read's cut.
-                // Never replace it with an older canonical prefix.
-                ui.session_io.request_refresh();
+            if read.projection_revision != Some(ui.conversation.revision())
+                || (!ui.session_io.blocked && runtime.is_busy())
+            {
+                // A newer observation can supersede the read's cut. Also avoid
+                // installing a background snapshot ahead of the next Turn's events.
+                ui.session_io.schedule_refresh();
                 return Ok(None);
             }
             let interrupted = history.unfinished && !runtime.is_busy();
@@ -536,7 +556,9 @@ pub(super) fn apply(
             if read.writes_files {
                 ui.status =
                     format!("File operation failed: {error:#}; inspect /recovery before retrying");
-            } else if ui.session_io.blocked {
+            } else if read.projection_revision.is_some() {
+                // A failed history read is not a harmless stale estimate.
+                ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             } else {
                 ui.status = format!("Session inspection failed: {error:#}");

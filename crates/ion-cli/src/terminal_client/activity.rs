@@ -234,6 +234,8 @@ pub(super) fn apply(
             ui.note(format!("Input source quarantined as recovery {id}; inspect with /recovery {id}. Not restored or replayed."));
         }
         ControlUpdate::Settled(mut settlement) => {
+            let observed_success = matches!(&settlement.outcome, OperationOutcome::Turn(Ok(_)))
+                && ui.conversation.live_for(settlement.operation);
             ui.discard_provisional();
             ui.conversation.clear_live();
             let not_dispatched = matches!(
@@ -300,7 +302,11 @@ pub(super) fn apply(
             } else {
                 drop(settlement.metadata);
             }
-            ui.session_io.request_refresh();
+            if observed_success {
+                ui.session_io.schedule_refresh();
+            } else {
+                ui.session_io.request_refresh();
+            }
             return Ok(error);
         }
         ControlUpdate::QuestionChanged => {}

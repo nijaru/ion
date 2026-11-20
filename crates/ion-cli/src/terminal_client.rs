@@ -232,6 +232,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.reconcile_recovery(runtime.session().id())?;
             if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, ui.conversation.revision()) {
+                ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }
             ui.sync_question(questions.as_ref());
