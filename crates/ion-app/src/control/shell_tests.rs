@@ -159,6 +159,61 @@ async fn native_preflight_is_retained_across_abandoned_next_and_executes_only_af
     fixture.control.shutdown().await;
 }
 
+#[tokio::test]
+async fn remapped_shell_replaces_literal_reservation_before_dispatch() {
+    for fits in [true, false] {
+        let mut fixture = Fixture::new(Model::new(1), false);
+        fs::create_dir_all(fixture.host.config_root()).unwrap();
+        fs::write(
+            fixture.host.config_root().join("commands.json"),
+            r#"{"commands":{"check":{"description":"write marker","program":"touch","args":["mapped-marker"],"share_with_model":true}}}"#,
+        )
+        .unwrap();
+        fixture.control.reload_resources().await.unwrap();
+        let metadata = meta("mapped shell");
+        let mapped = fixture
+            .control
+            .setup
+            .commands
+            .resolve("check", &[])
+            .unwrap()
+            .command;
+        let bytes = serde_json::to_vec(&(Message::user_input(mapped.clone(), []), &metadata))
+            .unwrap()
+            .len();
+        fixture.control.budget = InputBudget::new(bytes - usize::from(!fits));
+        let operation = fixture
+            .control
+            .command("check", &[], metadata)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        let (_, settled) = settle(&mut fixture.control).await;
+        assert_eq!(settled.operation, operation);
+        assert_eq!(settled.metadata.unwrap().literal, "mapped shell");
+        assert!(if fits {
+            matches!(settled.outcome, OperationOutcome::Shell(Ok(_)))
+        } else {
+            matches!(settled.outcome, OperationOutcome::NotDispatched(_))
+        });
+        assert_eq!(fixture.root.join("mapped-marker").exists(), fits);
+        let view = fixture
+            .control
+            .session()
+            .reader()
+            .unwrap()
+            .view()
+            .await
+            .unwrap();
+        assert_eq!(
+            view.entries.iter().any(|entry| matches!(entry,
+                ion_core::SessionEntry::UserShellAdmitted { command, .. } if command == &mapped
+            )),
+            fits
+        );
+        fixture.control.shutdown().await;
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn stop_and_abandoned_shutdown_join_the_native_leaf_without_dispatch_or_core_write() {
     let model = Model::new(1);

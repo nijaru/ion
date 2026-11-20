@@ -12,8 +12,12 @@ use crate::{AgentError, AgentLimits, json_size::encoded_len, session::valid_user
 /// The default preserves the existing RPC retained-input allowance.
 #[derive(Clone)]
 pub struct InputBudget {
+    state: Arc<BudgetState>,
+}
+
+struct BudgetState {
     limit: usize,
-    used: Arc<Mutex<usize>>,
+    used: Mutex<usize>,
 }
 
 impl Default for InputBudget {
@@ -25,8 +29,10 @@ impl Default for InputBudget {
 impl InputBudget {
     pub fn new(max_encoded_bytes: usize) -> Self {
         Self {
-            limit: max_encoded_bytes,
-            used: Arc::new(Mutex::new(0)),
+            state: Arc::new(BudgetState {
+                limit: max_encoded_bytes,
+                used: Mutex::new(0),
+            }),
         }
     }
 
@@ -56,23 +62,12 @@ impl InputBudget {
         metadata: &impl Serialize,
         limits: AgentLimits,
     ) -> Result<InputReservation, AgentError> {
-        validate_input(message, limits)?;
-        let bytes = encoded_len(&(message, metadata))?;
-        let mut used = self
-            .used
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if bytes > self.limit.saturating_sub(*used) {
-            return Err(AgentError::InputQueueFull {
-                max_encoded_bytes: self.limit,
-            });
-        }
-        *used += bytes;
-        drop(used);
-        Ok(InputReservation {
-            used: self.used.clone(),
-            bytes,
-        })
+        let mut reservation = InputReservation {
+            budget: self.clone(),
+            bytes: 0,
+        };
+        reservation.replace(message, metadata, limits)?;
+        Ok(reservation)
     }
 }
 
@@ -193,8 +188,37 @@ impl CommittedInput {
 
 /// Retained accounting ownership; moving it never releases capacity.
 pub struct InputReservation {
-    used: Arc<Mutex<usize>>,
+    budget: InputBudget,
     bytes: usize,
+}
+
+impl InputReservation {
+    /// Revalidate and charge a replacement for the same retained slot. Only
+    /// use this when the previous input is no longer retained. On failure the
+    /// original charge stays in custody.
+    pub fn replace(
+        &mut self,
+        message: &Message,
+        metadata: &impl Serialize,
+        limits: AgentLimits,
+    ) -> Result<(), AgentError> {
+        validate_input(message, limits)?;
+        let bytes = encoded_len(&(message, metadata))?;
+        let state = &self.budget.state;
+        let mut used = state
+            .used
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let others = *used - self.bytes;
+        if bytes > state.limit - others {
+            return Err(AgentError::InputQueueFull {
+                max_encoded_bytes: state.limit,
+            });
+        }
+        *used = others + bytes;
+        self.bytes = bytes;
+        Ok(())
+    }
 }
 
 impl Drop for InputReservation {
@@ -202,6 +226,8 @@ impl Drop for InputReservation {
         // No user code runs with the accounting lock held. Recovering a poisoned
         // lock during cleanup still releases this private, once-owned reservation.
         let mut used = self
+            .budget
+            .state
             .used
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -348,7 +374,7 @@ mod tests {
             .unwrap();
         drop(follow_up);
         drop(next);
-        assert_eq!(*budget.used.lock().unwrap(), 0);
+        assert_eq!(*budget.state.used.lock().unwrap(), 0);
         assert!(budget.prepare(message, &(), AgentLimits::default()).is_ok());
     }
 
@@ -425,6 +451,6 @@ mod tests {
             budget.prepare(input, &(), AgentLimits::default()),
             Err(AgentError::InvalidUserInput)
         ));
-        assert_eq!(*budget.used.lock().unwrap(), 0);
+        assert_eq!(*budget.state.used.lock().unwrap(), 0);
     }
 }

@@ -114,7 +114,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         operation: OperationId,
         stop: CancellationToken,
         metadata: M,
-        reservation: InputReservation,
+        mut reservation: InputReservation,
         result: Result<AdmissionOutput>,
         prior_stop_requested: bool,
     ) {
@@ -132,22 +132,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                 !stop.is_cancelled(),
                 "shell preflight stopped before dispatch"
             );
-            // Mapping may expand literal argv. Revalidate the actual command's
-            // budget before Core can persist intent or invoke the cold callback.
-            let mapped = if remapped {
-                Some(self.budget.reserve(
+            // The worker no longer holds the literal. Revalidate and replace
+            // its charge before Core can write intent or invoke the executor.
+            if remapped {
+                reservation.replace(
                     &Message::user_input(command.clone(), []),
                     &metadata,
                     self.setup.runtime.agent.limits(),
-                )?)
-            } else {
-                None
-            };
-            Ok((command, exclude_from_context, prepared, mapped))
+                )?;
+            }
+            Ok((command, exclude_from_context, prepared))
         })();
         match prepared {
-            Ok((command, exclude_from_context, prepared, mapped)) => {
-                let reservation = mapped.unwrap_or(reservation);
+            Ok((command, exclude_from_context, prepared)) => {
                 let work = self.setup.session.run_user_shell(
                     command,
                     exclude_from_context,
