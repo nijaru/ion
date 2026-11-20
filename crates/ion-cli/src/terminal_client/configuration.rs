@@ -191,7 +191,7 @@ impl Frontend {
             items: vec![
                 PickerItem {
                     label: format!("Tool output: {}", self.output_detail.label()),
-                    detail: Some("Terminal-local: current view and future publication; native history unchanged".into()),
+                    detail: Some("Show recorded details without switching views".into()),
                     value: PickerValue::Setting(Setting::Output(next_output)),
                 },
                 PickerItem {
@@ -214,28 +214,13 @@ impl Frontend {
     }
 
     pub(super) fn set_tui_mode(&mut self, mode: super::TuiMode) {
-        self.tool_expansion_origin = None;
         self.mode = mode;
         self.view.follow_end();
     }
 
-    pub(super) fn restore_tool_expansion_viewport(&mut self) {
-        if let Some(mode) = self.tool_expansion_origin.take() {
-            self.mode = mode;
-        }
-    }
-
     pub(super) fn toggle_tool_output(&mut self) {
         let next = match self.output_detail {
-            OutputDetail::Compact => {
-                if self.mode == super::TuiMode::Inline {
-                    // Published native history is immutable. Inspect the same
-                    // conversation in an editable viewport rather than repaint it.
-                    self.tool_expansion_origin = Some(self.mode);
-                    self.mode = super::TuiMode::Fullscreen;
-                }
-                OutputDetail::Expanded
-            }
+            OutputDetail::Compact => OutputDetail::Expanded,
             OutputDetail::Expanded => OutputDetail::Compact,
         };
         self.apply_setting(Setting::Output(next));
@@ -244,14 +229,8 @@ impl Frontend {
     pub(super) fn apply_setting(&mut self, setting: Setting) {
         match setting {
             Setting::Output(value) => {
-                if value == OutputDetail::Compact {
-                    self.restore_tool_expansion_viewport();
-                }
                 self.output_detail = value;
-                self.status = format!(
-                    "Tool output: {} · current view and future publication; native history unchanged",
-                    value.label()
-                );
+                self.status = format!("Tool output: {}", value.label());
             }
             Setting::Thinking(value) => {
                 self.thinking_visibility = value;

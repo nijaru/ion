@@ -277,6 +277,12 @@ impl Screen {
         self.dedicated
     }
 
+    pub fn request_replay(&mut self) {
+        if self.dedicated && !self.replay_pending {
+            *self = Self::dedicated(self.width, self.screen_height);
+        }
+    }
+
     pub fn replay_pending(&self) -> bool {
         self.replay_pending
     }

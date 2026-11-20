@@ -144,7 +144,7 @@ struct Frontend {
     theme_picker: Option<theme_selection::ThemePicker>,
     mode: TuiMode,
     output_detail: crate::tool_output::OutputDetail,
-    tool_expansion_origin: Option<TuiMode>,
+    inline_output_detail: Option<crate::tool_output::OutputDetail>,
     thinking_visibility: crate::transcript_render::ThinkingVisibility,
     conversation: conversation::Conversation,
     presenter: block_presenter::BlockPresenter,
@@ -504,10 +504,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             if let Some(screen) = screen_owner.as_mut()
                 && outcome.is_ok()
             {
-                // Publish pending output in the original inline surface even
-                // when quitting from temporary expansion. Explicit fullscreen
-                // choices remain fullscreen; identity chrome is not retained.
-                ui.restore_tool_expansion_viewport();
+                // Publish pending output before releasing the surface.
                 ui.view.follow_end();
                 draw(terminal, screen, &mut ui, None, None, &[]).await?;
                 release_surface(terminal, screen).await?;
@@ -1403,6 +1400,12 @@ fn draw_prepared(
         );
     }
 
+    if ui
+        .inline_output_detail
+        .is_some_and(|detail| detail != ui.output_detail)
+    {
+        screen.request_replay();
+    }
     let publication = ui.conversation.prepare_publication();
     let selection = if screen.replay_pending() {
         conversation::Rows::Sealed
@@ -1449,6 +1452,7 @@ fn draw_prepared(
         return Ok(false);
     };
     dock.paint.observe(ui, receipt);
+    ui.inline_output_detail = Some(ui.output_detail);
     assert!(
         ui.conversation.acknowledge(publication),
         "paint acknowledges its prepared source prefix"

@@ -184,9 +184,8 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.1)
         check_history()
 
-        # Withdraw the mutable tail before expansion saves the primary cursor.
-        # A tiny alternate-screen resize must not archive the draft/footer or
-        # destroy the evidence needed to return to inline publication.
+        # Tool expansion in a shared pane must keep the inline draft and
+        # leave previously published history untouched.
         viewport_draft = "EXPANDED_UNSENT café 界 👩‍💻"
         tmux("send-keys", "-t", "ion", "-l", viewport_draft)
         while viewport_draft not in tmux("capture-pane", "-p", "-t", "ion"):
@@ -196,28 +195,9 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         while "Tool output: expanded" not in tmux("capture-pane", "-p", "-t", "ion"):
             assert time.monotonic() < deadline, "draft-preserving expanded viewport did not open"
             time.sleep(0.02)
-        pane_tty = tmux("display-message", "-p", "-t", "ion", "#{pane_tty}").strip()
-        fd = os.open(pane_tty, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
-        try:
-            for columns, rows in [(60, 24), (8, 3), (100, 30)]:
-                tmux("resize-window", "-t", "ion", "-x", str(columns), "-y", str(rows))
-                expected = tuple(map(int, tmux("display-message", "-p", "-t", "ion", "#{pane_height} #{pane_width}").split()))
-                # tmux can defer kernel PTY resize after changing its grid.
-                # Observe the real dimensions, not a sleep or requested size.
-                while struct.unpack("HHHH", fcntl.ioctl(fd, termios.TIOCGWINSZ, bytes(8)))[:2] != expected:
-                    assert time.monotonic() < deadline, "expanded viewport PTY resize did not settle"
-                    time.sleep(0.02)
-        finally:
-            os.close(fd)
-        while True:
-            pane = tmux("capture-pane", "-p", "-t", "ion")
-            if "Tool output: expanded" in pane and viewport_draft in pane:
-                break
-            assert time.monotonic() < deadline, f"resized expanded viewport did not repaint:\n{pane}"
-            time.sleep(0.02)
+        assert tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip() == "0"
+        check_history()
         tmux("send-keys", "-t", "ion", "C-o")
-        # The draft is also present in Expanded. Await the application's mode
-        # acknowledgement on the restored primary screen, not that shared text.
         while True:
             pane = tmux("capture-pane", "-p", "-t", "ion")
             alternate = tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip()
@@ -229,10 +209,10 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         assert restored.count(viewport_draft) == 1, f"expanded viewport custody failed (alternate={tmux('display-message', '-p', '-t', 'ion', '#{alternate_on}').strip()}):\n{restored}"
         tmux("send-keys", "-t", "ion", "C-u")
         while viewport_draft in tmux("capture-pane", "-p", "-t", "ion", "-S", "-"):
-            assert time.monotonic() < deadline, "expanded resize archived provisional input"
+            assert time.monotonic() < deadline, "expansion archived provisional input"
             time.sleep(0.02)
         check_history()
-        assert len(requests) == 2, "expanded resize submitted the draft"
+        assert len(requests) == 2, "expansion submitted the draft"
 
         def command(text, expected):
             tmux("send-keys", "-t", "ion", "-l", text)

@@ -1587,7 +1587,7 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
 }
 
 #[test]
-fn tool_expansion_preserves_composer_and_restores_its_viewport() {
+fn tool_expansion_preserves_composer_and_viewport() {
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         let mut ui = Frontend {
             mode,
@@ -1604,7 +1604,7 @@ fn tool_expansion_preserves_composer_and_restores_its_viewport() {
         assert!(matches!(ui.key(toggle, None, None), Action::None));
         assert!(ui.view.is_reading());
         assert_eq!(ui.input_target(), interaction::InputTarget::Composer);
-        assert_eq!(ui.mode, TuiMode::Fullscreen);
+        assert_eq!(ui.mode, mode);
         assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
         assert_eq!(ui.editor.draft, "draft 🦀\nnext");
         assert_eq!(ui.editor.cursor, 6);
@@ -1632,24 +1632,19 @@ fn tool_expansion_preserves_composer_and_restores_its_viewport() {
 }
 
 #[test]
-fn explicit_presentation_choices_supersede_temporary_expansion() {
+fn output_detail_and_viewport_are_independent() {
+    use crate::tool_output::OutputDetail;
     let mut ui = Frontend::default();
-    ui.toggle_tool_output();
-    ui.output_settings("compact", ion_core::CompletionDelivery::Inbox)
-        .unwrap();
-    assert_eq!(ui.mode, TuiMode::Inline);
-    ui.toggle_tool_output();
-    ui.restore_tool_expansion_viewport();
-    assert_eq!(ui.mode, TuiMode::Inline);
-    assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Expanded);
-    ui.output_settings("compact", ion_core::CompletionDelivery::Inbox)
-        .unwrap();
-    ui.toggle_tool_output();
-    ui.set_tui_mode(TuiMode::Fullscreen);
-    ui.toggle_tool_output();
-    ui.restore_tool_expansion_viewport();
-    assert_eq!(ui.mode, TuiMode::Fullscreen);
-    assert_eq!(ui.output_detail, crate::tool_output::OutputDetail::Compact);
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        ui.set_tui_mode(mode);
+        ui.toggle_tool_output();
+        assert_eq!(ui.output_detail, OutputDetail::Expanded);
+        assert_eq!(ui.mode, mode);
+        ui.output_settings("compact", ion_core::CompletionDelivery::Inbox)
+            .unwrap();
+        assert_eq!(ui.output_detail, OutputDetail::Compact);
+        assert_eq!(ui.mode, mode);
+    }
 }
 
 #[test]
