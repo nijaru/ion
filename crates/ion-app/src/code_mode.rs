@@ -503,9 +503,14 @@ fn run_guest(
         interrupt_budget.exhausted() || interrupt_stop.is_cancelled()
     })));
     // Eval is needed to compile the body; no host APIs or module loader exist.
-    let context =
-        Context::custom::<(intrinsic::Eval, intrinsic::Json, intrinsic::Promise)>(&runtime)
-            .map_err(|e| e.to_string())?;
+    let context = Context::custom::<(
+        intrinsic::Eval,
+        intrinsic::Json,
+        intrinsic::Promise,
+        intrinsic::RegExp,
+        intrinsic::MapSet,
+    )>(&runtime)
+    .map_err(|e| e.to_string())?;
     let bridge = Rc::new(Bridge {
         sender,
         pending: RefCell::new(Vec::new()),
@@ -953,6 +958,53 @@ mod tests {
             assert!(stop.is_cancelled());
             assert!(task.requests.recv().await.is_none());
         }
+    }
+
+    #[tokio::test]
+    async fn guest_can_filter_and_group_tool_results_with_regex_and_collections() {
+        let (mut task, _) = start(
+            r#"
+            const names = await tools.host({});
+            const counts = new Map();
+            const seen = new Set();
+            for (const name of names) {
+                if (seen.has(name) || !name.match(/\.rs$/) || !new RegExp('^src/').test(name)) continue;
+                seen.add(name);
+                const folder = name.split('/').slice(0, -1).join('/');
+                counts.set(folder, (counts.get(folder) ?? 0) + 1);
+            }
+            return [...counts];
+            "#,
+            limits(),
+        );
+        request(&mut task)
+            .await
+            .reply
+            .send(Ok(json!([
+                "src/lib.rs",
+                "src/lib.rs",
+                "src/main.rs",
+                "src/notes.txt",
+                "tests/check.rs"
+            ])
+            .to_string()))
+            .unwrap();
+        assert_eq!(finish(&mut task).await, Ok(r#"[["src",2]]"#.into()));
+    }
+
+    #[tokio::test]
+    async fn native_regex_matching_honors_guest_deadline() {
+        let (mut task, _) = start(
+            "return /^(a|aa)+$/.test('a'.repeat(150) + '!');",
+            CodeLimits {
+                execution_budget: Duration::from_millis(50),
+                ..limits()
+            },
+        );
+        assert_eq!(
+            finish(&mut task).await,
+            Err("JavaScript execution budget exceeded".into())
+        );
     }
 
     #[tokio::test]
