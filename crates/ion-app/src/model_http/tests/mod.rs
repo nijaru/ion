@@ -1648,6 +1648,25 @@ fn chat_rejects_mistyped_semantics_instead_of_discarding_them() {
 }
 
 #[test]
+fn chat_rejects_unrepresentable_output_instead_of_completing_text() {
+    for (field, payload) in [
+        ("function_call", json!({"name":"read","arguments":"{}"})),
+        ("audio", json!({"data":"YQ=="})),
+    ] {
+        let mut state = ChatState::default();
+        let error = state.accept(&json!({"choices":[{"delta":{"content":"partial",(field):payload},"finish_reason":"stop"}]})).unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Unsupported);
+    }
+    let mut state = ChatState::default();
+    state.accept(&json!({"choices":[{"delta":{"content":"answer","function_call":null,"audio":null},"finish_reason":"stop"}]})).unwrap();
+    state.accept(&json!({"choices":[{"delta":{"function_call":null,"audio":null},"finish_reason":"stop"}]})).unwrap();
+    assert_eq!(
+        state.complete(&request()).unwrap().message.content,
+        vec![Content::Text("answer".into())]
+    );
+}
+
+#[test]
 fn chat_tool_continuations_allow_omitted_null_and_empty_metadata() {
     let mut state = ChatState::default();
     for fragment in [

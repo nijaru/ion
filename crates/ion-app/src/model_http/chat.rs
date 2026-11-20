@@ -129,6 +129,15 @@ impl ChatState {
             }
             return Ok(events);
         }
+        // These are output payloads, not metadata. Ignoring them could turn
+        // a response that Ion cannot represent into an apparent text success.
+        for field in ["function_call", "audio"] {
+            if delta.get(field).is_some_and(|value| !value.is_null()) {
+                return Err(unsupported(&format!(
+                    "unsupported Chat Completions {field} delta"
+                )));
+            }
+        }
         if let Some(details) = delta.get("reasoning_details").filter(|v| !v.is_null()) {
             let details = details
                 .as_array()
@@ -506,6 +515,7 @@ pub(super) fn empty_post_finish_delta(delta: &Value) -> bool {
     fields.iter().all(|(name, value)| match name.as_str() {
         "role" => value.is_null() || value == "assistant",
         "content" | "refusal" => value.is_null() || value == "",
+        "audio" | "function_call" => value.is_null(),
         "tool_calls" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
         "reasoning" | "reasoning_content" | "reasoning_text" => value.is_null() || value == "",
         "reasoning_details" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
