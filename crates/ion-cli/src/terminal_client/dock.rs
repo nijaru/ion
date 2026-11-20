@@ -102,10 +102,10 @@ enum DockCandidate {
 }
 
 impl DockPaint {
-    fn new(fullscreen: bool, width: usize, height: usize, candidate: DockCandidate) -> Self {
+    fn new(ui: &Frontend, width: usize, height: usize, candidate: DockCandidate) -> Self {
         Self {
             geometry: (width as u16, height as u16),
-            fullscreen,
+            fullscreen: ui.mode == super::TuiMode::Fullscreen,
             candidate,
         }
     }
@@ -164,7 +164,6 @@ pub(super) struct Dock {
 }
 
 impl Dock {
-    #[cfg(test)]
     pub(super) fn prepare(
         ui: &mut Frontend,
         operation: Option<ActiveOperation>,
@@ -173,29 +172,11 @@ impl Dock {
         width: usize,
         height: usize,
     ) -> Self {
-        Self::prepare_for_surface(
-            ui,
-            operation,
-            model,
-            queued,
-            (width, height),
-            ui.mode == super::TuiMode::Fullscreen,
-        )
-    }
-
-    pub(super) fn prepare_for_surface(
-        ui: &mut Frontend,
-        operation: Option<ActiveOperation>,
-        model: Option<&ModelRef>,
-        queued: &[ion_app::QueuedInput],
-        (width, height): (usize, usize),
-        fullscreen: bool,
-    ) -> Self {
         ui.invalidate_interaction_paint();
         let width = width.max(1);
         let height = height.max(1);
         match ui.input_target() {
-            InputTarget::Picker => return Self::selector(ui, operation, width, height, fullscreen),
+            InputTarget::Picker => return Self::selector(ui, operation, width, height),
             InputTarget::Question => {
                 let prompt = ui.gestures.prompt().map(str::to_owned);
                 let question = ui.question.as_mut().expect("derived question custody");
@@ -212,12 +193,7 @@ impl Dock {
                             ui.themes.theme().style(Role::Secondary),
                         )],
                         cursor: None,
-                        paint: DockPaint::new(
-                            fullscreen,
-                            width,
-                            height,
-                            DockCandidate::HiddenQuestion,
-                        ),
+                        paint: DockPaint::new(ui, width, height, DockCandidate::HiddenQuestion),
                     };
                 }
                 // No caret requires a physical parking row. Layout cannot let
@@ -251,7 +227,7 @@ impl Dock {
                     rows: frame.rows,
                     cursor: frame.cursor,
                     paint: DockPaint::new(
-                        fullscreen,
+                        ui,
                         width,
                         height,
                         DockCandidate::Question {
@@ -298,7 +274,7 @@ impl Dock {
         let has_body = operation.is_some()
             || !ui.conversation.mutable_items().is_empty()
             || ui.view.is_reading()
-            || fullscreen;
+            || ui.mode == super::TuiMode::Fullscreen;
         let body_minimum = usize::from(has_body && budget > status.len() + 1);
         let discovery_room = budget.saturating_sub(1 + status.len() + body_minimum);
         let completion =
@@ -349,7 +325,7 @@ impl Dock {
             rows,
             cursor,
             paint: DockPaint::new(
-                fullscreen,
+                ui,
                 width,
                 height,
                 DockCandidate::Composer { completion, width },
@@ -362,7 +338,6 @@ impl Dock {
         operation: Option<ActiveOperation>,
         width: usize,
         height: usize,
-        fullscreen: bool,
     ) -> Self {
         let picker = ui.pickers.active().expect("derived picker custody");
         let query = input_window(
@@ -416,12 +391,7 @@ impl Dock {
             body_rows: height.saturating_sub(rows.len()),
             rows,
             cursor,
-            paint: DockPaint::new(
-                fullscreen,
-                width,
-                height,
-                DockCandidate::Picker(frame.paint),
-            ),
+            paint: DockPaint::new(ui, width, height, DockCandidate::Picker(frame.paint)),
         }
     }
 }

@@ -200,26 +200,30 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                 until(lambda: len(requests) == 1 and b"done" in output)
                 os.write(master, b"UNSENT_RESIZE_DRAFT")
                 until(lambda: b"UNSENT_RESIZE_DRAFT" in output)
-                # Report a column the resized terminal cannot have. The
-                # original primary viewport must not be erased or replayed.
+                # Report a column the resized terminal cannot have. The app
+                # must append a fresh inline region before painting anything.
                 terminal.cursor_reply = b"\x1b[2;80R"
                 checkpoint = len(output)
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 65, 0, 0))
-                until(lambda: terminal.alternate and b"UNSENT_RESIZE_DRAFT" in output[checkpoint:])
-                before_alt = bytes(output[checkpoint:]).split(b"\x1b[?1049h", 1)[0]
-                assert not re.search(rb"\x1b\[[0-9]*[JK]", before_alt), before_alt
-                assert b"ACTIVE_TURN" not in before_alt, before_alt
-                assert b"Resize fallback: fullscreen" in output[checkpoint:], output[checkpoint:]
+                anchor = b"\x1b[24;1H\r\n"
+                until(lambda: anchor in output[checkpoint:]
+                      and b"UNSENT_RESIZE_DRAFT" in output[checkpoint:])
+                recovered = bytes(output[checkpoint:])
+                before_anchor = recovered.split(anchor, 1)[0]
+                assert not re.search(rb"\x1b\[[0-9]*[JK]", before_anchor), before_anchor
+                assert b"\x1b[?1049h" not in recovered
+                assert b"ACTIVE_TURN" not in recovered, recovered
+                assert not terminal.alternate
+                os.write(master, b"\x1b[DX")
+                until(lambda: b"UNSENT_RESIZE_DRAFXT" in output[checkpoint:])
                 release_completion.set()
                 until(lambda: b"\x1b]7501;state=done:app=ion\x1b\\" in output)
                 assert len(requests) == 1 and child.poll() is None
-                os.write(master, b"\x15/quit\r")
+                os.write(master, b"\x05\x15/quit\r")
                 until(lambda: child.poll() is not None)
                 assert child.wait() == 0
                 drain()
-                assert not terminal.alternate
-                after_alt = bytes(output[checkpoint:]).rsplit(b"\x1b[?1049l", 1)[-1]
-                assert not re.search(rb"\x1b\[[0-9]*[JK]", after_alt), after_alt
+                assert b"\x1b[?1049h" not in output[checkpoint:]
             else:
                 until(lambda: "›".encode() in output)
                 expected = 3 if supported else (8 if mode == "fullscreen" else 4)
