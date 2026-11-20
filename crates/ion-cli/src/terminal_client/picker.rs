@@ -63,6 +63,52 @@ pub(super) struct Picker {
     pub items: Vec<PickerItem>,
 }
 
+// Model identities are short names, not prose. Verbatim hits outrank
+// abbreviations; ties keep catalog or shortlist order.
+fn model_match_rank(query: &str, model: &ModelRef, label: &str) -> Option<u8> {
+    if query.is_empty() {
+        return Some(0);
+    }
+    let id = model.model.to_ascii_lowercase();
+    let qualified = format!("{}/{}", model.provider.to_ascii_lowercase(), id);
+    let name = id.rsplit('/').next().expect("split always yields a field");
+    let fields = [qualified.as_str(), id.as_str(), name];
+    if fields.contains(&query) {
+        Some(0)
+    } else if fields.iter().any(|field| field.starts_with(query)) {
+        Some(1)
+    } else if label.to_ascii_lowercase().contains(query)
+        || fields.iter().any(|field| field.contains(query))
+    {
+        Some(2)
+    } else if query.chars().take(65).count() <= 64 {
+        let mut words = query
+            .split(|ch: char| ch.is_whitespace() || ch == '/')
+            .filter(|word| !word.is_empty())
+            .peekable();
+        words.peek()?;
+        let mut rank = 3;
+        for word in words {
+            if !qualified.contains(word) {
+                let mut letters = word.chars().peekable();
+                for ch in qualified.chars() {
+                    if letters.peek() == Some(&ch) {
+                        letters.next();
+                        if letters.peek().is_none() {
+                            break;
+                        }
+                    }
+                }
+                letters.peek().is_none().then_some(())?;
+                rank = 4;
+            }
+        }
+        Some(rank)
+    } else {
+        None
+    }
+}
+
 impl Picker {
     pub fn is_theme(&self) -> bool {
         // Native theme preparation leaves an empty, but still owned, view.
@@ -75,12 +121,17 @@ impl Picker {
     pub fn matches(&self, named_only: bool, models: Option<&[ModelRef]>) -> Vec<usize> {
         let query = self.query.to_ascii_lowercase();
         let mut terms = None;
-        let matching: Vec<_> = self
+        let model_query = query.trim();
+        let mut matching: Vec<_> = self
             .items
             .iter()
             .enumerate()
             .filter_map(|(index, item)| {
                 let matching = match &item.value {
+                    PickerValue::Model(model) if !named_only => {
+                        return model_match_rank(model_query, model, &item.label)
+                            .map(|rank| (index, rank));
+                    }
                     PickerValue::Session { search, .. } => {
                         (!named_only || search.named())
                             && terms
@@ -100,17 +151,20 @@ impl Picker {
                     }
                     _ => !named_only && item.label.to_ascii_lowercase().contains(&query),
                 };
-                matching.then_some(index)
+                matching.then_some((index, 0))
             })
             .collect();
         if let Some(models) = models {
-            return models.iter().filter_map(|identity| {
-                matching.iter().copied().find(|index| {
-                    matches!(&self.items[*index].value, PickerValue::Model(model) if model == identity)
+            matching = models.iter().filter_map(|identity| {
+                matching.iter().copied().find(|&(index, _)| {
+                    matches!(&self.items[index].value, PickerValue::Model(model) if model == identity)
                 })
             }).collect();
         }
-        matching
+        if !model_query.is_empty() {
+            matching.sort_by_key(|&(_, rank)| rank);
+        }
+        matching.into_iter().map(|(index, _)| index).collect()
     }
 }
 
@@ -1003,6 +1057,34 @@ mod tests {
             picker.key(held, &keys);
             assert_eq!(picker.active().unwrap().query, "query  ");
         }
+    }
+
+    #[test]
+    fn model_search_prefers_exact_names_and_ranks_abbreviations_within_scope() {
+        let identity = |model: &str| ModelRef {
+            provider: "fixture".into(),
+            model: model.into(),
+        };
+        let mut picker = Picker {
+            title: "Model",
+            query: "GPT-4O".into(),
+            selected: 0,
+            items: ["gpt-4o-mini", "gpt-40-orange", "vendor/gpt-4o", "gpt-4o"]
+                .into_iter()
+                .map(|name| PickerItem {
+                    label: format!("fixture/{name}"),
+                    detail: None,
+                    value: PickerValue::Model(identity(name)),
+                })
+                .collect(),
+        };
+        assert_eq!(picker.matches(false, None), [2, 3, 0, 1]);
+        let scope = [identity("gpt-4o-mini"), identity("gpt-4o")];
+        assert_eq!(picker.matches(false, Some(&scope)), [3, 0]);
+        picker.query = "fix g4om".into();
+        assert_eq!(picker.matches(false, None), [0]);
+        picker.query.clear();
+        assert_eq!(picker.matches(false, Some(&scope)), [0, 3]);
     }
 
     #[test]
