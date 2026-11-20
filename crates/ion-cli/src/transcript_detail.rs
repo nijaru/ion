@@ -33,9 +33,11 @@ struct Boundary {
     previous: Option<EntryKey>,
 }
 
+type ToolSelection = (NonZeroUsize, TranscriptActivityIdentity);
+
 #[derive(Default)]
 pub struct DetailView {
-    tool: Option<(NonZeroUsize, TranscriptActivityIdentity)>,
+    tool: Option<ToolSelection>,
     through: Option<Boundary>,
     anchor: Option<Anchor>,
     viewport: usize,
@@ -53,6 +55,7 @@ struct Page {
     last: Option<Boundary>,
     document: Document,
     evidence: Option<String>,
+    adjacent_tools: [Option<ToolSelection>; 2],
 }
 
 enum Entry<'a> {
@@ -84,7 +87,7 @@ impl Entry<'_> {
 }
 
 impl DetailView {
-    pub fn new(tool: Option<(NonZeroUsize, TranscriptActivityIdentity)>) -> Self {
+    pub fn new(tool: Option<ToolSelection>) -> Self {
         Self {
             tool,
             ..Self::default()
@@ -171,12 +174,17 @@ impl DetailView {
                     12
                 });
             }
-            KeyAction::Earlier if self.tool.is_none() && page.before.is_some() => {
+            KeyAction::Earlier | KeyAction::Later if self.tool.is_some() => {
+                if let Some(tool) = page.adjacent_tools[usize::from(action == KeyAction::Later)] {
+                    *self = Self::new(Some(tool));
+                }
+            }
+            KeyAction::Earlier if page.before.is_some() => {
                 self.through = page.before;
                 self.anchor = None;
                 self.invalidate();
             }
-            KeyAction::Later if self.tool.is_none() => {
+            KeyAction::Later => {
                 self.through = page.later;
                 self.anchor = None;
                 self.invalidate();
@@ -294,17 +302,39 @@ impl DetailView {
         let last = end.checked_sub(1).map(boundary);
         let mut document = Document::new(theme);
         let mut evidence = None;
+        let mut adjacent_tools = [None, None];
         if let Some((number, identity)) = &mut self.tool {
-            let selected = entries
+            let mut previous = None;
+            let mut tool_entries = entries
                 .iter()
                 .filter_map(|entry| match entry {
                     Entry::Tool(activity) => Some(*activity),
                     Entry::Item(..) | Entry::Thinking(..) => None,
                 })
                 .enumerate()
-                .find(|(_, activity)| activity.identity == *identity);
-            if let Some((index, activity)) = selected {
-                *number = NonZeroUsize::new(index + 1).expect("one-based tool number");
+                .map(|(index, activity)| {
+                    (
+                        (
+                            NonZeroUsize::new(index + 1).expect("one-based tool number"),
+                            activity.identity,
+                        ),
+                        activity,
+                    )
+                });
+            let selected = tool_entries.by_ref().find(|(selection, _)| {
+                if selection.1 == *identity {
+                    true
+                } else {
+                    previous = Some(*selection);
+                    false
+                }
+            });
+            if let Some(((ordinal, _), activity)) = selected {
+                *number = ordinal;
+                adjacent_tools = [
+                    previous,
+                    tool_entries.next().map(|(selection, _)| selection),
+                ];
                 let number = number.to_string();
                 document.activity(activity, &number, width);
                 evidence = Some(format_activity(&number, activity));
@@ -363,6 +393,7 @@ impl DetailView {
             last,
             document,
             evidence,
+            adjacent_tools,
         });
     }
 
@@ -395,7 +426,9 @@ impl DetailView {
             },
             |(number, _)| {
                 format!(
-                    "Tool {number} · {} copies evidence",
+                    "Tool {number} · {}/{} prev/next · {} copy",
+                    keys.hint(KeyAction::Earlier),
+                    keys.hint(KeyAction::Later),
                     keys.hint(KeyAction::Copy)
                 )
             },
@@ -557,6 +590,29 @@ mod tests {
                 open: true,
             })],
         }
+    }
+
+    #[test]
+    fn tool_navigation_tracks_identity_and_invalidates_old_evidence() {
+        let selected = activity(1);
+        let mut view = DetailView::new(Some((NonZeroUsize::MIN, selected.identity)));
+        let first = tool_history(vec![selected.clone(), activity(2)]);
+        view.prepare(first.items.iter(), &[], 0, 80);
+        view.navigate(KeyAction::Earlier);
+        assert!(view.copy_evidence().unwrap().1.contains("Call ID: call-1"));
+        view.navigate(KeyAction::Later);
+        assert!(view.copy_evidence().is_none());
+
+        let updated = tool_history(vec![activity(0), selected, activity(2)]);
+        view.prepare(updated.items.iter(), &[], 1, 80);
+        let (number, text) = view.copy_evidence().unwrap();
+        assert_eq!(number.get(), 3);
+        assert!(text.contains("Call ID: call-2"));
+        view.navigate(KeyAction::Later);
+        assert_eq!(view.copy_evidence().unwrap().0.get(), 3);
+        view.navigate(KeyAction::Earlier);
+        view.prepare(updated.items.iter(), &[], 1, 80);
+        assert!(view.copy_evidence().unwrap().1.contains("Call ID: call-1"));
     }
 
     #[test]
