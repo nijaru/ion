@@ -2,12 +2,14 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::AsFd;
+use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crossterm::terminal;
+use rustix::event::{PollFd, PollFlags, poll};
 use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
 use termwiz::input::{self as term_input, InputParser};
 use tokio::signal::unix::{Signal, SignalKind, signal};
@@ -194,13 +196,44 @@ struct ReaderReturn {
     unsent: Option<io::Result<Vec<u8>>>,
 }
 
+#[derive(Debug)]
+struct Reader {
+    thread: JoinHandle<ReaderReturn>,
+    wake: UnixStream,
+    stop: Arc<AtomicBool>,
+}
+
+impl Reader {
+    fn spawn(file: File, sender: mpsc::Sender<io::Result<Vec<u8>>>) -> io::Result<Self> {
+        let (wake, wait) = UnixStream::pair()?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
+        let thread = thread::Builder::new()
+            .name("ion-terminal-input".into())
+            .spawn(move || {
+                let unsent = read_chunks(&file, &wait, sender, &reader_stop);
+                ReaderReturn { file, unsent }
+            })?;
+        Ok(Self { thread, wake, stop })
+    }
+
+    fn join(self) -> io::Result<ReaderReturn> {
+        self.stop.store(true, Ordering::Release);
+        // Closing the peer wakes poll even if the reader has not entered it yet.
+        // The flag also stops a reader waiting on the bounded channel instead.
+        drop(self.wake);
+        self.thread
+            .join()
+            .map_err(|_| io::Error::other("terminal reader panicked"))
+    }
+}
+
 /// The single terminal input reader for a live frontend.
 #[derive(Debug)]
 pub(crate) struct InputStream {
-    reader: Option<JoinHandle<ReaderReturn>>,
+    reader: Option<Reader>,
     file: Option<File>,
     unsent: Option<io::Result<Vec<u8>>>,
-    stop: Arc<AtomicBool>,
     chunks: mpsc::Receiver<io::Result<Vec<u8>>>,
     resize: Signal,
     parser: InputParser,
@@ -222,24 +255,13 @@ impl InputStream {
         let original_flags = fcntl_getfl(stdin.as_fd())?;
         fcntl_setfl(stdin.as_fd(), original_flags | OFlags::NONBLOCK)?;
         let (sender, chunks) = mpsc::channel(32);
-        let stop = Arc::new(AtomicBool::new(false));
-        let reader_stop = Arc::clone(&stop);
-        let reader = thread::Builder::new()
-            .name("ion-terminal-input".into())
-            .spawn(move || {
-                let unsent = read_chunks(&stdin, sender, &reader_stop);
-                ReaderReturn {
-                    file: stdin,
-                    unsent,
-                }
-            })?;
+        let reader = Reader::spawn(stdin, sender)?;
         let remote =
             std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
         Ok(Self {
             reader: Some(reader),
             file: None,
             unsent: None,
-            stop,
             chunks,
             resize,
             parser: InputParser::new(),
@@ -255,11 +277,8 @@ impl InputStream {
 
     /// Join the reader before releasing or quarantining input custody.
     pub(crate) fn suspend(&mut self) -> io::Result<()> {
-        self.stop.store(true, Ordering::Release);
         if let Some(reader) = self.reader.take() {
-            let returned = reader
-                .join()
-                .map_err(|_| io::Error::other("terminal reader panicked"))?;
+            let returned = reader.join()?;
             self.file = Some(returned.file);
             self.unsent = returned.unsent;
         }
@@ -278,16 +297,7 @@ impl InputStream {
             self.parse(&chunk?, true);
         }
         let (sender, chunks) = mpsc::channel(32);
-        self.stop.store(false, Ordering::Release);
-        let stop = Arc::clone(&self.stop);
-        self.reader = Some(
-            thread::Builder::new()
-                .name("ion-terminal-input".into())
-                .spawn(move || {
-                    let unsent = read_chunks(&file, sender, &stop);
-                    ReaderReturn { file, unsent }
-                })?,
-        );
+        self.reader = Some(Reader::spawn(file, sender)?);
         self.chunks = chunks;
         Ok(())
     }
@@ -775,11 +785,24 @@ impl Drop for InputStream {
 
 fn read_chunks(
     file: &File,
+    wake: &UnixStream,
     sender: mpsc::Sender<io::Result<Vec<u8>>>,
     stop: &AtomicBool,
 ) -> Option<io::Result<Vec<u8>>> {
     let mut buffer = [0u8; 8192];
+    let mut fds = [
+        PollFd::new(file, PollFlags::IN),
+        PollFd::new(wake, PollFlags::IN),
+    ];
     while !stop.load(Ordering::Acquire) {
+        match poll(&mut fds, None) {
+            Ok(_) => {}
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(error) => return send_chunk(&sender, Err(error.into()), stop).err(),
+        }
+        if !fds[1].revents().is_empty() || stop.load(Ordering::Acquire) {
+            break;
+        }
         match rustix::io::read(file, &mut buffer) {
             Ok(0) => break,
             Ok(size) => {
@@ -790,8 +813,10 @@ fn read_chunks(
             // Job-control signals can interrupt a background read before `fg`
             // restores the foreground group. No bytes were consumed on EINTR.
             Err(rustix::io::Errno::INTR) => continue,
-            Err(error) if error == rustix::io::Errno::AGAIN => {
-                thread::sleep(Duration::from_millis(5));
+            Err(rustix::io::Errno::AGAIN) if fds[0].revents().contains(PollFlags::HUP) => break,
+            Err(rustix::io::Errno::AGAIN) if !fds[0].revents().contains(PollFlags::ERR) => continue,
+            Err(rustix::io::Errno::AGAIN) => {
+                return send_chunk(&sender, Err(rustix::io::Errno::IO.into()), stop).err();
             }
             Err(error) => {
                 return send_chunk(&sender, Err(error.into()), stop).err();
@@ -871,7 +896,6 @@ mod tests {
             reader: None,
             file: None,
             unsent: None,
-            stop: Arc::new(AtomicBool::new(false)),
             chunks,
             resize: signal(SignalKind::window_change()).unwrap(),
             parser: InputParser::new(),
@@ -883,6 +907,38 @@ mod tests {
             eof: false,
             escape_grace: Duration::from_millis(100),
         }
+    }
+
+    #[tokio::test]
+    async fn idle_reader_joins_without_input_and_restarts_on_the_same_descriptor() {
+        use std::io::Write;
+        use std::os::fd::OwnedFd;
+
+        let (mut source, input) = UnixStream::pair().unwrap();
+        input.set_nonblocking(true).unwrap();
+        let file = File::from(OwnedFd::from(input));
+        let (sender, mut chunks) = mpsc::channel(1);
+        let reader = Reader::spawn(file, sender).unwrap();
+        source.write_all(b"before").unwrap();
+        assert_eq!(chunks.recv().await.unwrap().unwrap(), b"before");
+
+        // Keep the source open and quiet. Only the reader's wake peer closes.
+        let joined = tokio::task::spawn_blocking(move || reader.join());
+        let ReaderReturn { file, unsent } = tokio::time::timeout(Duration::from_secs(2), joined)
+            .await
+            .expect("idle reader did not wake")
+            .unwrap()
+            .unwrap();
+        assert!(unsent.is_none());
+        assert!(chunks.recv().await.is_none());
+
+        let (sender, mut chunks) = mpsc::channel(1);
+        let reader = Reader::spawn(file, sender).unwrap();
+        source.write_all(b"after").unwrap();
+        drop(source);
+        assert_eq!(chunks.recv().await.unwrap().unwrap(), b"after");
+        assert!(chunks.recv().await.is_none());
+        assert!(reader.join().unwrap().unsent.is_none());
     }
 
     #[tokio::test]
