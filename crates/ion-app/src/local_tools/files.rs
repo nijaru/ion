@@ -117,16 +117,7 @@ pub(super) fn read(cwd: &Path, args: &Value, stop: &CancellationToken) -> ToolOu
         Ok(len) => len,
         Err(e) => return error(format!("read {}: {e}", input.path)),
     };
-    let image_extension = path
-        .extension()
-        .and_then(|part| part.to_str())
-        .is_some_and(|part| {
-            matches!(
-                part.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "webp"
-            )
-        });
-    if image_extension || ImageMime::detect(&header[..header_len]).is_some() {
+    if ImageMime::detect(&header[..header_len]).is_some() {
         if input.offset.is_some()
             || input.limit.is_some()
             || input.byte_offset.is_some()
@@ -969,6 +960,31 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn read_uses_image_signatures_not_filename_suffixes() {
+        let root = std::env::temp_dir().join(format!("ion-read-kind-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let stop = CancellationToken::new();
+        for (name, text) in [("sample.PNG", "first\nsecond\n"), ("empty.jpg", "")] {
+            fs::write(root.join(name), text).unwrap();
+            let result = read(&root, &json!({"path":name,"offset":1,"limit":1}), &stop);
+            assert!(!result.is_error, "{}", result.value);
+            assert_eq!(
+                result.value["content"],
+                text.split_inclusive('\n').next().unwrap_or("")
+            );
+            assert!(result.images.is_empty());
+        }
+        fs::write(root.join("truncated.txt"), b"\x89PNG\r\n\x1a\n").unwrap();
+        let result = read(&root, &json!({"path":"truncated.txt","limit":1}), &stop);
+        assert!(result.is_error);
+        assert_eq!(
+            result.value["error"],
+            "image read does not accept line or byte ranges"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
