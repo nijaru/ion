@@ -2,6 +2,32 @@
 use super::responses_request::{RESPONSES_REPLAY, project_output, string};
 use super::*;
 
+// Diagnostics only: do not alter replay based on a provider's report. Keep
+// reasons bounded and never publish raw transformation fields or item IDs.
+fn reasoning_removals(transformations: &Value) -> impl Iterator<Item = ModelStreamEvent> {
+    let mut prefix = 0;
+    let mut other = 0;
+    for item in transformations.as_array().into_iter().flatten() {
+        if item["type"] != "reasoning" || item["action"] != "removed" {
+            continue;
+        }
+        match item["reason"].as_str() {
+            // Expected model behavior; otherwise reported on every replay.
+            Some("turn_boundary") | None | Some("") => {}
+            Some("prefix_mismatch") => prefix += 1,
+            Some(_) => other += 1,
+        }
+    }
+    [("prefix_mismatch", prefix), ("other", other)]
+        .into_iter()
+        .filter(|&(_, count)| count != 0)
+        .map(|(reason, count)| ModelStreamEvent::ProviderReplayNotice {
+            action: "removed".into(),
+            reason: reason.into(),
+            count,
+        })
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Channel {
     Text(usize),
@@ -495,6 +521,7 @@ impl ResponsesState {
                         },
                     )
                 };
+                let terminal_response = response;
                 let response = ModelResponse {
                     message: Message {
                         role: Role::Assistant,
@@ -512,6 +539,9 @@ impl ResponsesState {
                 if response.is_complete() {
                     validate_output(request, &response)?;
                 }
+                events.extend(reasoning_removals(
+                    &terminal_response["input_transformations"],
+                ));
                 events.push(ModelStreamEvent::Completed(response));
             }
             "response.failed" | "error" => {

@@ -964,6 +964,52 @@ fn usage_remains_unknown_when_absent_and_rejects_double_counting() {
 }
 
 #[tokio::test]
+async fn responses_stream_reports_unexpected_reasoning_removals_without_changing_replay() {
+    let output = vec![text_item("Done")];
+    let mut done = terminal(output.clone());
+    done["response"]["input_transformations"] = json!([
+        {"type":"reasoning", "action":"removed", "reason":"prefix_mismatch", "id":"rs_private"},
+        {"type":"reasoning", "action":"removed", "reason":"prefix_mismatch"},
+        {"type":"reasoning", "action":"removed", "reason":"turn_boundary"},
+        {"type":"reasoning", "action":"removed", "reason":"future_reason"},
+        {"type":"reasoning", "action":"removed", "reason":42},
+        {"type":"message", "action":"removed", "reason":"prefix_mismatch"},
+        {"type":"reasoning", "action":"retained", "reason":"prefix_mismatch"},
+        null
+    ]);
+    let endpoint = serve_split(event(&done), "200 OK", 23).await;
+    let service =
+        HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
+    let mut stream = service.stream(request()).await.unwrap();
+    let mut notices = Vec::new();
+    let mut response = None;
+    while let Some(event) = stream.next().await {
+        match event.unwrap() {
+            ModelStreamEvent::ProviderReplayNotice {
+                action,
+                reason,
+                count,
+            } => {
+                assert!(response.is_none());
+                assert_eq!(action, "removed");
+                notices.push((reason, count));
+            }
+            ModelStreamEvent::Completed(value) => response = Some(value),
+            _ => {}
+        }
+    }
+    assert_eq!(
+        notices,
+        vec![("prefix_mismatch".into(), 2), ("other".into(), 1)]
+    );
+    let response = response.unwrap();
+    assert_eq!(response.message.content, vec![Content::Text("Done".into())]);
+    let replay = serde_json::to_value(response.message.provider_replay.unwrap()).unwrap();
+    assert!(!replay.to_string().contains("rs_private"));
+    assert!(!replay.to_string().contains("input_transformations"));
+}
+
+#[tokio::test]
 async fn full_snapshot_frames_are_bounded_separately_from_chat_deltas() {
     let text = "x".repeat(MAX_FRAME + 1);
     let endpoint = serve_split(event(&terminal(vec![text_item(&text)])), "200 OK", 997).await;
