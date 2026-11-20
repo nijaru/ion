@@ -161,7 +161,10 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
         child = None
         try:
             subprocess.run([BINARY, "use", "smoke", "fixture", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
-            child = subprocess.Popen([BINARY, "--cwd", work, "chat", "--tui-mode", mode], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
+            args = [BINARY, "--cwd", work, "chat", "--tui-mode", mode]
+            if ambiguous_resize:
+                args.append("--dedicated-pane")
+            child = subprocess.Popen(args, env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=controlling_terminal)
             os.close(slave)
             slave = None
             terminal = KeyboardTerminal(master, supported, supported and not panic, grapheme_mode)
@@ -200,19 +203,19 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                 until(lambda: len(requests) == 1 and b"done" in output)
                 os.write(master, b"UNSENT_RESIZE_DRAFT")
                 until(lambda: b"UNSENT_RESIZE_DRAFT" in output)
-                # Report a column the resized terminal cannot have. The app
-                # must append a fresh inline region before painting anything.
+                # A dedicated pane must rebuild without asking where the
+                # terminal moved the old composer.
                 terminal.cursor_reply = b"\x1b[2;80R"
                 checkpoint = len(output)
                 fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 65, 0, 0))
-                anchor = b"\x1b[24;1H\r\n"
-                until(lambda: anchor in output[checkpoint:]
+                reset = b"\x1b[2J\x1b[H\x1b[3J"
+                until(lambda: reset in output[checkpoint:]
                       and b"UNSENT_RESIZE_DRAFT" in output[checkpoint:])
                 recovered = bytes(output[checkpoint:])
-                before_anchor = recovered.split(anchor, 1)[0]
-                assert not re.search(rb"\x1b\[[0-9]*[JK]", before_anchor), before_anchor
+                assert recovered.count(reset) == 1
+                assert b"\x1b[6n" not in recovered
                 assert b"\x1b[?1049h" not in recovered
-                assert b"ACTIVE_TURN" not in recovered, recovered
+                assert b"ACTIVE_TURN" in recovered, recovered
                 assert not terminal.alternate
                 os.write(master, b"\x1b[DX")
                 until(lambda: b"UNSENT_RESIZE_DRAFXT" in output[checkpoint:])

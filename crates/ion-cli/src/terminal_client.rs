@@ -173,6 +173,7 @@ pub struct ChatInit {
     pub startup_diagnostics: Vec<String>,
     pub initial_prompts: Vec<String>,
     pub tui_mode: TuiMode,
+    pub dedicated_pane: bool,
     pub(crate) keys: KeyBindings,
     pub(crate) themes: crate::themes::Themes,
     pub(crate) interrupt: tokio::signal::unix::Signal,
@@ -211,7 +212,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             .await
             .context("interactive chat requires a terminal")?);
         let terminal = terminal_owner.as_mut().expect("entered terminal");
-        screen_owner = Some(new_inline_screen(terminal, &ui.termination).await?);
+        screen_owner = Some(if init.dedicated_pane {
+            let (width, height) = terminal.size()?;
+            Screen::dedicated(width, height)
+        } else {
+            new_inline_screen(terminal, &ui.termination).await?
+        });
         let screen = screen_owner.as_mut().expect("initialized screen");
         ui.cwd = runtime.session().cwd().context("terminal coding requires a working directory")?.to_owned();
         ui.session_label = format!("Session {}", &runtime.session().id().to_string()[..8]);
@@ -558,11 +564,7 @@ async fn release_surface(terminal: &mut TerminalSession, screen: &mut Screen) ->
     // indefinitely when the terminal stops answering geometry queries.
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            if terminal.prepare_inline(screen).await?.is_some()
-                && terminal
-                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
-                    .is_some()
-            {
+            if terminal.try_release_inline(screen).await? {
                 return Ok::<_, anyhow::Error>(());
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -588,10 +590,23 @@ async fn suspend_terminal(
     program.published = None;
     // The shell may have written anywhere while we were stopped. Its current
     // cursor, not the old live footprint, establishes our new ownership boundary.
-    *screen = new_inline_screen(terminal, &ui.termination)
+    *screen = reacquire_inline_screen(terminal, screen, &ui.termination)
         .await
         .context("restore terminal after job suspension")?;
     Ok(())
+}
+
+async fn reacquire_inline_screen(
+    terminal: &mut TerminalSession,
+    screen: &Screen,
+    termination: &CancellationToken,
+) -> Result<Screen> {
+    if screen.is_dedicated() {
+        let (width, height) = terminal.size()?;
+        Ok(Screen::dedicated(width, height))
+    } else {
+        new_inline_screen(terminal, termination).await
+    }
 }
 
 async fn new_inline_screen(
@@ -653,7 +668,7 @@ async fn login_in_terminal(
         }
         Err(error) => Err(error),
     };
-    let restored = new_inline_screen(terminal, termination).await;
+    let restored = reacquire_inline_screen(terminal, screen, termination).await;
     program.blocked_auth = false;
     program.publish(terminal, false)?;
     *screen = restored.context("restore inline chat after login")?;
@@ -733,7 +748,7 @@ async fn edit_text_in_terminal(
             .with_external(|| crate::external_editor::edit(text, max_bytes, termination))
             .await
             .context("external editor terminal handoff")?;
-        *screen = new_inline_screen(terminal, termination)
+        *screen = reacquire_inline_screen(terminal, screen, termination)
             .await
             .context("restore inline chat after editor")?;
         Ok(edited)
@@ -926,7 +941,12 @@ impl Frontend {
         );
     }
 
+    #[cfg(test)]
     fn pending_history_rows(&mut self, width: usize) -> Vec<Line<'static>> {
+        self.history_rows(width, conversation::Rows::Pending)
+    }
+
+    fn history_rows(&mut self, width: usize, selection: conversation::Rows) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         if let Some(banner) = self.conversation.banner() {
             rows.push(Line::default());
@@ -936,6 +956,7 @@ impl Frontend {
         let content = self.presenter.publication(
             &self.conversation,
             width.saturating_sub(1).max(1),
+            selection,
             &crate::tool_output::RenderOptions::new(
                 self.output_detail,
                 &self.keys,
@@ -1383,7 +1404,12 @@ fn draw_prepared(
     }
 
     let publication = ui.conversation.prepare_publication();
-    let commit_rows = ui.pending_history_rows(width.max(1) as usize);
+    let selection = if screen.replay_pending() {
+        conversation::Rows::Sealed
+    } else {
+        conversation::Rows::Pending
+    };
+    let commit_rows = ui.history_rows(width.max(1) as usize, selection);
     let width = width.max(1) as usize;
     let physical_budget = height.max(1) as usize;
     let dock = dock::Dock::prepare(ui, operation, model, queued, width, physical_budget);
@@ -1410,6 +1436,7 @@ fn draw_prepared(
     };
     let desired_live_height = frame.required_rows(width as u16).min(physical_budget);
     let painted = terminal.paint_inline(screen, |screen, out| {
+        screen.begin_replay(out)?;
         screen.commit_lines(out, &commit_rows)?;
         if desired_live_height > screen.live_height() {
             screen.ensure_live_height(out, desired_live_height)?;

@@ -110,7 +110,7 @@ fn read_at(
     view.scroll(isize::MIN);
     presenter.window(document, view, (width, 8), false, false, options);
     let mut offset = 0;
-    for block in BlockPresenter::blocks(document, false, options) {
+    for block in BlockPresenter::blocks(document, Rows::All, options) {
         let layout = presenter.layout(&block, document.revision(), width, options);
         let gap = usize::from(block.gap && !layout.content.rows.is_empty());
         if block.key == target.0 {

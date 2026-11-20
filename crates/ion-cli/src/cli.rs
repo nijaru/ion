@@ -33,6 +33,7 @@ pub(crate) struct Invocation {
     pub prompt_templates: Vec<PathBuf>,
     pub no_prompt_templates: bool,
     pub tui_mode: TuiMode,
+    pub dedicated_pane: bool,
     pub use_theme: Option<String>,
     pub json: bool,
     pub completion_delivery: ion_core::CompletionDelivery,
@@ -303,6 +304,8 @@ fn options() -> Vec<Arg> {
             .help("Skip default prompt templates; explicit --prompt-template paths still load"),
         Arg::new("use_theme").long("use-theme").value_name("NAME")
             .help("Terminal theme for this invocation; does not change the saved preference"),
+        Arg::new("dedicated_pane").long("dedicated-pane").action(ArgAction::SetTrue)
+            .help("Allow inline chat to clear and rebuild this pane's terminal scrollback"),
         Arg::new("tui_mode").long("tui-mode").value_parser(clap::value_parser!(TuiMode))
             .value_name("MODE").help("Interactive surface: inline native scrollback (default) or fullscreen"),
     ]
@@ -337,7 +340,7 @@ fn applicable(command: &str, option: &str) -> bool {
             coding || matches!(command, "resources" | "doctor" | "compact")
         }
         "json" => command == "run",
-        "tui_mode" | "use_theme" => command == "chat",
+        "tui_mode" | "dedicated_pane" | "use_theme" => command == "chat",
         _ => false,
     }
 }
@@ -522,6 +525,7 @@ fn normalize(mut matches: ArgMatches, interactive: bool) -> Result<Invocation> {
         prompt_templates: many(&mut levels, "prompt_templates"),
         no_prompt_templates: one(&mut levels, "no_prompt_templates")?.unwrap_or(false),
         tui_mode: one(&mut levels, "tui_mode")?.unwrap_or(TuiMode::Inline),
+        dedicated_pane: one(&mut levels, "dedicated_pane")?.unwrap_or(false),
         use_theme: one(&mut levels, "use_theme")?,
         json,
         completion_delivery: one(&mut levels, "completion_delivery")?.unwrap_or_default(),

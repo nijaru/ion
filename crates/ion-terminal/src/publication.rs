@@ -130,6 +130,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn replay_clear_is_not_emitted_when_geometry_changes() {
+        let mut screen = Screen::dedicated(20, 8);
+        let staged = PreparedPaint::new(&screen, false, true, |screen, out| {
+            screen.begin_replay(out)?;
+            screen.commit_lines(out, &[ratatui::text::Line::raw("settled history")])
+        })
+        .unwrap();
+        let mut out = Vec::new();
+        assert!(
+            staged
+                .publish(&mut screen, (21, 8), &mut out)
+                .unwrap()
+                .is_none()
+        );
+        assert!(out.is_empty());
+        assert!(screen.replay_pending());
+    }
+
     struct FailedOutput {
         flush: bool,
     }

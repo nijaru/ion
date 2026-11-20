@@ -2,6 +2,8 @@
 
 Run `ion` in a terminal, or explicitly use `ion chat`, after [configuring a model](../README.md#set-up-a-model). The default surface is inline native scrollback; `ion --tui-mode fullscreen` selects fullscreen conversation view. Both are experimental, not qualified for daily use.
 
+For a pane dedicated to Ion, use `ion chat --dedicated-pane`. Ion clears the pane and rebuilds its inline transcript after a resize instead of trying to locate the old composer. This keeps the draft in place logically and lets the terminal handle scrolling and selection. Use it only in a fresh pane: Ion can clear existing terminal scrollback, including shell output. In Rex, for example, run `rex run -- ion chat --dedicated-pane`.
+
 `/help` lists commands, `/help COMMAND` shows usage and `/help keys` shows effective keybindings. The keys below are defaults.
 
 Reopening a Session with a saved, available model and no launch input shows its history even if that provider's key is missing. Ion keeps the saved model rather than switching providers. A new prompt without the required credential returns its draft and attachments without starting a Turn; use `/login` or explicitly select another model. First-run setup, launch inputs and explicit changes to another model still use startup credential checks.

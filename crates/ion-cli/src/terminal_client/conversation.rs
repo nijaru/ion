@@ -86,6 +86,13 @@ struct Notice {
     diagnostic: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Rows {
+    Pending,
+    Sealed,
+    All,
+}
+
 pub(super) enum Segment<'a> {
     Item(&'a TranscriptItem),
     Notice { ordinal: usize, text: &'a str },
@@ -381,9 +388,10 @@ impl Conversation {
 
     /// Presentation consumes the same ordered document in both viewports. Local
     /// output is anchored to a committed source boundary, never provisional rows.
-    pub(super) fn segments(&self, pending: bool) -> Vec<Segment<'_>> {
+    pub(super) fn segments(&self, rows: Rows) -> Vec<Segment<'_>> {
+        let pending = rows == Rows::Pending;
         let begin = if pending { self.boundary() } else { 0 };
-        let end = if pending {
+        let end = if rows != Rows::All {
             self.canonical.sealed_prefix()
         } else {
             self.canonical.items.len()
@@ -409,7 +417,7 @@ impl Conversation {
             cursor = after;
         }
         segments.extend(self.canonical.items[cursor..end].iter().map(Segment::Item));
-        if !pending {
+        if rows == Rows::All {
             segments.extend(self.live_suffix().iter().map(Segment::Item));
         }
         segments

@@ -55,7 +55,7 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
         );
         assert_eq!(
             conversation
-                .segments(true)
+                .segments(Rows::Pending)
                 .iter()
                 .filter(|segment| matches!(
                     segment,
@@ -90,7 +90,7 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
             1
         );
         assert!(
-            conversation.segments(true).is_empty(),
+            conversation.segments(Rows::Pending).is_empty(),
             "canonical refresh cannot republish an acknowledged closure"
         );
         fixture.control.shutdown().await;
@@ -151,7 +151,7 @@ async fn sealed_blocks_publish_during_a_turn_but_provisional_boundaries_do_not()
     }
     let sources = |conversation: &Conversation, pending| {
         conversation
-            .segments(pending)
+            .segments(if pending { Rows::Pending } else { Rows::All })
             .into_iter()
             .filter_map(|segment| match segment {
                 Segment::Item(item) => item.source(),
@@ -241,7 +241,7 @@ async fn prepared_publication_is_prefix_scoped_and_cannot_replay_after_an_empty_
     let prepared = conversation.prepare_publication();
     conversation.note("later".into(), false);
     assert!(conversation.acknowledge(prepared));
-    let pending = conversation.segments(true);
+    let pending = conversation.segments(Rows::Pending);
     assert!(matches!(
         pending.as_slice(),
         [Segment::Notice { text: "later", .. }]
@@ -261,7 +261,7 @@ async fn prepared_publication_is_prefix_scoped_and_cannot_replay_after_an_empty_
         "returning to an identical scope cannot revive an old frame"
     );
     assert!(
-        conversation.segments(false).is_empty(),
+        conversation.segments(Rows::All).is_empty(),
         "local output does not leak across sessions"
     );
     fixture.control.shutdown().await;

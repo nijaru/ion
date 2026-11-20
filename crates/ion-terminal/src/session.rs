@@ -5,6 +5,7 @@ use std::sync::{
     Arc, LazyLock, Mutex, MutexGuard, Once, TryLockError, Weak,
     atomic::{AtomicU64, Ordering},
 };
+use std::time::Duration;
 
 #[cfg(test)]
 use crossterm::SynchronizedUpdate;
@@ -281,16 +282,30 @@ impl TerminalSession {
     pub async fn release_inline(&mut self, screen: &mut Screen) -> io::Result<()> {
         self.leave_alt_screen()?;
         screen.invalidate();
-        loop {
-            if self.prepare_inline(screen).await?.is_some()
-                && self
-                    .paint_inline(screen, |screen, out| screen.release_inline(out))?
-                    .is_some()
-            {
-                return Ok(());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if self.try_release_inline(screen).await? {
+                    return Ok(());
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
-            tokio::task::yield_now().await;
+        })
+        .await
+        .map_err(|_| io::Error::other("could not safely release the inline surface"))?
+    }
+
+    pub async fn try_release_inline(&mut self, screen: &mut Screen) -> io::Result<bool> {
+        if self.prepare_inline(screen).await?.is_none() {
+            return Ok(false);
         }
+        if screen.replay_pending() {
+            // Leave the old primary display alone until its replacement can
+            // be painted. A modal or an external program may open meanwhile.
+            return Ok(true);
+        }
+        Ok(self
+            .paint_inline(screen, |screen, out| screen.release_inline(out))?
+            .is_some())
     }
 
     /// Pop only the alternate push before restoring the primary surface.
@@ -346,7 +361,11 @@ impl TerminalSession {
         let size = self.size()?;
         if notified {
             screen.note_resize(size);
-        } else {
+        }
+        if screen.is_dedicated() {
+            return Ok(screen.prepare_replay(size).then_some(size));
+        }
+        if !notified {
             screen.observe_resize(size);
         }
         if screen.reconciliation_pending() {
@@ -358,6 +377,7 @@ impl TerminalSession {
                 return Ok(None);
             };
             if !screen.reconcile_inline(&mut self.output()?, size.0, size.1, cursor)? {
+                screen.note_resize(size);
                 return Ok(None);
             }
             return Ok(Some(size));

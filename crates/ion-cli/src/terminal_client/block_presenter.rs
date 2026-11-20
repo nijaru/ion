@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use ion_core::{TranscriptItem, TranscriptPart, TranscriptSource};
 use ratatui::text::Line;
 
-use super::conversation::{Conversation, Scope, Segment};
+use super::conversation::{Conversation, Rows, Scope, Segment};
 use crate::{
     presentation_style::Theme,
     tool_output::{OutputDetail, RenderOptions},
@@ -199,12 +199,12 @@ impl BlockPresenter {
 
     fn blocks<'a>(
         conversation: &'a Conversation,
-        pending: bool,
+        rows: Rows,
         options: &RenderOptions<'_>,
     ) -> Vec<Block<'a>> {
         let mut previous = None;
-        let mut visible_before = pending && conversation.has_published_prefix();
-        conversation.segments(pending).into_iter().map(|segment| {
+        let mut visible_before = rows == Rows::Pending && conversation.has_published_prefix();
+        conversation.segments(rows).into_iter().map(|segment| {
             let (key, visible) = match &segment {
                 Segment::Item(item) => {
                     let key = match item.source() {
@@ -278,11 +278,12 @@ impl BlockPresenter {
         &mut self,
         conversation: &Conversation,
         width: usize,
+        selection: Rows,
         options: &RenderOptions<'_>,
     ) -> Vec<Line<'static>> {
         self.configure(conversation, width, options);
         let mut rows = Vec::new();
-        for block in Self::blocks(conversation, true, options) {
+        for block in Self::blocks(conversation, selection, options) {
             let body = &self
                 .layout(&block, conversation.revision(), width, options)
                 .content
@@ -488,7 +489,7 @@ impl BlockPresenter {
             view.follow_end();
             view.scope = conversation.scope().cloned();
         }
-        let mut blocks = Self::blocks(conversation, false, options);
+        let mut blocks = Self::blocks(conversation, Rows::All, options);
         let keys: HashSet<_> = blocks.iter().map(|block| block.key).collect();
         self.layouts.retain(|(key, _), _| keys.contains(key));
         if inline && !view.reading {

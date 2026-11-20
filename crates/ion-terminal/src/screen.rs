@@ -87,6 +87,7 @@ impl Surface {
 }
 
 const RESIZE_SETTLE: Duration = Duration::from_millis(300);
+const REPLAY_SETTLE: Duration = Duration::from_millis(50);
 
 #[derive(Clone, Copy)]
 struct PendingResize {
@@ -105,6 +106,8 @@ pub struct Screen {
     /// Invalidating cell comparisons must not discard primary ownership evidence.
     repaint: bool,
     resize_pending: Option<PendingResize>,
+    dedicated: bool,
+    replay_pending: bool,
     /// Last primary cursor, including when hidden. Alternate output never changes it.
     physical_cursor: (u16, u16),
     fullscreen_size: (u16, u16),
@@ -130,6 +133,8 @@ impl Screen {
             current: self.current.clone(),
             repaint: self.repaint,
             resize_pending: self.resize_pending,
+            dedicated: self.dedicated,
+            replay_pending: self.replay_pending,
             physical_cursor: self.physical_cursor,
             fullscreen_size: self.fullscreen_size,
             cursor_shown: self.cursor_shown,
@@ -152,6 +157,8 @@ impl Screen {
             current: None,
             repaint: true,
             resize_pending: None,
+            dedicated: false,
+            replay_pending: false,
             physical_cursor: (origin, 0),
             fullscreen_size: (width.max(1), screen_height),
             cursor_shown: None,
@@ -238,7 +245,12 @@ impl Screen {
         // even when cursor columns happen to agree.
         self.resize_pending = Some(PendingResize {
             size,
-            after: Instant::now() + RESIZE_SETTLE,
+            after: Instant::now()
+                + if self.dedicated {
+                    REPLAY_SETTLE
+                } else {
+                    RESIZE_SETTLE
+                },
         });
     }
 
@@ -251,6 +263,43 @@ impl Screen {
         if size != observed {
             self.note_resize(size);
         }
+    }
+
+    /// A caller-owned pane can rebuild its primary screen from the transcript.
+    pub fn dedicated(width: u16, height: u16) -> Self {
+        let mut screen = Self::new(width, 0, height);
+        screen.dedicated = true;
+        screen.replay_pending = true;
+        screen
+    }
+
+    pub fn is_dedicated(&self) -> bool {
+        self.dedicated
+    }
+
+    pub fn replay_pending(&self) -> bool {
+        self.replay_pending
+    }
+
+    pub(crate) fn prepare_replay(&mut self, size: (u16, u16)) -> bool {
+        self.observe_resize(size);
+        if self.reconciliation_pending() {
+            if !self.reconciliation_ready() {
+                return false;
+            }
+            *self = Self::dedicated(size.0, size.1);
+        }
+        true
+    }
+
+    /// Stage the clear with its replacement content, not as a separate write.
+    /// The geometry fence can then reject both without touching the terminal.
+    pub fn begin_replay(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if self.replay_pending {
+            out.write_all(b"\x1b[0m\x1b[2J\x1b[H\x1b[3J")?;
+            self.replay_pending = false;
+        }
+        Ok(())
     }
 
     pub fn reconciliation_pending(&self) -> bool {
@@ -287,7 +336,7 @@ impl Screen {
     /// cannot undo the emulator's earlier scrolling. Recognized coordinates
     /// include display cells, compact glyph indexes, and bottom-retaining
     /// clipping that resets a cropped caret to top-left. Other incoherent
-    /// evidence starts a fresh inline region below the existing screen.
+    /// evidence defers primary writes: the old rows may include shell output.
     pub fn reconcile_inline(
         &mut self,
         out: &mut impl Write,
@@ -303,19 +352,13 @@ impl Screen {
         }
         let width = width.max(1);
         let height = height.max(1);
-        write!(out, "\x1b[0m")?;
-        let origin = if let Ok(origin) = self.reflowed_origin(width, height, cursor) {
-            // Erase only the visible owned rows, never the emulator's history.
-            for row in origin..height {
-                write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
-            }
-            origin
-        } else {
-            // The old boundary is unknown. Append one blank row instead of
-            // erasing guessed rows or rebuilding terminal-owned history.
-            write!(out, "\x1b[{height};1H\r\n")?;
-            height - 1
+        let Ok(origin) = self.reflowed_origin(width, height, cursor) else {
+            return Ok(false);
         };
+        write!(out, "\x1b[0m")?;
+        for row in origin..height {
+            write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
+        }
         out.flush()?;
         self.width = width;
         self.screen_height = height;
@@ -1449,11 +1492,10 @@ mod tests {
         for cursor in [(24, 5), (5, 7), (4, 5)] {
             let mut ambiguous = screen.staged();
             out.clear();
-            assert!(ambiguous.reconcile_inline(&mut out, 24, 7, cursor).unwrap());
-            assert_eq!(out, b"\x1b[0m\x1b[7;1H\r\n");
-            assert_eq!(ambiguous.primary_size(), (24, 7));
-            assert_eq!(ambiguous.origin, 6);
-            assert!(ambiguous.current.is_none());
+            assert!(!ambiguous.reconcile_inline(&mut out, 24, 7, cursor).unwrap());
+            assert!(out.is_empty());
+            assert_eq!(ambiguous.primary_size(), (100, 30));
+            assert_eq!(ambiguous.origin, 26);
         }
         // A reply from the restored primary, not the modal cursor, locates
         // the footprint using the retained 100-column rows.
@@ -1508,10 +1550,9 @@ mod tests {
             )
             .unwrap();
         out.clear();
-        assert!(screen.reconcile_inline(&mut out, 2, 5, (0, 3)).unwrap());
-        assert_eq!(out, b"\x1b[0m\x1b[5;1H\r\n");
-        assert_eq!(screen.origin, 4);
-        assert_eq!(screen.primary_size(), (2, 5));
+        assert!(!screen.reconcile_inline(&mut out, 2, 5, (0, 3)).unwrap());
+        assert!(out.is_empty());
+        assert_eq!(screen.origin, 3);
     }
 
     #[test]
@@ -1633,12 +1674,12 @@ mod tests {
                 .unwrap();
             out.clear();
             assert!(
-                screen
+                !screen
                     .reconcile_inline(&mut out, 24, height, reported)
                     .unwrap()
             );
-            assert_eq!(out, format!("\x1b[0m\x1b[{height};1H\r\n").as_bytes());
-            assert_eq!(screen.origin, height - 1);
+            assert!(out.is_empty());
+            assert_eq!(screen.origin, 2);
         }
     }
 

@@ -828,6 +828,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                             startup_diagnostics,
                             initial_prompts: prompts,
                             tui_mode: cli.tui_mode,
+                            dedicated_pane: cli.dedicated_pane,
                             keys,
                             themes,
                             interrupt,
