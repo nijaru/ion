@@ -452,7 +452,9 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
             return Err(format!("edits[{index}].old_text must not be empty"));
         }
         let Some(start) = normalized.find(&old) else {
-            return Err(format!("edits[{index}].old_text was not found"));
+            return Err(format!(
+                "edits[{index}].old_text was not found; reread the target and copy the current text, including indentation and trailing spaces"
+            ));
         };
         // Search after the first character, not after the whole match, so
         // overlapping occurrences are ambiguous too ("aa" in "aaa").
@@ -1050,7 +1052,7 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_edit_reports_bounded_match_lines_without_writing() {
+    fn rejected_edit_explains_how_to_retry_without_writing() {
         let root =
             std::env::temp_dir().join(format!("ion-edit-ambiguous-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
@@ -1070,6 +1072,13 @@ mod tests {
         assert_eq!(
             rejected.value["error"],
             "edits[0].old_text is ambiguous: found at least 5 matches (first start lines: 2, 2, 3, 4); include more surrounding text"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        let missing = run("header \nααα");
+        assert!(missing.is_error);
+        assert_eq!(
+            missing.value["error"],
+            "edits[0].old_text was not found; reread the target and copy the current text, including indentation and trailing spaces"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), source);
         let retried = run("header\nααα");
