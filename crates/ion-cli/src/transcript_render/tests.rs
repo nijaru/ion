@@ -857,7 +857,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     assert!(compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines"));
     assert!(compact.contains("not shared with model") && compact.contains("Exited 7"));
     assert!(
-        compact.contains("Session artifact 0 · stdout · 1234 bytes · complete")
+        compact.contains("Artifact 0 · stdout · 1234 bytes")
             && compact.contains("stdout truncated")
     );
     let grouped = TranscriptProjection {
@@ -883,7 +883,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     let folded = plain_rows(&grouped, 120).join("\n");
     assert!(!folded.contains("SECOND_READ"));
     assert!(folded.contains("2 read outputs folded"));
-    assert!(folded.contains("Session artifact 0 · read_capture · 1234 bytes · complete"));
+    assert!(folded.contains("Artifact 0 · read_capture · 1234 bytes"));
     assert!(
         folded.contains("other.txt: content · lines 4–4")
             && folded.contains("earlier lines not recorded")
@@ -1249,7 +1249,7 @@ fn shell_preview_shows_observed_output_outcome_and_context_choice() {
     assert!(rendered.contains("exit 7"));
     assert!(rendered.contains("not shared with model"));
     assert!(rendered.contains("stdout truncated"));
-    assert!(rendered.contains("Session artifact 0 · stdout�[2J · 1234 bytes · incomplete"));
+    assert!(rendered.contains("Artifact 0 · stdout�[2J · 1234 bytes · incomplete"));
     assert!(!rendered.contains("temporary"));
     assert!(rendered.contains("earlier stdout lines"));
     assert!(!rendered.contains("\u{1b}"));

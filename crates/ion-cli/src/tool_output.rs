@@ -393,8 +393,26 @@ pub(crate) fn render_artifacts(
     width: usize,
     detail: &RenderOptions<'_>,
 ) {
-    for metadata in artifact_metadata(artifacts) {
-        note(rows, prefix, &metadata, width, detail.theme);
+    match detail.detail {
+        OutputDetail::Compact => {
+            for (index, artifact) in artifacts.iter().enumerate() {
+                let incomplete = if artifact.complete {
+                    ""
+                } else {
+                    " · incomplete"
+                };
+                let badge = format!(
+                    "Artifact {index} · {} · {} bytes{incomplete}",
+                    artifact.label, artifact.bytes,
+                );
+                note(rows, prefix, &badge, width, detail.theme);
+            }
+        }
+        OutputDetail::Expanded => {
+            for metadata in artifact_metadata(artifacts) {
+                note(rows, prefix, &metadata, width, detail.theme);
+            }
+        }
     }
 }
 
@@ -541,19 +559,32 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
                 .join("\n");
             assert!(text.contains("stdout decoding loss"), "{text}");
-            assert!(
-                text.contains("Session artifact 0 · stdout · 1234 bytes · complete"),
-                "{text}"
-            );
-            assert!(
-                text.contains("Session artifact 1 · stderr · 1234 bytes · incomplete"),
-                "{text}"
-            );
-            assert!(
-                text.contains(&uuid::Uuid::from_u128(42).to_string()),
-                "{text}"
-            );
-            assert!(text.contains(&"a".repeat(64)), "{text}");
+            if detail == OutputDetail::Compact {
+                assert!(text.contains("Artifact 0 · stdout · 1234 bytes"), "{text}");
+                assert!(
+                    text.contains("Artifact 1 · stderr · 1234 bytes · incomplete"),
+                    "{text}"
+                );
+                assert!(
+                    !text.contains(&uuid::Uuid::from_u128(42).to_string()),
+                    "{text}"
+                );
+                assert!(!text.contains(&"a".repeat(64)), "{text}");
+            } else {
+                assert!(
+                    text.contains("Session artifact 0 · stdout · 1234 bytes · complete"),
+                    "{text}"
+                );
+                assert!(
+                    text.contains("Session artifact 1 · stderr · 1234 bytes · incomplete"),
+                    "{text}"
+                );
+                assert!(
+                    text.contains(&uuid::Uuid::from_u128(42).to_string()),
+                    "{text}"
+                );
+                assert!(text.contains(&"a".repeat(64)), "{text}");
+            }
             assert!(!text.contains("temporary"), "{text}");
             assert!(text.contains("stderr capture incomplete"), "{text}");
             assert!(text.contains("omitted byte count unknown"), "{text}");
@@ -630,9 +661,11 @@ pub(crate) mod tests {
                 let mut rows = vec![];
                 render_activity(&mut rows, &activity, "", 200, &detail);
                 assert!(
-                    !rows
-                        .iter()
-                        .any(|row| row.line.to_string().contains("Session artifact"))
+                    !rows.iter().any(|row| row
+                        .line
+                        .to_string()
+                        .to_lowercase()
+                        .contains("artifact 0"))
                 );
                 activity.result.as_mut().unwrap().artifacts =
                     vec![artifact("raw_mcp_result\u{1b}", false)];
@@ -642,10 +675,15 @@ pub(crate) mod tests {
                     .map(|row| row.line.to_string())
                     .collect::<Vec<_>>()
                     .join("\n");
-                assert!(
-                    text.contains("Session artifact 0 · raw_mcp_result� · 1234 bytes · incomplete"),
-                    "{text}"
-                );
+                let expected = match detail.detail {
+                    OutputDetail::Compact => {
+                        "Artifact 0 · raw_mcp_result� · 1234 bytes · incomplete"
+                    }
+                    OutputDetail::Expanded => {
+                        "Session artifact 0 · raw_mcp_result� · 1234 bytes · incomplete"
+                    }
+                };
+                assert!(text.contains(expected), "{text}");
                 assert!(
                     !text.contains('\u{1b}') && !text.contains("OPAQUE_JSON"),
                     "{text}"
