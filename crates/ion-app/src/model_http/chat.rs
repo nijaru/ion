@@ -268,8 +268,12 @@ impl ChatState {
             "content_filter" => ResponseTermination::Incomplete(IncompleteReason::ContentFilter),
             _ => return Err(unsupported("unsupported Chat Completions finish_reason")),
         };
+        // Some OpenAI-compatible gateways end a streamed function call with
+        // `stop` (e.g. Open WebUI #21768). Accept only complete calls on the
+        // generic wire; do not relax the dedicated provider contracts.
+        let compatible_stop = finish == "stop" && self.wire == HttpWire::ChatCompletions;
         if (finish == "tool_calls" && self.calls.is_empty())
-            || (finish == "stop" && !self.calls.is_empty())
+            || (finish == "stop" && !self.calls.is_empty() && !compatible_stop)
         {
             return Err(invalid("finish_reason contradicts tool calls"));
         }
@@ -297,6 +301,11 @@ impl ChatState {
                     return Err(invalid("incomplete or duplicate streamed function call"));
                 }
                 let (arguments, raw_arguments) = parse_tool_arguments(call.arguments);
+                if compatible_stop && raw_arguments.is_some() {
+                    return Err(invalid(
+                        "incomplete function arguments at finish_reason stop",
+                    ));
+                }
                 content.push(Content::ToolCall(ToolCall {
                     id: call.id,
                     name: call.name,

@@ -1515,6 +1515,32 @@ fn openrouter_keeps_signature_only_text_detail() {
 }
 
 #[test]
+fn generic_chat_stop_accepts_only_complete_streamed_calls() {
+    let request = request();
+    let complete = |wire, arguments: &str| {
+        let mut state = ChatState::new(wire);
+        state.accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":arguments}}]}}]})).unwrap();
+        state
+            .accept(&json!({"choices":[{"delta":{},"finish_reason":"stop"}]}))
+            .unwrap();
+        state.complete(&request)
+    };
+    let arguments = r#"{"path":"note.txt"}"#;
+    let completed = complete(HttpWire::ChatCompletions, arguments).unwrap();
+    assert_eq!(
+        completed.message.content,
+        vec![Content::ToolCall(ToolCall {
+            id: "a".into(),
+            name: "read".into(),
+            arguments: json!({"path":"note.txt"}),
+            raw_arguments: None,
+        })]
+    );
+    assert!(complete(HttpWire::ChatCompletions, "{\"path\":").is_err());
+    assert!(complete(HttpWire::OpenRouterChat, arguments).is_err());
+}
+
+#[test]
 fn chat_completion_needs_finish_and_valid_tool() {
     let request = request();
     let mut state = ChatState::default();
