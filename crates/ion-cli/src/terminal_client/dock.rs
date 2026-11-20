@@ -346,7 +346,7 @@ impl Dock {
         let picker = ui.pickers.active().expect("derived picker custody");
         let query = input_window(
             &picker.query,
-            picker.query.len(),
+            ui.pickers.query_cursor(),
             width,
             height.saturating_sub(1).clamp(1, 3),
         );

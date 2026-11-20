@@ -49,7 +49,7 @@ fn line_end(text: &str, cursor: usize) -> usize {
 
 // Unicode word boundaries can fall inside a grapheme (for example Thai กำ).
 // Snap outward with the complete literal's context, not a truncated word slice.
-fn word_grapheme_boundary(text: &str, offset: usize, forward: bool) -> usize {
+pub(super) fn grapheme_boundary(text: &str, offset: usize, forward: bool) -> usize {
     let mut cursor = GraphemeCursor::new(offset, text.len(), true);
     if cursor
         .is_boundary(text, 0)
@@ -77,7 +77,7 @@ fn word_start(text: &str, cursor: usize) -> usize {
         .rev()
         .find(|(_, part)| !part.chars().all(char::is_whitespace))
         .map_or(start, |(at, _)| start + at);
-    word_grapheme_boundary(text, destination, false)
+    grapheme_boundary(text, destination, false)
 }
 
 fn word_end(text: &str, cursor: usize) -> usize {
@@ -89,7 +89,7 @@ fn word_end(text: &str, cursor: usize) -> usize {
         .split_word_bound_indices()
         .find(|(_, part)| !part.chars().all(char::is_whitespace))
         .map_or(end, |(at, part)| cursor + at + part.len());
-    word_grapheme_boundary(text, destination, true)
+    grapheme_boundary(text, destination, true)
 }
 
 /// Kill direction belongs to the semantic edit, not its physical shortcut.

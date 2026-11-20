@@ -1,6 +1,6 @@
 //! Modal choices and cooperative discovery shared with non-modal completion.
 //! One retained scan joins before its replacement can start.
-use super::editing::previous_grapheme;
+use super::editing::{self, Edit};
 use super::paint::{Prepared, Visibility};
 use crate::presentation_style::{Role, Theme};
 use ratatui::text::Line;
@@ -164,6 +164,8 @@ pub(super) struct ModelScope {
 #[derive(Default)]
 pub(super) struct Pickers {
     active: Option<Picker>,
+    // None follows the end of the query, including in newly opened pickers.
+    query_cursor: Option<usize>,
     notice: Option<String>,
     visibility: Visibility<PickerCandidate>,
     // Page extent survives selection-only movement, not edits or geometry changes.
@@ -196,6 +198,12 @@ impl Pickers {
 
     pub fn active(&self) -> Option<&Picker> {
         self.active.as_ref()
+    }
+
+    pub fn query_cursor(&self) -> usize {
+        self.active
+            .as_ref()
+            .map_or(0, |picker| self.query_cursor.unwrap_or(picker.query.len()))
     }
 
     pub fn take_active(&mut self) -> Option<Picker> {
@@ -428,6 +436,7 @@ impl Pickers {
 
     pub fn close(&mut self) {
         self.active = None;
+        self.query_cursor = None;
         self.notice = None;
         self.invalidate_visibility();
         self.waiting = None;
@@ -443,6 +452,7 @@ impl Pickers {
     pub fn open(&mut self, picker: Picker) {
         self.close();
         self.active = Some(picker);
+        self.query_cursor = None;
     }
 
     pub fn files(&self, scope: &FileScope) -> Option<&[String]> {
@@ -652,15 +662,25 @@ impl Pickers {
     }
 
     pub fn insert(&mut self, text: &str) -> bool {
-        let Some(picker) = &mut self.active else {
+        if self.active.is_none() {
             return false;
-        };
-        picker
-            .query
-            .extend(text.chars().filter(|ch| !ch.is_control()));
+        }
+        let cursor = self.query_cursor();
+        let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
+        self.replace_query(cursor..cursor, &text);
+        true
+    }
+
+    fn replace_query(&mut self, range: std::ops::Range<usize>, text: &str) {
+        if range.is_empty() && text.is_empty() {
+            return;
+        }
+        let picker = self.active.as_mut().expect("picker owns query");
+        let cursor = range.start + text.len();
+        picker.query.replace_range(range, text);
+        self.query_cursor = Some(editing::grapheme_boundary(&picker.query, cursor, true));
         picker.selected = 0;
         self.invalidate_visibility();
-        true
     }
 
     pub fn move_selection(&mut self, down: bool, steps: usize) {
@@ -683,7 +703,7 @@ impl Pickers {
         key: KeyEvent,
         keys: &crate::keybindings::KeyBindings,
     ) -> Option<PickerValue> {
-        use crate::keybindings::{self, KeyAction, PICKER};
+        use crate::keybindings::{self, KeyAction, PICKER, TEXT};
         let action = keys.action(PICKER, key);
         if key.repeat && action.is_some_and(KeyAction::requires_fresh_press) {
             return None;
@@ -719,7 +739,9 @@ impl Pickers {
                 .expect("Session browser is active")
                 .query
                 .clone();
+            let cursor = self.query_cursor;
             self.load_sessions(request, query, self.named_only);
+            self.query_cursor = cursor;
             return None;
         }
         if action == Some(KeyAction::NamedSessions) && self.sessions.is_some() {
@@ -738,6 +760,18 @@ impl Pickers {
             self.invalidate_visibility();
             return None;
         }
+        let cursor = self.query_cursor();
+        let query = &self.active.as_ref().expect("picker is active").query;
+        if let Some(edit) = action
+            .or_else(|| keys.action(TEXT, key))
+            .and_then(|action| editing::apply(query, cursor, action))
+        {
+            match edit {
+                Edit::Move(cursor) => self.query_cursor = Some(cursor),
+                Edit::Delete { range, .. } => self.replace_query(range, ""),
+            }
+            return None;
+        }
         let loading = self.loading();
         let matching = self.matching();
         let picker = self.active.as_mut().expect("picker is active");
@@ -752,13 +786,6 @@ impl Pickers {
                 {
                     self.move_selection(action == Some(KeyAction::SelectPageDown), steps);
                 }
-            }
-            Some(KeyAction::Backspace) => {
-                picker
-                    .query
-                    .truncate(previous_grapheme(&picker.query, picker.query.len()));
-                picker.selected = 0;
-                self.invalidate_visibility();
             }
             Some(KeyAction::Confirm | KeyAction::Toggle)
                 if !loading
@@ -800,9 +827,7 @@ impl Pickers {
             }
             None | Some(KeyAction::Toggle) => {
                 if let Some(ch) = keybindings::printable(key) {
-                    picker.query.push(ch);
-                    picker.selected = 0;
-                    self.invalidate_visibility();
+                    self.replace_query(cursor..cursor, ch.encode_utf8(&mut [0; 4]));
                 }
             }
             _ => {}
@@ -1109,6 +1134,28 @@ mod tests {
             rows.iter()
                 .all(|row| unicode_width::UnicodeWidthStr::width(row.as_str()) <= 40)
         );
+    }
+
+    #[test]
+    fn query_cursor_motion_keeps_selection_but_mid_query_edits_revoke_it() {
+        let mut pickers = open_labels(&["a👩‍💻z", "a👩‍💻z alternative"]);
+        let keys = KeyBindings::default();
+        pickers.insert("a👩‍💻z");
+        pickers.move_selection(true, 1);
+        pickers.painted_rows(80, 8, &Theme::default());
+        pickers.key(KeyEvent::new(KeyCode::Left, Modifiers::NONE), &keys);
+        assert_eq!(pickers.query_cursor(), "a👩‍💻".len());
+        assert_eq!(pickers.active().unwrap().selected, 1);
+        pickers.key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE), &keys);
+        assert_eq!(pickers.active().unwrap().query, "az");
+        assert_eq!(pickers.active().unwrap().selected, 0);
+        assert!(
+            pickers
+                .key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE), &keys)
+                .is_none()
+        );
+        pickers.insert("👩‍💻");
+        assert_eq!(pickers.active().unwrap().query, "a👩‍💻z");
     }
 
     #[test]
