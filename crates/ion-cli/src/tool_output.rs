@@ -286,18 +286,19 @@ pub(crate) fn render_command(
     for field in [Field::Stdout, Field::Stderr] {
         let stream = field.label();
         if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
-            if successful && stream == "stdout" && detail.detail == OutputDetail::Compact {
+            let line_count = text.lines().count();
+            // Keep short stderr warnings visible; longer progress output
+            // from successful commands needn't fill the compact transcript.
+            if successful
+                && detail.detail == OutputDetail::Compact
+                && (field == Field::Stdout || line_count > compact_lines)
+            {
+                let unit = if line_count == 1 { "line" } else { "lines" };
                 note(
                     rows,
                     prefix,
                     &format!(
-                        "stdout · {} {} folded · {}",
-                        text.lines().count(),
-                        if text.lines().count() == 1 {
-                            "line"
-                        } else {
-                            "lines"
-                        },
+                        "{stream} · {line_count} {unit} folded · {}",
                         detail.details_key
                     ),
                     width,
@@ -694,7 +695,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn only_successful_compact_commands_fold_stdout_and_never_stderr() {
+    fn successful_compact_commands_fold_stdout_and_long_stderr() {
         let mut activity = TranscriptActivity {
             identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
                 assistant_entry: 2,
@@ -711,7 +712,7 @@ pub(crate) mod tests {
             result: Some(ion_core::ActivityResult {
                 artifacts: Vec::new(),
                 projection: Some(ion_core::ToolResultProjection::Observed),
-                value: json!({"stdout": "OBSERVED_STDOUT\n", "stderr": "OBSERVED_STDERR\n"}),
+                value: json!({"stdout": "OBSERVED_STDOUT\n", "stderr": "progress 1\nprogress 2\nprogress 3\nprogress 4\nOBSERVED_STDERR\n"}),
                 image_mime_types: vec![],
                 is_error: false,
             }),
@@ -748,8 +749,31 @@ pub(crate) mod tests {
                 .join("\n");
             assert_eq!(text.contains("OBSERVED_STDOUT"), !folded, "{text}");
             assert_eq!(text.contains("stdout · 1 line folded"), folded, "{text}");
-            assert!(text.contains("OBSERVED_STDERR"), "{text}");
+            assert_eq!(text.contains("stderr · 5 lines folded"), folded, "{text}");
+            assert_eq!(text.contains("OBSERVED_STDERR"), !folded, "{text}");
         }
+        activity.state = ActivityState::Completed;
+        let result = activity.result.as_mut().unwrap();
+        result.is_error = false;
+        result.value["stderr"] = json!("SHORT_WARNING\n");
+        let mut rows = vec![];
+        render_activity(
+            &mut rows,
+            &activity,
+            "",
+            100,
+            &RenderOptions::new(
+                OutputDetail::Compact,
+                &keys,
+                &theme,
+                ThinkingVisibility::Hidden,
+                std::path::Path::new("/workspace"),
+            ),
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row.line.to_string().contains("SHORT_WARNING"))
+        );
     }
 
     #[test]
