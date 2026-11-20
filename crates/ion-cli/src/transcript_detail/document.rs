@@ -3,6 +3,7 @@
 //! flattened JSON dumps and fitted rows never define reading positions.
 use super::{Entry, EntryKey};
 use crate::display_text::{Component, MappedLine, Mapping, Origin};
+use crate::presentation_style::{Role, Theme};
 use crate::transcript_render::{
     BlockLayout, ReadingPoint, kind_label, source_message_layout, source_thinking_layout,
     state_label,
@@ -71,10 +72,37 @@ pub(super) struct Document {
     sections: Vec<Section>,
     pub len: usize,
     previous: Option<EntryKey>,
+    theme: Theme,
 }
 
 impl Document {
-    fn push(&mut self, entry: EntryKey, field: Field, layout: BlockLayout) {
+    pub fn new(theme: &Theme) -> Self {
+        Self {
+            theme: theme.clone(),
+            ..Self::default()
+        }
+    }
+
+    fn push(&mut self, entry: EntryKey, field: Field, mut layout: BlockLayout) {
+        let role = match field {
+            Field::PageHeading
+            | Field::Heading
+            | Field::ArgumentsLabel
+            | Field::ResultLabel
+            | Field::DiffLabel => Some(Role::Heading),
+            Field::ResultNotice | Field::Readiness | Field::TurnTermination => Some(Role::Warning),
+            Field::CallId
+            | Field::Subject
+            | Field::Artifact(_)
+            | Field::Image(_)
+            | Field::ChildLabel => Some(Role::Secondary),
+            _ => None,
+        };
+        if let Some(role) = role {
+            for row in &mut layout.rows {
+                row.style = self.theme.style(role);
+            }
+        }
         if layout.rows.is_empty() {
             return;
         }
@@ -270,7 +298,18 @@ impl Document {
                 if diff.text.is_empty() {
                     self.generated(key, Field::Diff, "No text changes", width);
                 } else {
-                    self.raw(key, Field::Diff, "", diff.text, width);
+                    let spans = diff
+                        .text
+                        .split_inclusive('\n')
+                        .map(|line| {
+                            Span::styled(
+                                line.to_owned(),
+                                self.theme.style(crate::edit_diff::line_role(line)),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let source = MappedLine::raw(Line::from(spans), 0..diff.text.len());
+                    self.push(key, Field::Diff, BlockLayout::mapped(source, width));
                 }
             } else {
                 self.json(key, JsonField::Result, &result.value, width);
@@ -446,20 +485,19 @@ impl Document {
             .map_or(0, |section| section.rows.start)
     }
 
-    pub fn window(&self, start: usize, height: usize) -> Vec<String> {
+    pub fn window(&self, start: usize, height: usize) -> impl Iterator<Item = &Line<'static>> {
         let end = start.saturating_add(height).min(self.len);
-        self.sections
+        let first = self
+            .sections
+            .partition_point(|section| section.rows.end <= start);
+        self.sections[first..]
             .iter()
-            .skip_while(|section| section.rows.end <= start)
-            .take_while(|section| section.rows.start < end)
-            .flat_map(|section| {
+            .take_while(move |section| section.rows.start < end)
+            .flat_map(move |section| {
                 let first = start.saturating_sub(section.rows.start);
                 let last = end.min(section.rows.end) - section.rows.start;
-                section.layout.rows[first..last]
-                    .iter()
-                    .map(ToString::to_string)
+                section.layout.rows[first..last].iter()
             })
-            .collect()
     }
 }
 

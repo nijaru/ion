@@ -2,6 +2,7 @@
 mod document;
 
 use crate::keybindings::KeyAction;
+use crate::presentation_style::Theme;
 use crate::transcript_render::{ContentRoot, kind_label, state_label};
 use document::{Anchor, Document, Field};
 #[cfg(test)]
@@ -10,6 +11,7 @@ use ion_core::{
     AgentEvent, LiveTranscript, TranscriptActivity, TranscriptActivityIdentity, TranscriptItem,
     TranscriptSource,
 };
+use ratatui::text::Line;
 use std::num::NonZeroUsize;
 
 const PAGE_ENTRIES: usize = 32;
@@ -43,6 +45,7 @@ pub struct DetailView {
 struct Page {
     revision: u64,
     width: usize,
+    theme: Theme,
     end: usize,
     total: usize,
     before: Option<Boundary>,
@@ -208,12 +211,18 @@ impl DetailView {
     }
 
     /// Bounded extraction and navigation share the measured source layout.
-    pub(crate) fn window(&mut self, height: usize) -> Vec<String> {
+    pub(crate) fn window_rows(&mut self, height: usize) -> impl Iterator<Item = &Line<'static>> {
         self.viewport = height;
         let page = self.page.as_ref().expect("prepare precedes display");
         page.document.window(self.top(page, height), height)
     }
 
+    #[cfg(test)]
+    pub(crate) fn window(&mut self, height: usize) -> Vec<String> {
+        self.window_rows(height).map(ToString::to_string).collect()
+    }
+
+    #[cfg(test)]
     pub fn prepare<'a>(
         &mut self,
         items: impl Iterator<Item = &'a TranscriptItem>,
@@ -221,12 +230,21 @@ impl DetailView {
         revision: u64,
         width: usize,
     ) {
+        self.prepare_themed(items, notices, revision, width, &Theme::default());
+    }
+
+    pub(crate) fn prepare_themed<'a>(
+        &mut self,
+        items: impl Iterator<Item = &'a TranscriptItem>,
+        notices: &[String],
+        revision: u64,
+        width: usize,
+        theme: &Theme,
+    ) {
         let width = width.max(1);
-        if self
-            .page
-            .as_ref()
-            .is_some_and(|page| page.revision == revision && page.width == width)
-        {
+        if self.page.as_ref().is_some_and(|page| {
+            page.revision == revision && page.width == width && &page.theme == theme
+        }) {
             return;
         }
         // References only: Conversation remains the sole semantic transcript.
@@ -274,7 +292,7 @@ impl DetailView {
         let later_end = end.saturating_add(PAGE_ENTRIES).min(total);
         let later = (later_end < total).then(|| boundary(later_end - 1));
         let last = end.checked_sub(1).map(boundary);
-        let mut document = Document::default();
+        let mut document = Document::new(theme);
         let mut evidence = None;
         if let Some((number, identity)) = &mut self.tool {
             let selected = entries
@@ -337,6 +355,7 @@ impl DetailView {
         self.page = Some(Page {
             revision,
             width,
+            theme: theme.clone(),
             end,
             total,
             before,
@@ -354,7 +373,10 @@ impl DetailView {
             .as_ref()
             .expect("prepare precedes display")
             .document;
-        document.window(0, document.len)
+        document
+            .window(0, document.len)
+            .map(ToString::to_string)
+            .collect()
     }
 
     pub fn copy_evidence(&self) -> Option<(NonZeroUsize, &str)> {

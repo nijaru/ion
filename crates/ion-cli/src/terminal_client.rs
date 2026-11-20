@@ -1729,11 +1729,12 @@ fn modal_rows(
     ui.details
         .as_mut()
         .expect("inspector owns viewport")
-        .prepare(
+        .prepare_themed(
             ui.conversation.items(),
             ui.conversation.live().map_or(&[], LiveTranscript::notices),
             ui.conversation.revision(),
             width,
+            ui.themes.theme(),
         );
     let controls = ui
         .details
@@ -1756,12 +1757,11 @@ fn modal_rows(
         .details
         .as_mut()
         .expect("inspector owns viewport")
-        .window(viewport);
-    let mut rows = vec![Line::raw(""); height];
-    let padding = viewport - content.len();
-    for (index, row) in content.iter().enumerate() {
-        rows[padding + index] = Line::raw(fit_line(row, width));
-    }
+        .window_rows(viewport);
+    let mut rows = content.cloned().collect::<Vec<_>>();
+    let padding = viewport - rows.len();
+    rows.splice(..0, std::iter::repeat_n(Line::raw(""), padding));
+    rows.resize_with(height, || Line::raw(""));
 
     let mut next_row = viewport;
     for label in controls.iter().chain(status.iter()).take(status_height) {

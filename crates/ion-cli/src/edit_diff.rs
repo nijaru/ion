@@ -115,12 +115,7 @@ pub(crate) fn render(
     for (index, (byte, text)) in lines.iter().enumerate() {
         let last = index + 1 == lines.len() && footer.is_none();
         // These are syntax styles only. The Completed state above comes from Core facts.
-        let style = match text.as_bytes().first() {
-            Some(b'+') => detail.theme.style(Role::Added),
-            Some(b'-') => detail.theme.style(Role::Removed),
-            Some(b'@') => detail.theme.style(Role::Hunk),
-            _ => detail.theme.style(Role::Secondary),
-        };
+        let style = detail.theme.style(line_role(text));
         // Bound physical preview rows; long source lines remain in inspection.
         let source = MappedLine::component(
             Line::from(Span::styled((*text).to_owned(), style)),
@@ -160,9 +155,19 @@ pub(crate) fn render(
     }
 }
 
+pub(crate) fn line_role(text: &str) -> Role {
+    match text.as_bytes().first() {
+        Some(b'+') => Role::Added,
+        Some(b'-') => Role::Removed,
+        Some(b'@') => Role::Hunk,
+        _ => Role::Secondary,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::presentation_style::Theme;
     use ion_core::{
         ActivityGroup, ActivityResult, ToolActivity, ToolResultProjection, TranscriptItem,
         TranscriptProjection,
@@ -346,7 +351,26 @@ mod tests {
             std::num::NonZeroUsize::new(1).unwrap(),
             activity.identity,
         )));
-        detail.prepare(history.items.iter(), &[], 0, 80);
+        let theme = Theme::fixed(true);
+        detail.prepare_themed(history.items.iter(), &[], 0, 80, &theme);
+        let visible = detail.window_rows(80).collect::<Vec<_>>();
+        assert!(
+            visible
+                .iter()
+                .any(|row| row.to_string().starts_with("Recorded edit diff")
+                    && row.style == theme.style(Role::Heading))
+        );
+        for (prefix, role) in [
+            ("--- old", Role::Removed),
+            ("@@", Role::Hunk),
+            ("+x", Role::Added),
+        ] {
+            let line = visible
+                .iter()
+                .find(|row| row.to_string().starts_with(prefix))
+                .unwrap();
+            assert_eq!(line.spans[0].style, theme.style(role), "{prefix}");
+        }
         let inspection = detail.rows().join("\n");
         assert!(inspection.contains("Recorded edit diff · capture truncated"));
         assert!(inspection.contains("@@ -1 +1 @@") && inspection.contains("+x�[2J"));
