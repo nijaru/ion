@@ -1145,7 +1145,7 @@ fn display_activities(
         return activities
             .iter()
             .enumerate()
-            .map(|(index, activity)| display_activity(activity, index, detail.cwd))
+            .map(|(index, activity)| display_activity(activity, index, detail))
             .collect();
     }
     let mut display = Vec::new();
@@ -1178,7 +1178,7 @@ fn display_activities(
                 continue;
             }
         }
-        display.push(display_activity(current, index, detail.cwd));
+        display.push(display_activity(current, index, detail));
         index += 1;
     }
     display
@@ -1246,7 +1246,10 @@ fn nested_exception(activity: &TranscriptActivity) -> Option<&TranscriptActivity
         .or_else(|| exceptional(activity).then_some(activity))
 }
 
-fn activity_subject(activity: &TranscriptActivity, cwd: &std::path::Path) -> Option<String> {
+pub(crate) fn activity_subject(
+    activity: &TranscriptActivity,
+    cwd: &std::path::Path,
+) -> Option<String> {
     let subject = activity.activity.subject.as_deref()?;
     // Shorten only file labels, lexically: command/query text and recorded evidence
     // stay literal, and no filesystem lookup changes the meaning of a symlink.
@@ -1274,8 +1277,9 @@ fn activity_subject(activity: &TranscriptActivity, cwd: &std::path::Path) -> Opt
 fn display_activity(
     activity: &TranscriptActivity,
     index: usize,
-    cwd: &std::path::Path,
+    options: &RenderOptions<'_>,
 ) -> DisplayActivity {
+    let cwd = options.cwd;
     let kind = activity.activity.kind;
     let mut summary = action_label(activity);
     if !activity.children.is_empty() {
@@ -1313,6 +1317,12 @@ fn display_activity(
         summary.push_str(&format!(" · {}", kind_label(kind)));
     }
     append_result_summary(&mut summary, activity);
+    if options.detail == OutputDetail::Compact
+        && let Some(range) = crate::tool_output::compact_read_range(activity)
+    {
+        summary.push_str(" · ");
+        summary.push_str(&range);
+    }
     let detail = activity
         .children
         .iter()

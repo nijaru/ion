@@ -106,7 +106,9 @@ pub(crate) fn render_activity(
             activity.state == ActivityState::Completed && !result.is_error,
         );
     }
-    if let Some(text) = result.value["content"].as_str() {
+    if !(detail.detail == OutputDetail::Compact && successful_read(activity))
+        && let Some(text) = result.value["content"].as_str()
+    {
         note(
             rows,
             prefix,
@@ -174,16 +176,68 @@ pub(crate) fn render_activity(
     }
 }
 
-fn read_label(value: &Value) -> String {
-    match (value["start_line"].as_u64(), value["next_line"].as_u64()) {
-        (Some(start), Some(next)) if start > 0 && next > start => {
-            format!("content · lines {start}–{}", next - 1)
+fn successful_read(activity: &TranscriptActivity) -> bool {
+    activity.activity.kind == ToolActivityKind::Read
+        && activity.state == ActivityState::Completed
+        && activity
+            .result
+            .as_ref()
+            .is_some_and(|result| !result.is_error && result.value["content"].is_string())
+}
+
+fn read_range(value: &Value) -> Option<String> {
+    if let (Some(start), Some(next)) = (value["start_line"].as_u64(), value["next_line"].as_u64()) {
+        if start > 0 && next > start {
+            return Some(format!("lines {start}–{}", next - 1));
         }
-        (Some(start), Some(next)) if start > 0 && next == start => {
-            format!("content · EOF at line {start}")
+        if start > 0 && next == start {
+            return Some(format!("EOF at line {start}"));
         }
-        _ => "content".into(),
     }
+    if let (Some(start), Some(next)) = (value["start_byte"].as_u64(), value["next_byte"].as_u64()) {
+        if next > start {
+            return Some(format!("bytes {start}–{}", next - 1));
+        }
+        if next == start {
+            return Some(format!("EOF at byte {start}"));
+        }
+    }
+    None
+}
+
+fn read_label(value: &Value) -> String {
+    read_range(value).map_or_else(|| "content".into(), |range| format!("content · {range}"))
+}
+
+/// Whole-file reads need no range annotation in compact view. Pagination,
+/// byte offsets and EOF still matter even when the payload is hidden.
+pub(crate) fn compact_read_range(activity: &TranscriptActivity) -> Option<String> {
+    if !successful_read(activity) {
+        return None;
+    }
+    let value = &activity.result.as_ref()?.value;
+    let start_line = value["start_line"].as_u64();
+    let earlier = start_line.is_some_and(|start| start > 1)
+        || value["start_byte"].as_u64().is_some_and(|start| start > 0);
+    let following = value["has_more"].as_bool() == Some(true);
+    let eof = start_line.is_some() && start_line == value["next_line"].as_u64();
+    if !earlier && !following && !eof && value["start_byte"].is_null() {
+        return None;
+    }
+    let mut summary = read_range(value).unwrap_or_else(|| "partial read".into());
+    if earlier {
+        summary.push_str(" · earlier ");
+        summary.push_str(if value["start_byte"].is_u64() {
+            "bytes"
+        } else {
+            "lines"
+        });
+        summary.push_str(" not recorded");
+    }
+    if following {
+        summary.push_str(" · file continues");
+    }
+    Some(summary)
 }
 
 pub(crate) fn render_folded_summary(
@@ -223,54 +277,13 @@ pub(crate) fn render_folded_observation(
     render_artifacts(rows, &result.artifacts, prefix, width, detail);
     let mut notices = Vec::new();
     observations::notices(&mut notices, &result.value, prefix, width, detail);
-    if !notices.is_empty() {
-        note(
-            rows,
-            prefix,
-            activity
-                .activity
-                .subject
-                .as_deref()
-                .unwrap_or(&activity.name),
-            width,
-            detail.theme,
-        );
+    let range = compact_read_range(activity);
+    if !notices.is_empty() || range.is_some() {
+        let subject = crate::transcript_render::activity_subject(activity, detail.cwd)
+            .unwrap_or_else(|| activity.name.clone());
+        let label = range.map_or_else(|| subject.clone(), |range| format!("{subject}: {range}"));
+        note(rows, prefix, &label, width, detail.theme);
         rows.extend(notices);
-    }
-    let preceding = result.value["start_line"]
-        .as_u64()
-        .is_some_and(|start| start > 1);
-    let following = result.value["has_more"].as_bool() == Some(true);
-    if preceding || following {
-        let subject = activity
-            .activity
-            .subject
-            .as_deref()
-            .unwrap_or(&activity.name);
-        note(
-            rows,
-            prefix,
-            &format!(
-                "{subject}: {} · {}{}",
-                read_label(&result.value),
-                if preceding {
-                    "earlier lines not recorded"
-                } else {
-                    ""
-                },
-                if following {
-                    if preceding {
-                        "; file continues"
-                    } else {
-                        "file continues"
-                    }
-                } else {
-                    ""
-                }
-            ),
-            width,
-            detail.theme,
-        );
     }
 }
 
@@ -973,6 +986,14 @@ pub(crate) mod tests {
         assert_eq!(
             read_label(&json!({"start_line":4,"next_line":4})),
             "content · EOF at line 4"
+        );
+        assert_eq!(
+            read_label(&json!({"start_byte":0,"next_byte":5})),
+            "content · bytes 0–4"
+        );
+        assert_eq!(
+            read_label(&json!({"start_byte":12,"next_byte":12})),
+            "content · EOF at byte 12"
         );
         for value in [
             json!({"offset":64,"next_offset":100}),

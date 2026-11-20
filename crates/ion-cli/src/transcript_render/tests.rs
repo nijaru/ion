@@ -387,12 +387,10 @@ fn custom_theme_styles_activity_and_diff_semantics_but_not_observations() {
         ] {
             assert!(has_color(&rendered, text, color), "missing themed {text}");
         }
-        for text in [
-            "OBSERVED_NATIVE",
-            "OBSERVED_ERROR",
-            "OBSERVED_TOOL_ERROR",
-            "OBSERVED_READ",
-        ] {
+        for text in ["OBSERVED_NATIVE", "OBSERVED_ERROR", "OBSERVED_TOOL_ERROR"]
+            .into_iter()
+            .chain((detail == OutputDetail::Expanded).then_some("OBSERVED_READ"))
+        {
             let row = rendered
                 .iter()
                 .find(|row| row.to_string().contains(text))
@@ -789,7 +787,7 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
     let mut second = activity(
         "r2",
         ToolActivityKind::Read,
-        "other.txt",
+        "/workspace/other.txt",
         ActivityState::Completed,
         Some(
             serde_json::json!({"content":"SECOND_READ", "start_line":4, "next_line":5, "file_bytes":15, "has_more":false}),
@@ -843,18 +841,18 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        compact.contains("**literal**") && !compact.contains("FOURTH_READ"),
+        !compact.contains("**literal**") && !compact.contains("FOURTH_READ"),
         "{compact}"
     );
-    assert!(compact.contains("file continues beyond this recorded range"));
-    assert!(compact.contains("lines 64–67") && compact.contains("earlier file lines"));
+    assert!(compact.contains("file continues"));
+    assert!(compact.contains("lines 64–67") && compact.contains("earlier lines not recorded"));
     assert!(compact.contains("LAST_STDOUT") && !compact.contains("FIRST_STDOUT"));
     assert!(
         compact.contains("stderr")
             && compact.contains("diagnostic�[2J")
             && !compact.contains('\u{1b}')
     );
-    assert!(compact.contains("1 earlier stdout lines") && compact.contains("1 more content lines"));
+    assert!(compact.contains("1 earlier stdout lines"));
     assert!(compact.contains("not shared with model") && compact.contains("Exited 7"));
     assert!(
         compact.contains("Artifact 0 · stdout · 1234 bytes")
@@ -880,13 +878,26 @@ fn output_modes_disclose_ranges_streams_and_uncoalesced_observations() {
             ],
         })],
     };
-    let folded = plain_rows(&grouped, 120).join("\n");
-    assert!(!folded.contains("SECOND_READ"));
+    let folded = rows(
+        &grouped.items,
+        120,
+        &RenderOptions::new(
+            OutputDetail::Compact,
+            &crate::keybindings::KeyBindings::default(),
+            &Theme::default(),
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        ),
+    )
+    .iter()
+    .map(ToString::to_string)
+    .collect::<Vec<_>>()
+    .join("\n");
+    assert!(!folded.contains("SECOND_READ") && !folded.contains("/workspace/"));
     assert!(folded.contains("2 read outputs folded"));
     assert!(folded.contains("Artifact 0 · read_capture · 1234 bytes"));
     assert!(
-        folded.contains("other.txt: content · lines 4–4")
-            && folded.contains("earlier lines not recorded")
+        folded.contains("other.txt: lines 4–4") && folded.contains("earlier lines not recorded")
     );
     for width in [1, 8, 24, 120] {
         let expanded = rows(
