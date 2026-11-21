@@ -81,8 +81,10 @@ impl Editor {
             draft: self.draft.clone(),
             cursor: self.cursor,
         });
-        browse.index = browse.index.saturating_sub(1);
-        let index = browse.index;
+        let Some(index) = browse.index.checked_sub(1) else {
+            return;
+        };
+        browse.index = index;
         self.recall_history_entry(index);
     }
 

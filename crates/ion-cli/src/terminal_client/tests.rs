@@ -771,6 +771,11 @@ fn oversized_history_preserves_the_draft_and_can_be_traversed_without_loading_it
     assert_eq!(ui.editor.draft, "newer");
     ui.editor.history_previous();
     assert_eq!(ui.editor.draft, "older");
+    ui.editor.cursor = 2;
+    let baseline = ui.editor.baseline;
+    ui.editor.history_previous();
+    assert_eq!((ui.editor.draft.as_str(), ui.editor.cursor), ("older", 2));
+    assert_eq!(ui.editor.baseline, baseline);
     ui.editor.history_next();
     assert_eq!(ui.editor.draft, "newer");
     ui.editor.history_next();
