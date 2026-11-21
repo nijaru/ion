@@ -1438,11 +1438,13 @@ fn composer_keeps_complete_error_feedback_and_source_cursor_at_common_widths() {
         for width in [40, 80] {
             let dock = dock::Dock::prepare(&mut ui, None, None, &[], width, 24);
             let (row, column) = dock.cursor.expect("composer cursor remains visible");
-            let feedback = dock.rows[..row - 2]
+            let feedback = dock.rows[..row - 3]
                 .iter()
                 .map(ToString::to_string)
                 .collect::<String>();
             assert_eq!(feedback, status, "incomplete feedback at {width} columns");
+            assert_eq!(dock.rows[row - 3].to_string(), "─".repeat(width));
+            assert_eq!(dock.rows[row + 1].to_string(), "─".repeat(width));
             assert_eq!(dock.rows[row - 2].to_string(), "› first α");
             assert_eq!(dock.rows[row - 1].to_string(), "  second line");
             assert_eq!(dock.rows[row].to_string(), "  last 🦀");
@@ -1470,6 +1472,7 @@ fn composer_bounds_overflowing_feedback_without_hiding_the_caret() {
                 let dock = dock::Dock::prepare(&mut ui, None, None, &[], width, height);
                 assert_eq!(dock.body_rows + dock.rows.len(), height);
                 assert!(dock.rows.iter().all(|line| line.width() <= width));
+                assert!(dock.rows.iter().all(|line| !line.to_string().contains('─')));
                 let (row, column) = dock.cursor.expect("feedback cannot displace the caret");
                 assert!(row < dock.rows.len() && usize::from(column) < width);
                 assert!(

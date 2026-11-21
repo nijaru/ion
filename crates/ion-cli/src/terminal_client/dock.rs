@@ -298,9 +298,14 @@ impl Dock {
                 status.len() + completion.rows.len() + composer.lines.len() + body_minimum,
             ),
         );
-        let body_rows = budget.saturating_sub(
+        let spare_rows = budget.saturating_sub(
             status.len() + completion.rows.len() + composer.lines.len() + footer.len(),
         );
+        // The frame yields to everything interactive. In a short viewport,
+        // leave the spare rows to the transcript instead of decorating it.
+        let rule = (width >= 3 && spare_rows >= 8)
+            .then(|| Line::styled("─".repeat(width), ui.themes.theme().style(Role::Secondary)));
+        let body_rows = spare_rows - 2 * usize::from(rule.is_some());
         let mut rows = Vec::new();
         for text in status {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::Secondary)));
@@ -315,10 +320,12 @@ impl Dock {
             };
             rows.push(Line::styled(text.clone(), ui.themes.theme().style(role)));
         }
+        rows.extend(rule.iter().cloned());
         let composer_top = rows.len();
         for text in composer.lines {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::UserInput)));
         }
+        rows.extend(rule);
         rows.extend(footer);
         let cursor = Some((
             composer_top + composer.cursor_row,

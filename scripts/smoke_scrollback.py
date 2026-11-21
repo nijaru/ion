@@ -168,10 +168,15 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             pane = tmux("capture-pane", "-p", "-t", "ion")
             rows = pane.splitlines()
             final = next((i for i, row in enumerate(rows) if "FINAL_ONCE" in row), None)
-            if final is not None and rows[final + 1].startswith("›") and "Tab complete" not in pane:
+            rule = "─" * 100
+            if (final is not None and final + 3 < len(rows)
+                    and rows[final + 1] == rows[final + 3] == rule
+                    and rows[final + 2].startswith("›") and "Tab complete" not in pane):
                 break
             assert time.monotonic() < collapse_deadline, f"completion left a gap after dismissal:\n{pane}"
             time.sleep(0.02)
+        history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
+        assert history.splitlines().count(rule) == 2, f"composer rules leaked into scrollback:\n{history}"
         check_history()
         tmux("send-keys", "-t", "ion", "-l", "/tool 2")
         tmux("send-keys", "-t", "ion", "Enter")
