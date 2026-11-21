@@ -8,8 +8,10 @@ Ion is one reusable Rust agent engine with a complete coding application, not
 a coding-only kernel or multiple loops. Pi (including Pi Durable) and fx are
 Ion's primary references. Start with Pi for runtime, context, tools, Session
 semantics and interaction; start with fx for visual presentation. Target
-capabilities that matter in use, not upstream feature parity. Reimplement useful
-semantics idiomatically in Rust, not upstream classes or parallel runtimes.
+capabilities that matter in use, not upstream feature parity. Pick the next
+slice from the first material blocker in a real workflow; a reference feature
+or minor UI difference alone is not a priority. Reimplement useful semantics
+idiomatically in Rust, not upstream classes or parallel runtimes.
 The model chooses the coding actions; inspect/edit/test is not a hard-coded
 runtime loop. Reuse working code; remove obsolete abstractions through all real
 callers. Do not claim daily-use readiness without sustained-use evidence and
