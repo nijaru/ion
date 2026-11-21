@@ -662,6 +662,27 @@ fn alt_enter_queues_a_followup_without_discarding_the_editor() {
 }
 
 #[test]
+fn prompt_history_collapses_adjacent_duplicates_without_trimming() {
+    let mut ui = Frontend::default();
+    ui.editor.replace_prompt_history(
+        vec![
+            "retry".into(),
+            " retry".into(),
+            "retry".into(),
+            "retry".into(),
+            String::new(),
+        ],
+        true,
+    );
+    ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, "retry");
+    ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, " retry");
+    ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, "retry");
+}
+
+#[test]
 fn history_refresh_preserves_browsed_draft_and_cursor() {
     let mut ui = Frontend {
         editor: Editor {

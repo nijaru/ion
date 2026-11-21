@@ -33,7 +33,10 @@ impl Editor {
     pub(super) fn replace_prompt_history(&mut self, mut prompts: Vec<String>, same_session: bool) {
         // History navigation is for editable drafts. Oversized prompts stay
         // in the Session, but must not occupy invisible Up/Down steps.
-        prompts.retain(|prompt| prompt.len() <= MAX_DRAFT);
+        prompts.retain(|prompt| !prompt.is_empty() && prompt.len() <= MAX_DRAFT);
+        // Like Pi, collapse consecutive duplicates in arrow history. Keep
+        // Ion's exact text: whitespace can be significant in a prompt.
+        prompts.dedup();
         if self.browsing.as_ref().is_some_and(|browse| {
             !same_session || !prompts.starts_with(&self.prompt_history[..browse.end])
         }) {
