@@ -57,14 +57,21 @@ impl Frontend {
     }
 
     pub(super) fn recover_draft(&mut self) {
+        if !self.editor.recover_draft() {
+            self.status = "No queued input or recovered drafts".into();
+            return;
+        }
         self.gestures.invalidate();
         self.pickers.close();
-        self.editor.recover_draft();
-        self.status = format!(
-            "{} recovered draft(s) · {} cycles drafts",
-            self.editor.recovered.len(),
-            self.keys.hint(crate::keybindings::KeyAction::Dequeue)
-        );
+        let remaining = self.editor.recovered.len();
+        self.status = if remaining == 0 {
+            "Draft restored".into()
+        } else {
+            format!(
+                "{}: cycle drafts · {remaining} retained",
+                self.keys.hint(crate::keybindings::KeyAction::Dequeue)
+            )
+        };
     }
 
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {

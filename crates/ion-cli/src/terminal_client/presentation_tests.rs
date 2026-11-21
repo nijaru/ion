@@ -1021,6 +1021,24 @@ async fn returned_command_text_cannot_claim_a_pending_clipboard_paste() {
 }
 
 #[test]
+fn empty_recovery_preserves_browsed_prompt_and_unsent_draft() {
+    let mut ui = Frontend::default();
+    ui.insert("unsent 雪");
+    ui.editor.cursor = 2;
+    ui.editor.prompt_history = vec!["prior prompt".into()];
+    ui.editor.history_previous();
+    let before = (ui.editor.draft.clone(), ui.editor.cursor);
+    ui.recover_draft();
+    assert_eq!((ui.editor.draft.clone(), ui.editor.cursor), before);
+    assert_eq!(ui.status, "No queued input or recovered drafts");
+    ui.editor.history_next();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("unsent 雪", 2)
+    );
+}
+
+#[test]
 fn returned_command_text_preserves_the_unsent_draft_under_browsed_history() {
     let mut ui = Frontend::default();
     ui.insert("new unsent 雪");

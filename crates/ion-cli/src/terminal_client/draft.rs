@@ -139,11 +139,12 @@ impl Editor {
         self.attachments = recovered.attachments;
     }
 
-    pub(super) fn recover_draft(&mut self) {
-        self.restore_browsed_draft();
-        if let Some(recovered) = self.recovered.pop_front() {
-            self.show_draft(recovered);
-        }
+    pub(super) fn recover_draft(&mut self) -> bool {
+        let Some(recovered) = self.recovered.pop_front() else {
+            return false;
+        };
+        self.show_draft(recovered);
+        true
     }
 
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {
