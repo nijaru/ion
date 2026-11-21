@@ -1028,9 +1028,10 @@ fn empty_recovery_preserves_browsed_prompt_and_unsent_draft() {
     ui.editor.prompt_history = vec!["prior prompt".into()];
     ui.editor.history_previous();
     let before = (ui.editor.draft.clone(), ui.editor.cursor);
+    ui.status = "Existing feedback".into();
     ui.recover_draft();
     assert_eq!((ui.editor.draft.clone(), ui.editor.cursor), before);
-    assert_eq!(ui.status, "No queued input or recovered drafts");
+    assert_eq!(ui.status, "Existing feedback");
     ui.editor.history_next();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),
