@@ -17,6 +17,7 @@ pub(super) struct Editor {
     pub(super) completion: Completion,
     pub(super) recovered: VecDeque<RecoveredDraft>,
     pub(super) prompt_history: Vec<String>,
+    pub(super) prompt_history_through: u64,
     pub(super) browsing: Option<PromptBrowse>,
     pub(super) recovery: EditorRecovery,
     pub(super) editor_width: Option<usize>,

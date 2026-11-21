@@ -11,6 +11,10 @@ use super::{
     editor::{Editor, EditorDraft, PromptBrowse, RecoveredDraft},
 };
 
+fn recallable(prompt: &str) -> bool {
+    !prompt.is_empty() && prompt.len() <= MAX_DRAFT
+}
+
 impl Editor {
     /// The single publication point for a different editor draft. History may
     /// retain its browsing position, but completion ranges never cross drafts.
@@ -33,7 +37,7 @@ impl Editor {
     pub(super) fn replace_prompt_history(&mut self, mut prompts: Vec<String>, same_session: bool) {
         // History navigation is for editable drafts. Oversized prompts stay
         // in the Session, but must not occupy invisible Up/Down steps.
-        prompts.retain(|prompt| !prompt.is_empty() && prompt.len() <= MAX_DRAFT);
+        prompts.retain(|prompt| recallable(prompt));
         // Like Pi, collapse consecutive duplicates in arrow history. Keep
         // Ion's exact text: whitespace can be significant in a prompt.
         prompts.dedup();
@@ -43,6 +47,18 @@ impl Editor {
             self.restore_browsed_draft();
         }
         self.prompt_history = prompts;
+    }
+
+    // A settled live projection can supply committed inputs before the next
+    // full snapshot. Do not change the bounds of an in-progress browse.
+    pub(super) fn append_prompt_history(&mut self, entry: u64, text: &str) {
+        if entry <= self.prompt_history_through {
+            return;
+        }
+        self.prompt_history_through = entry;
+        if recallable(text) && self.prompt_history.last().is_none_or(|last| last != text) {
+            self.prompt_history.push(text.to_owned());
+        }
     }
 
     /// Editing or submitting a recalled prompt replaces the visible draft,

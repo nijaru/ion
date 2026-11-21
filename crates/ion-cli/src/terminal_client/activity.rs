@@ -244,6 +244,26 @@ pub(super) fn apply(
         ControlUpdate::Settled(mut settlement) => {
             let observed_success = matches!(&settlement.outcome, OperationOutcome::Turn(Ok(_)))
                 && ui.conversation.live_for(settlement.operation);
+            if observed_success && let Some(live) = ui.conversation.live() {
+                for item in &live.projection().items {
+                    // The display strips empty text, so an image note could
+                    // look like a prompt. Let the exact snapshot supply that
+                    // suffix rather than borrowing text from an attachment.
+                    if matches!(item, ion_core::TranscriptItem::User(user) if user.parts.iter().any(|part| matches!(part, ion_core::TranscriptPart::Image { .. })))
+                    {
+                        break;
+                    }
+                    if let ion_core::TranscriptItem::User(user) = item
+                        && let Some(source) = user.source
+                        && let Some(text) = user.parts.iter().find_map(|part| match part {
+                            ion_core::TranscriptPart::Text(text) => Some(text),
+                            _ => None,
+                        })
+                    {
+                        ui.editor.append_prompt_history(source.entry, text);
+                    }
+                }
+            }
             ui.discard_provisional();
             ui.conversation.clear_live();
             let cold_shell_refusal =
