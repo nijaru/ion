@@ -262,7 +262,6 @@ impl Editor {
             Some(KeyAction::Redo) => true,
             _ => return false,
         };
-        self.browsing = None;
         self.completion.clear();
         if redo {
             self.redo();
@@ -307,7 +306,7 @@ impl Editor {
             && group == Group::TypedWord
             && self.recovery.group == Group::TypedWord
             && !clean.chars().any(char::is_whitespace);
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.draft.insert_str(start, &clean);
         self.cursor += clean.len();
         if coalesce {
@@ -353,9 +352,9 @@ impl Editor {
         }
         let cursor_before = self.cursor;
         let changed = removed != text;
-        self.browsing = None;
         self.completion.clear();
         if changed {
+            self.retain_browsed_draft();
             self.draft.replace_range(range.clone(), text);
             self.recovered.extend(self.recovery.record(
                 Delta {
@@ -395,7 +394,7 @@ impl Editor {
         let removed = self.draft[range.clone()].to_owned();
         let cursor_before = self.cursor;
         let was_kill = self.recovery.group == Group::Kill;
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.completion.edited(range.start);
         self.draft.replace_range(range.clone(), "");
         self.cursor = range.start;
@@ -421,7 +420,7 @@ impl Editor {
 
     pub(super) fn clear_draft(&mut self) {
         self.break_edit_focus();
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.completion.clear();
         let attachments = self.take_attachments();
         self.recovered.extend(self.recovery.record(
@@ -455,7 +454,7 @@ impl Editor {
             &self.draft[entry.start..end] == expected.as_str(),
             "an editor history delta must still own its recorded draft text"
         );
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.completion.clear();
         self.draft.replace_range(entry.start..end, replacement);
         self.cursor = cursor_after;
@@ -495,7 +494,7 @@ impl Editor {
         }
         let start = self.cursor;
         let cursor_before = self.cursor;
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.completion.clear();
         self.draft.insert_str(start, &text);
         self.cursor = start + text.len();
@@ -543,7 +542,7 @@ impl Editor {
             return;
         }
         let cursor_before = self.cursor;
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.completion.clear();
         self.recovery.kills.rotate();
         self.draft.replace_range(yank.range.clone(), &next);

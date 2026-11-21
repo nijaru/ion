@@ -701,6 +701,32 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
 }
 
 #[test]
+fn editing_or_submitting_recalled_text_preserves_the_displaced_draft() {
+    for edit in [false, true] {
+        let mut ui = Frontend::default();
+        ui.insert("original 雪");
+        ui.editor.cursor = 3;
+        ui.editor
+            .replace_prompt_history(vec!["previous".into()], true);
+        ui.editor.history_previous();
+        if edit {
+            ui.insert(" edited");
+        }
+        let submitted = ui.editor.take_literal();
+        assert_eq!(
+            submitted.literal,
+            if edit { "previous edited" } else { "previous" }
+        );
+        ui.recover_draft();
+        assert_eq!(
+            (ui.editor.draft.as_str(), ui.editor.cursor),
+            ("original 雪", 3)
+        );
+        assert!(ui.editor.recovered.is_empty());
+    }
+}
+
+#[test]
 fn history_cannot_move_attachments_to_a_different_draft() {
     let mut ui = Frontend::default();
     ui.editor

@@ -26,7 +26,7 @@ impl Editor {
     }
 
     pub(super) fn restore_editor(&mut self, source: EditorDraft) {
-        self.browsing = None;
+        self.retain_browsed_draft();
         self.set_editor_baseline(source);
     }
 
@@ -40,6 +40,22 @@ impl Editor {
             self.restore_browsed_draft();
         }
         self.prompt_history = prompts;
+    }
+
+    /// Editing or submitting a recalled prompt replaces the visible draft,
+    /// not the unsent source that history browsing temporarily displaced.
+    pub(super) fn retain_browsed_draft(&mut self) {
+        if let Some(browse) = self.browsing.take()
+            && !browse.draft.is_empty()
+        {
+            self.recovered.push_back(RecoveredDraft {
+                source: EditorDraft {
+                    literal: browse.draft,
+                    cursor: browse.cursor,
+                },
+                attachments: Vec::new(),
+            });
+        }
     }
 
     pub(super) fn restore_browsed_draft(&mut self) -> bool {
