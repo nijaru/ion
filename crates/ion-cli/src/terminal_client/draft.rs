@@ -8,7 +8,7 @@ use ion_app::attachments::AttachmentSource;
 
 use super::{
     MAX_DRAFT,
-    editor::{Editor, EditorDraft, Limit, PromptBrowse, RecoveredDraft},
+    editor::{Editor, EditorDraft, PromptBrowse, RecoveredDraft},
 };
 
 impl Editor {
@@ -30,7 +30,10 @@ impl Editor {
         self.set_editor_baseline(source);
     }
 
-    pub(super) fn replace_prompt_history(&mut self, prompts: Vec<String>, same_session: bool) {
+    pub(super) fn replace_prompt_history(&mut self, mut prompts: Vec<String>, same_session: bool) {
+        // History navigation is for editable drafts. Oversized prompts stay
+        // in the Session, but must not occupy invisible Up/Down steps.
+        prompts.retain(|prompt| prompt.len() <= MAX_DRAFT);
         if self.browsing.as_ref().is_some_and(|browse| {
             !same_session || !prompts.starts_with(&self.prompt_history[..browse.end])
         }) {
@@ -79,14 +82,8 @@ impl Editor {
     }
 
     fn recall_history_entry(&mut self, index: usize) {
-        let draft = &self.prompt_history[index];
-        if draft.len() > MAX_DRAFT {
-            self.error = Some(Limit::History);
-            return;
-        }
-        let draft = draft.clone();
+        let draft = self.prompt_history[index].clone();
         self.set_editor_baseline(EditorDraft::at_end(draft));
-        self.error = None;
     }
 
     /// Direct-command metadata owns the vacated text slot, never attachments.

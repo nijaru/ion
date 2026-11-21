@@ -706,25 +706,20 @@ fn oversized_history_preserves_the_draft_and_can_be_traversed_without_loading_it
         editor: Editor {
             draft: "unsent 🦀".into(),
             cursor: 3,
-            prompt_history: vec!["older".into(), "x".repeat(MAX_DRAFT + 1)],
             ..Editor::default()
         },
         ..Frontend::default()
     };
+    ui.editor.replace_prompt_history(
+        vec!["older".into(), "x".repeat(MAX_DRAFT + 1), "newer".into()],
+        true,
+    );
     ui.editor.history_previous();
-    assert_eq!(
-        (ui.editor.draft.as_str(), ui.editor.cursor),
-        ("unsent 🦀", 3)
-    );
-    assert!(
-        visible_status(&ui, None)
-            .unwrap()
-            .contains("exceeds editor limit")
-    );
+    assert_eq!(ui.editor.draft, "newer");
     ui.editor.history_previous();
     assert_eq!(ui.editor.draft, "older");
     ui.editor.history_next();
-    assert_eq!(ui.editor.draft, "older");
+    assert_eq!(ui.editor.draft, "newer");
     ui.editor.history_next();
     assert_eq!(
         (ui.editor.draft.as_str(), ui.editor.cursor),

@@ -27,16 +27,12 @@ pub(super) struct Editor {
 #[derive(Clone, Copy)]
 pub(super) enum Limit {
     Prompt,
-    History,
 }
 
 impl std::fmt::Display for Limit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Prompt => write!(f, "Prompt is limited to {} bytes", super::MAX_DRAFT),
-            Self::History => {
-                f.write_str("History input exceeds editor limit; current draft retained")
-            }
         }
     }
 }
