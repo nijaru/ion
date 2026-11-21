@@ -1531,7 +1531,7 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
     if ui.session_io.blocked {
         let refresh = ui.session_io.refresh_error.as_ref().map_or_else(
             || "Session refresh required · prompts blocked".to_owned(),
-            |error| format!("Session refresh failed: {error} · prompts blocked · /session retries"),
+            |error| format!("/session retries · prompts blocked: {error}"),
         );
         status = if status.is_empty() {
             refresh

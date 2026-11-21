@@ -435,6 +435,26 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
     }
     fixture.control.shutdown().await;
 }
+#[test]
+fn short_terminal_keeps_refresh_recovery_command_visible() {
+    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+        let mut ui = Frontend {
+            mode,
+            ..Frontend::default()
+        };
+        ui.session_io.blocked = true;
+        ui.session_io.refresh_error = Some("refresh diagnostic ".repeat(128));
+        let dock = Dock::prepare(&mut ui, None, None, &[], 24, 2);
+        assert!(
+            dock.rows
+                .iter()
+                .any(|row| row.to_string().contains("/session retries"))
+        );
+        assert!(dock.rows.len() + dock.body_rows <= 2);
+        assert!(dock.cursor.is_some());
+    }
+}
+
 use super::{dock::Dock, interaction::InputTarget, picker::PickerItem};
 use ion_app::{Question, QuestionOption, QuestionRequestId};
 use std::io::{self, Write};
