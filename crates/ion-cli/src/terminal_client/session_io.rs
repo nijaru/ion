@@ -139,6 +139,12 @@ impl SessionIo {
         self.read.is_some()
     }
 
+    pub(super) fn has_command_read(&self) -> bool {
+        self.read
+            .as_ref()
+            .is_some_and(|read| read.projection_revision.is_none())
+    }
+
     pub(super) fn reloading_presentation(&self) -> bool {
         self.read
             .as_ref()

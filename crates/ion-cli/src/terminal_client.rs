@@ -1516,7 +1516,7 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
     } else {
         format!("{notice}{attachment}{recovery}")
     };
-    if ui.session_io.has_read() && !ui.session_io.blocked {
+    if ui.session_io.has_command_read() && !ui.session_io.blocked {
         let pending = if ui.session_io.blocks_input() {
             "Preparing local command · prompts wait"
         } else {

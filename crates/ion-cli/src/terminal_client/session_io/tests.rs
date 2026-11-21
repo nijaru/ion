@@ -806,7 +806,12 @@ async fn stale_history_cut_does_not_erase_newer_publication() {
         ReadOutput::History(Box::new(History::prepare(view)))
     })
     .await;
+    assert_eq!(
+        super::super::visible_status(&ui, None).as_deref(),
+        Some("Reading local state…")
+    );
     ui.session_io.read.as_mut().unwrap().projection_revision = Some(revision);
+    assert!(super::super::visible_status(&ui, None).is_none());
     ui.note("newer publication".into());
     let changed = ui.conversation.revision();
     release.send(()).unwrap();
