@@ -82,6 +82,19 @@ impl Editor {
     }
 
     pub(super) fn attach(&mut self, attachment: AttachmentSource) {
+        // Attaching to recalled text makes it a new draft. Keep the draft
+        // that browsing temporarily displaced, without moving the attachment.
+        if let Some(browse) = self.browsing.take()
+            && !browse.draft.is_empty()
+        {
+            self.recovered.push_back(RecoveredDraft {
+                source: EditorDraft {
+                    literal: browse.draft,
+                    cursor: browse.cursor,
+                },
+                attachments: Vec::new(),
+            });
+        }
         self.reset_edit_baseline();
         self.attachments.push(attachment);
     }

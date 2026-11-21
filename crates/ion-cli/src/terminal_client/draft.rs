@@ -54,7 +54,9 @@ impl Editor {
     }
 
     pub(super) fn history_previous(&mut self) {
-        if self.prompt_history.is_empty() {
+        // Arrow recall loads only historical text. An attachment belongs
+        // to the current draft, not to a different prompt reached by Up.
+        if !self.attachments.is_empty() || self.prompt_history.is_empty() {
             return;
         }
         let browse = self.browsing.get_or_insert_with(|| PromptBrowse {
@@ -69,6 +71,9 @@ impl Editor {
     }
 
     pub(super) fn history_next(&mut self) {
+        if !self.attachments.is_empty() {
+            return;
+        }
         let Some(browse) = &mut self.browsing else {
             return;
         };

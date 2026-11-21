@@ -701,6 +701,33 @@ fn returned_drafts_never_merge_identical_text_or_attachment_associations() {
 }
 
 #[test]
+fn history_cannot_move_attachments_to_a_different_draft() {
+    let mut ui = Frontend::default();
+    ui.editor
+        .replace_prompt_history(vec!["older".into(), "newer".into()], true);
+    ui.insert("original draft");
+    ui.editor.cursor = 3;
+    ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, "newer");
+    ui.attach(AttachmentSource::ImageFile("fixture.png".into()));
+    ui.editor.history_previous();
+    ui.editor.history_next();
+    ui.editor
+        .replace_prompt_history(vec!["other Session".into()], false);
+    assert_eq!(ui.editor.draft, "newer");
+    assert_eq!(ui.editor.attachments.len(), 1);
+    ui.recover_draft();
+    assert_eq!(
+        (ui.editor.draft.as_str(), ui.editor.cursor),
+        ("original draft", 3)
+    );
+    assert!(ui.editor.attachments.is_empty());
+    ui.recover_draft();
+    assert_eq!(ui.editor.draft, "newer");
+    assert_eq!(ui.editor.attachments.len(), 1);
+}
+
+#[test]
 fn oversized_history_preserves_the_draft_and_can_be_traversed_without_loading_it() {
     let mut ui = Frontend {
         editor: Editor {
