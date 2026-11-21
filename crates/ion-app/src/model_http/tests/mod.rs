@@ -2298,6 +2298,16 @@ async fn ok_json_reports_only_structured_error_diagnostics_without_opening_a_str
             "provider response is not text/event-stream",
         ),
         (
+            "application/problem+json; charset=utf-8",
+            json!({"title":"Routing failed", "detail":"Route unavailable", "status":429, "instance":"private input"}),
+            "provider returned a JSON error instead of a stream (HTTP 200): Route unavailable",
+        ),
+        (
+            "application/problem+json",
+            json!({"title":"Routing failed", "detail":"\n", "instance":"private input"}),
+            "provider returned a JSON error instead of a stream (HTTP 200): Routing failed",
+        ),
+        (
             "text/html",
             json!({"error":{"message":"private input"}}),
             "provider response is not text/event-stream",

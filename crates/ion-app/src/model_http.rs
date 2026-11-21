@@ -48,7 +48,8 @@ use chat::ChatState;
 use chat_request::chat_body;
 use controls::control_fields;
 use errors::{
-    anthropic_sse_error, chat_stream_error, classify_status_error, provider_error_detail_value,
+    anthropic_sse_error, chat_stream_error, classify_status_error, problem_detail,
+    provider_error_detail_value,
 };
 use limits::{ResponseBudget, StreamBudget};
 use responses::ResponsesState;
@@ -362,6 +363,8 @@ impl ModelService for HttpModelService {
                 .map(str::trim);
             let is_sse = mime.is_some_and(|mime| mime.eq_ignore_ascii_case("text/event-stream"));
             let is_json = mime.is_some_and(is_json_media_type);
+            let is_problem =
+                mime.is_some_and(|mime| mime.eq_ignore_ascii_case("application/problem+json"));
             let success = response.status().is_success();
             if !success || is_json {
                 let status = response.status().as_u16();
@@ -395,6 +398,10 @@ impl ModelService for HttpModelService {
                 } else {
                     None
                 };
+                let problem = value
+                    .as_ref()
+                    .filter(|_| is_problem)
+                    .and_then(problem_detail);
                 if success {
                     if let Some(failure) = body_failure {
                         return Err(failure);
@@ -402,18 +409,25 @@ impl ModelService for HttpModelService {
                     // A gateway can return a JSON error envelope despite 2xx.
                     // Preserve bounded diagnostics, not arbitrary response data
                     // or retry/recovery semantics inferred from a success status.
-                    let detail = value
-                        .as_ref()
-                        .filter(|value| value.get("error").is_some_and(Value::is_object))
-                        .and_then(provider_error_detail_value);
+                    let detail = if is_problem {
+                        problem
+                    } else {
+                        value
+                            .as_ref()
+                            .filter(|value| value.get("error").is_some_and(Value::is_object))
+                            .and_then(provider_error_detail_value)
+                    };
                     let message = detail.map_or_else(
                         || "provider response is not text/event-stream".into(),
                         |detail| format!("provider returned a JSON error instead of a stream (HTTP {status}): {detail}"),
                     );
                     return Err(invalid(&message));
                 }
-                let kind = classify_status_error(status, value.as_ref());
-                let detail = value.as_ref().and_then(provider_error_detail_value);
+                let provider_error = value.as_ref().filter(|_| !is_problem);
+                let kind = classify_status_error(status, provider_error);
+                let detail = provider_error
+                    .and_then(provider_error_detail_value)
+                    .or(problem);
                 let mut message = detail.map_or_else(
                     || format!("provider returned HTTP {status}"),
                     |detail| format!("provider returned HTTP {status}: {detail}"),

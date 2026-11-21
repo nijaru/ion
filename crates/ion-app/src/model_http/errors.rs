@@ -82,6 +82,21 @@ pub(super) fn classify_status_error(status: u16, value: Option<&Value>) -> Provi
     }
 }
 
+/// RFC 9457 problem details: only the human-readable description is
+/// diagnostic. The actual response status still owns classification.
+pub(super) fn problem_detail(value: &Value) -> Option<String> {
+    ["detail", "title"].into_iter().find_map(|field| {
+        let detail: String = value
+            .get(field)?
+            .as_str()?
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(500)
+            .collect();
+        (!detail.trim().is_empty()).then_some(detail)
+    })
+}
+
 pub(super) fn provider_error_detail_value(value: &Value) -> Option<String> {
     let [summary, upstream] = provider_text(value);
     let separator = if summary.is_some() && upstream.is_some() {
