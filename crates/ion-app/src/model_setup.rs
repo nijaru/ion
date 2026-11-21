@@ -535,10 +535,12 @@ impl ModelStore {
         let endpoint = HttpModelService::resolve_endpoint(endpoint, wire)
             .context("invalid custom endpoint")?;
         ensure!(!saved.model.is_empty(), "model ID is empty");
-        ensure!(
-            saved.api_key_env.as_deref() != Some(""),
-            "credential environment name is empty"
-        );
+        if let Some(name) = &saved.api_key_env {
+            ensure!(
+                !name.is_empty() && !name.contains(['=', '\0']),
+                "--api-key-env requires an environment variable name, not an assignment"
+            );
+        }
         Ok(Selection {
             provider: saved.provider.clone(),
             model: saved.model.clone(),
@@ -581,6 +583,25 @@ mod tests {
             max_output_tokens: None,
             image_input: false,
         }
+    }
+
+    #[test]
+    fn custom_route_rejects_invalid_environment_names_without_echoing_them() {
+        let store = ModelStore::new(PathBuf::new());
+        let mut route = desktop_route("http://localhost:1234/v1");
+        for invalid in ["", "ION_TEST_KEY=private-value", "bad\0name"] {
+            route.api_key_env = Some(invalid.into());
+            let error = store
+                .resolve_saved(&route)
+                .err()
+                .expect("invalid name accepted");
+            assert_eq!(
+                error.to_string(),
+                "--api-key-env requires an environment variable name, not an assignment"
+            );
+        }
+        route.api_key_env = Some("ION_TEST_KEY".into());
+        assert!(store.resolve_saved(&route).unwrap().requires_key);
     }
 
     #[test]
