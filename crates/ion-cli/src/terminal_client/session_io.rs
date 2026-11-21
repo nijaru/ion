@@ -145,6 +145,16 @@ impl SessionIo {
             .is_some_and(|read| read.projection_revision.is_none())
     }
 
+    pub(super) fn reports_work(&self) -> bool {
+        // A required refresh delays input. A routine refresh after settlement
+        // must not put the terminal tab back into its working state.
+        if self.blocked {
+            self.has_read()
+        } else {
+            self.has_command_read()
+        }
+    }
+
     pub(super) fn reloading_presentation(&self) -> bool {
         self.read
             .as_ref()

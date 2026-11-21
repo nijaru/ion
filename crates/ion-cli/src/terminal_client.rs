@@ -242,7 +242,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             ui.refresh_completion(Some(runtime.resources()), Some(runtime.commands()), false);
             program.blocked_refresh = ui.session_io.refresh_error.is_some();
             program.blocked_question = ui.question_owns_input();
-            program.publish(terminal, runtime.is_busy() || ui.session_io.has_read())?;
+            program.publish(terminal, runtime.is_busy() || ui.session_io.reports_work())?;
             let queued = runtime.queued_inputs(terminal.size()?.0 as usize);
             let painted = draw(terminal, screen, &mut ui, ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model()), &queued).await?;
             #[cfg(debug_assertions)]
