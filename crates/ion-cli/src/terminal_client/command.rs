@@ -135,15 +135,7 @@ pub(super) async fn dispatch_command(
         );
         return Ok(());
     }
-    // These use the resident transcript or Host admission, not the Session
-    // read slot. A routine refresh should not reject them after a Turn.
-    let independent_of_refresh = matches!(
-        kind,
-        CommandKind::Builtin(Builtin::Tool | Builtin::Tools) | CommandKind::UserCommand(_)
-    ) && ui.session_io.refreshing()
-        && !ui.session_io.blocks_input();
-    if (ui.session_io.has_read() || ui.session_io.binding.is_some())
-        && !independent_of_refresh
+    if ui.session_io.command_slot_occupied()
         && !(kind == CommandKind::Builtin(Builtin::Editor) && !ui.session_io.has_pending_effect())
         && !matches!(
             kind,

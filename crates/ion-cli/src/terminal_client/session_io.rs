@@ -101,6 +101,7 @@ struct Read {
 }
 
 pub(super) struct ReadFinished {
+    retired: bool,
     read: Read,
     result: Result<ReadOutput>,
 }
@@ -128,6 +129,7 @@ pub(super) struct SessionIo {
     read: Option<Read>,
     refresh_pending: bool,
     // A failed refresh is not evidence that a committed context was rolled back.
+    retired_refresh: Option<Read>,
     pub(super) blocked: bool,
     pub(super) refresh_error: Option<String>,
     pub(super) binding: Option<Binding>,
@@ -136,7 +138,19 @@ pub(super) struct SessionIo {
 
 impl SessionIo {
     pub(super) fn has_read(&self) -> bool {
-        self.read.is_some()
+        self.read.is_some() || self.retired_refresh.is_some()
+    }
+
+    pub(super) fn command_slot_occupied(&self) -> bool {
+        self.binding.is_some() || (self.read.is_some() && !self.passive_refresh_in_read_slot())
+    }
+
+    fn passive_refresh_in_read_slot(&self) -> bool {
+        !self.blocks_input()
+            && self
+                .read
+                .as_ref()
+                .is_some_and(|read| read.projection_revision.is_some())
     }
 
     pub(super) fn has_command_read(&self) -> bool {
@@ -149,7 +163,7 @@ impl SessionIo {
         // A required refresh delays input. A routine refresh after settlement
         // must not put the terminal tab back into its working state.
         if self.blocked {
-            self.has_read()
+            self.read.is_some() || self.refresh_pending
         } else {
             self.has_command_read()
         }
@@ -202,7 +216,7 @@ impl SessionIo {
         projection_revision: u64,
     ) -> Result<()> {
         if !self.refresh_pending
-            || self.read.is_some()
+            || self.has_read()
             || self.binding.is_some()
             || (!self.blocked && control.is_busy())
         {
@@ -245,6 +259,14 @@ impl SessionIo {
         session: &Session,
         future: impl Future<Output = Result<ReadOutput>> + Send + 'static,
     ) -> Result<()> {
+        if self.passive_refresh_in_read_slot() {
+            assert!(
+                self.retired_refresh.is_none(),
+                "only one routine refresh can be in flight"
+            );
+            self.retired_refresh = self.read.take();
+            self.schedule_refresh();
+        }
         anyhow::ensure!(
             self.read.is_none() && self.binding.is_none(),
             "Wait for Session inspection or binding to finish"
@@ -311,16 +333,22 @@ impl SessionIo {
     }
 
     pub(super) async fn complete(&mut self) -> ReadFinished {
-        let result = self
-            .read
+        let retired = self.read.is_none();
+        let slot = if retired {
+            &mut self.retired_refresh
+        } else {
+            &mut self.read
+        };
+        let result = slot
             .as_mut()
             .expect("guarded Session inspection")
             .future
             .as_mut()
             .await;
         ReadFinished {
-            read: self.read.take().expect("completed Session inspection"),
+            read: slot.take().expect("completed Session inspection"),
             result,
+            retired,
         }
     }
 }
@@ -434,7 +462,14 @@ pub(super) fn apply(
     ui: &mut Frontend,
     finished: ReadFinished,
 ) -> Result<Option<UiEffect>> {
-    let ReadFinished { read, result } = finished;
+    let ReadFinished {
+        read,
+        result,
+        retired,
+    } = finished;
+    if retired {
+        return Ok(None);
+    }
     if read.session != runtime.session().id() || read.generation != ui.session_io.generation {
         // A read owns its original coordinates, never a lookup of the new binding.
         if let Some(source) = read.source {
@@ -600,7 +635,14 @@ fn finish_command(ui: &mut Frontend, source: Option<EditorDraft>, result: Result
 }
 
 pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut Result<()>) {
-    let ReadFinished { read, result } = finished;
+    let ReadFinished {
+        read,
+        result,
+        retired,
+    } = finished;
+    if retired {
+        return;
+    }
     let result = match result {
         Ok(ReadOutput::RecoverySaveRefused { id, path, error }) => {
             if let Some(source) = read.source {

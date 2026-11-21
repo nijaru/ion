@@ -467,7 +467,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         owner.request_shutdown();
     }
     runtime.request_shutdown();
-    if ui.session_io.has_read() {
+    while ui.session_io.has_read() {
         let finished = ui.session_io.complete().await;
         session_io::cleanup(&mut ui, finished, &mut outcome);
     }
