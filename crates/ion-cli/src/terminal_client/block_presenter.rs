@@ -565,9 +565,31 @@ impl BlockPresenter {
             view.anchor = first;
         }
         if active && !view.reading && (start.block > 0 || start.row > 0) {
-            let items = conversation.mutable_items();
-            let focused = self.focused(&blocks, items, budget, width, revision, options);
-            return focused;
+            let active_turn = conversation.live().and_then(|live| {
+                live.projection()
+                    .items
+                    .iter()
+                    .find_map(super::transcript_item_turn)
+            });
+            // In fullscreen the tail can clip settled history while the entire
+            // active turn still fits. Only collapse that view if we are losing
+            // current-turn content, not merely because the Session has grown.
+            let current_content_clipped = inline || active_turn.is_none_or(|turn| {
+                blocks.iter().enumerate().take(start.block + 1).any(|(index, block)| {
+                    matches!(&block.segment, Segment::Item(item) if super::transcript_item_turn(item) == Some(turn))
+                        && (index < start.block || start.row > usize::from(block.gap))
+                })
+            });
+            if current_content_clipped {
+                return self.focused(
+                    &blocks,
+                    conversation.mutable_items(),
+                    budget,
+                    width,
+                    revision,
+                    options,
+                );
+            }
         }
         rows
     }

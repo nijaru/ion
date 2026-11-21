@@ -60,6 +60,7 @@ class Case:
         self.settings = Path(self.env["ION_HOME"]) / "settings.json"
         self.configure("deny")
         self.requests, self.errors = [], []
+        self.before_broken_reply = None
 
     def configure(self, mode):
         self.settings.write_text(json.dumps({"tool_veto": {"program": sys.executable,
@@ -119,7 +120,14 @@ class Case:
                     self.send_header("Content-Type", "text/event-stream")
                     self.send_header("Content-Length", str(len(payload)))
                     self.end_headers()
-                    self.wfile.write(payload)
+                    if step == 5 and case.before_broken_reply is not None:
+                        first, rest = payload.split(b"\n\n", 1)
+                        self.wfile.write(first + b"\n\n")
+                        self.wfile.flush()
+                        assert case.before_broken_reply.wait(timeout=20), "broken reply not released"
+                        self.wfile.write(rest)
+                    else:
+                        self.wfile.write(payload)
                 except Exception as error:
                     case.errors.append(repr(error))
                     self.send_error(500, str(error))
@@ -246,9 +254,22 @@ def qualify(mode):
             message("Try a write after resource reload.", b"RETAINED_DONE")
             assert "Operator blocked retained" in painted_text(output)
             rebind(5, 4)
-            message("Try a write while the policy is broken.", b"BROKEN_DONE")
-            visible = painted_text(output)
-            assert "tool veto program exited unsuccessfully" in visible, (mode, visible)
+            reason = "tool veto program exited unsuccessfully"
+            if mode == "fullscreen":
+                # Keep the turn active while its answer streams. Older history
+                # overflows here, but the current turn and failed tool fit.
+                case.before_broken_reply = threading.Event()
+                output.clear()
+                os.write(master, b"Try a write while the policy is broken.\r")
+                try:
+                    wait(lambda: all(text in painted_text(output) for text in ("BROKEN_DONE", reason)))
+                finally:
+                    case.before_broken_reply.set()
+                wait(lambda: b"BROKEN_DONE" in output and program_ready(output))
+            else:
+                message("Try a write while the policy is broken.", b"BROKEN_DONE")
+                visible = painted_text(output)
+                assert reason in visible, (mode, visible)
             rebind(6, 6)
             message("Try a write under the rebound policy.", b"ALLOWED_DONE")
             os.write(master, b"/exit\r")
