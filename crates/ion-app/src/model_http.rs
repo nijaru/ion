@@ -131,25 +131,29 @@ impl HttpModelService {
             HttpWire::OpenAiResponses => path.ends_with("/responses"),
             _ => path.ends_with("/chat/completions"),
         };
+        if complete {
+            return Ok(url.to_string());
+        }
         let has_anthropic_version = path.ends_with("/v1");
+        let trailing_slashes = url.path().len() - path.len();
         let mut segments = url
             .path_segments_mut()
             .map_err(|_| invalid("provider endpoint cannot contain path segments"))?;
-        segments.pop_if_empty();
-        if !complete {
-            match wire {
-                HttpWire::AnthropicMessages => {
-                    if !has_anthropic_version {
-                        segments.push("v1");
-                    }
-                    segments.push("messages");
+        for _ in 0..trailing_slashes {
+            segments.pop_if_empty();
+        }
+        match wire {
+            HttpWire::AnthropicMessages => {
+                if !has_anthropic_version {
+                    segments.push("v1");
                 }
-                HttpWire::OpenAiResponses => {
-                    segments.push("responses");
-                }
-                _ => {
-                    segments.push("chat").push("completions");
-                }
+                segments.push("messages");
+            }
+            HttpWire::OpenAiResponses => {
+                segments.push("responses");
+            }
+            _ => {
+                segments.push("chat").push("completions");
             }
         }
         drop(segments);

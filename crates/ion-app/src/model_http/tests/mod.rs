@@ -645,6 +645,16 @@ fn compatible_base_url_resolves_one_standard_request_path() {
             "http://desktop:8080/v1/chat/completions",
         ),
         (
+            "http://desktop:8080/v1/chat/completions/",
+            HttpWire::ChatCompletions,
+            "http://desktop:8080/v1/chat/completions/",
+        ),
+        (
+            "https://proxy.example/api/a%2Fb/v1///",
+            HttpWire::OpenAiResponses,
+            "https://proxy.example/api/a%2Fb/v1/responses",
+        ),
+        (
             "https://proxy.example/api/v1/",
             HttpWire::OpenRouterChat,
             "https://proxy.example/api/v1/chat/completions",
