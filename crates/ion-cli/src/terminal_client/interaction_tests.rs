@@ -84,6 +84,13 @@ async fn withdrawing_all_preserves_each_caret_attachment_owner_and_current_compo
     )];
     interaction::recover_queued_input(&mut fixture.control, &mut ui);
     tests::drain(&mut fixture.control, &mut ui).await;
+    let history = ui
+        .pending_history_rows(100)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(!history.contains("withdrawn from queue."), "{history}");
     assert_eq!(ui.editor.recovered.len(), 2);
     let mut found = std::collections::BTreeSet::new();
     for _ in 0..3 {

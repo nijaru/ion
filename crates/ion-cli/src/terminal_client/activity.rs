@@ -205,6 +205,14 @@ pub(super) fn apply(
                 ui.status = "Draft returned".into();
                 "Draft retained"
             };
+            // An explicit withdrawal already shows its result in the
+            // composer and dock. Keep failures, not routine queue edits, in
+            // the transcript.
+            if matches!(returned.reason, ReturnReason::Cleared)
+                && returned.preparation_error.is_none()
+            {
+                return Ok(None);
+            }
             let fault = returned
                 .preparation_error
                 .map(|error| format!("; preparation also failed: {error:#}"))
