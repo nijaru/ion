@@ -59,14 +59,17 @@ impl History {
             .entries
             .iter()
             .filter_map(|entry| match entry {
-                ion_core::SessionEntry::TurnStarted { input, .. }
-                | ion_core::SessionEntry::Steering { input, .. } => {
-                    input.content.iter().find_map(|part| match part {
-                        ion_ai::Content::Text(text) => Some(text.clone()),
-                        _ => None,
-                    })
-                }
+                ion_core::SessionEntry::TurnStarted {
+                    input, completion, ..
+                } if completion.is_empty() => Some(input),
+                ion_core::SessionEntry::Steering { input, .. } => Some(input),
                 _ => None,
+            })
+            .filter_map(|input| {
+                input.content.iter().find_map(|part| match part {
+                    ion_ai::Content::Text(text) => Some(text.clone()),
+                    _ => None,
+                })
             })
             .collect();
         let label = view

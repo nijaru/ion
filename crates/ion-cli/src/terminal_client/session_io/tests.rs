@@ -10,6 +10,37 @@ use crate::terminal_client::{
     tests::{Fixture, settle_io},
 };
 
+#[tokio::test]
+async fn prompt_recall_excludes_automated_work_readiness() {
+    let mut fixture = Fixture::new();
+    let mut view = fixture.control.session().view().unwrap();
+    let model = ion_ai::ModelRef {
+        provider: "fixture".into(),
+        model: "recall".into(),
+    };
+    let session = view.id;
+    let turn = |turn, text: &str, completion| ion_core::SessionEntry::TurnStarted {
+        turn,
+        input: ion_ai::Message::user_input(text.into(), []),
+        model: model.clone(),
+        completion,
+        request: None,
+        recovery: None,
+    };
+    view.entries.push(turn(1, "original prompt", Vec::new()));
+    view.entries.push(turn(
+        2,
+        "automated input",
+        vec![ion_core::CompletionNotice {
+            source_session: session,
+            run: uuid::Uuid::nil(),
+            child_session: uuid::Uuid::nil(),
+        }],
+    ));
+    assert_eq!(History::prepare(view).prompts, ["original prompt"]);
+    fixture.control.shutdown().await;
+}
+
 // The real reader has materialized its cut and released Store locks. Keep its
 // actual projection leaf parked while the same terminal pump drives controls.
 async fn hold_read(
