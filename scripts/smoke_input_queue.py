@@ -64,6 +64,10 @@ def exercise_queue_controls(binary, work, env, requests, release):
             terminal.send(b"\x03\x03")
             terminal.wait(lambda: terminal.editor_matches("", 0, False))
             terminal.finish()
+            if mode == "inline":
+                history = terminal.tmux("capture-pane", "-p", "-S", "-", "-t", "ion:0.0")
+                assert "withdrawn from queue" not in history, history
+                assert "Draft returned" not in history, history
         finally:
             release.set()
             terminal.close()
