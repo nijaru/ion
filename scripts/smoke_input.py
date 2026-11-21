@@ -236,7 +236,7 @@ def exercise_recovery_sources(work, env):
             literal = "  original café 🦀\nkeep"
             terminal.output.clear()
             terminal.send(b"\x1b[200~" + literal.encode() + b"\x1b[201~" + b"\x1b[D" * 4 + b"\r")
-            terminal.wait(lambda: "Session refresh failed" in terminal.text())
+            terminal.wait(lambda: "/session retries · prompts blocked" in terminal.text())
             assert len(requests) == before, "uncertain admission dispatched a model request"
             attachment.unlink()  # Review/save must not reopen the original file.
             command("/recovery")
@@ -2189,7 +2189,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     before = len(requests)
                     terminal.output.clear()
                     terminal.send("KEEP_ORIGINAL_INPUT\r")
-                    terminal.wait(lambda: "Session refresh failed" in terminal.text())
+                    terminal.wait(lambda: "/session retries · prompts blocked" in terminal.text())
                     assert "› KEEP_ORIGINAL_INPUT" in terminal.text(), terminal.output[-2500:]
                     assert len(requests) == before, "failed admission issued a request"
                     connection.execute("DROP TRIGGER reject_admission")
@@ -2246,7 +2246,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     connection.execute("UPDATE entries SET body=? WHERE seq=?", (b'{"kind":"invalid_qualification_entry"}', seq))
                     connection.commit()
                     release.set()
-                    terminal.wait(lambda: "Session refresh failed" in terminal.text())
+                    terminal.wait(lambda: "/session retries · prompts blocked" in terminal.text())
                     terminal.output.clear()
                     terminal.send("UNSEEN_VIEW_MUST_NOT_SEND\rx")
                     terminal.wait(lambda: "› UNSEEN_VIEW_MUST_NOT_SENDx" in terminal.text())

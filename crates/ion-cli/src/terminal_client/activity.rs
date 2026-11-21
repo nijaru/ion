@@ -246,6 +246,8 @@ pub(super) fn apply(
                 && ui.conversation.live_for(settlement.operation);
             ui.discard_provisional();
             ui.conversation.clear_live();
+            let cold_shell_refusal =
+                matches!(&settlement.outcome, OperationOutcome::NotDispatched(_));
             let not_dispatched = matches!(
                 &settlement.outcome,
                 OperationOutcome::NotDispatched(_)
@@ -312,7 +314,9 @@ pub(super) fn apply(
             }
             if observed_success {
                 ui.session_io.schedule_refresh();
-            } else {
+            } else if !cold_shell_refusal {
+                // Cold refusal did not write Session facts. Preserve any
+                // existing refresh requirement, but don't create one here.
                 ui.session_io.request_refresh();
             }
             return Ok(error);
