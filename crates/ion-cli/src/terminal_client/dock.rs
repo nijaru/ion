@@ -30,9 +30,9 @@ fn queue_rows(
         .count();
     let mut summary = if waiting > 0 {
         format!(
-            "Queued · {steering} steering · {} follow-up(s) · {} withdraws queued input",
-            waiting - steering,
+            "{}: withdraw queue · {steering} steering · {} follow-up(s)",
             keys.hint(crate::keybindings::KeyAction::Dequeue),
+            waiting - steering,
         )
     } else {
         String::new()

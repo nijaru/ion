@@ -69,6 +69,14 @@ async fn withdrawing_all_preserves_each_caret_attachment_owner_and_current_compo
         .collect::<Vec<_>>()
         .join("\n");
     assert!(rows.contains("Follow-up: first 🦀") && rows.contains("Follow-up: second 雪"));
+    let narrow = Dock::prepare(&mut ui, None, None, &queued, 24, 3);
+    assert!(
+        narrow
+            .rows
+            .iter()
+            .any(|row| row.to_string().contains("Alt-Up: withdraw queue"))
+    );
+    assert!(narrow.cursor.is_some());
     ui.insert("current é");
     ui.editor.cursor = 3;
     ui.editor.attachments = vec![AttachmentSource::ImageFile(
