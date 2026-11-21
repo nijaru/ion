@@ -2094,6 +2094,27 @@ async fn chat_stream_accepts_cr_and_mixed_sse_line_endings() {
 }
 
 #[tokio::test]
+async fn sse_crlf_does_not_charge_its_last_byte_to_next_frame() {
+    let final_data = "\ndata: [DONE]\n\n";
+    let padded = "x".repeat(MAX_FRAME - final_data.len() - 1);
+    let body = format!(
+        "data: {{\"choices\":[{{\"delta\":{{\"content\":\"hi\"}},\"finish_reason\":\"stop\"}}]}}\r\n\r\n:{padded}{final_data}"
+    );
+    let endpoint = serve_split(body, "200 OK", 1024).await;
+    let model =
+        HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+    let mut stream = model.stream(request()).await.unwrap();
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        ModelStreamEvent::TextDelta { .. }
+    ));
+    assert!(matches!(
+        stream.next().await.unwrap().unwrap(),
+        ModelStreamEvent::Completed(_)
+    ));
+}
+
+#[tokio::test]
 async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     let body = concat!(
         "data: {\"model\":\"returned\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",

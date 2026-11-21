@@ -440,6 +440,7 @@ impl ModelService for HttpModelService {
             let stream: ModelStream = Box::pin(try_stream! {
                 let mut bytes = response.bytes_stream();
                 let mut frame = Vec::new();
+                let mut frame_ended_with_cr = false;
                 let mut budget = StreamBudget::default();
                 while let Some(next) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, bytes.next())
                     .await
@@ -447,6 +448,10 @@ impl ModelService for HttpModelService {
                     let chunk = next.map_err(|_| transport("provider stream transport failed"))?;
                     for byte in chunk {
                         budget.byte()?;
+                        // A blank CR line already dispatched the frame. Its
+                        // optional LF is not part of the next frame, even
+                        // when the transport delivers it in another chunk.
+                        if std::mem::take(&mut frame_ended_with_cr) && byte == b'\n' { continue; }
                         if frame.len() == wire.frame_limit() { Err(invalid("provider SSE frame exceeded byte limit"))?; }
                         frame.push(byte);
                         // SSE ignores exactly one initial UTF-8 BOM. The absolute
@@ -456,6 +461,7 @@ impl ModelService for HttpModelService {
                             continue;
                         }
                         if !has_sse_event_boundary(&frame) { continue; }
+                        frame_ended_with_cr = byte == b'\r';
                         let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
                         frame.clear();
                         let failure = decoder.take_error();
@@ -468,8 +474,8 @@ impl ModelService for HttpModelService {
                         if let Some(failure) = failure { Err(failure)?; }
                     }
                 }
-                // SSE permits a final event without a trailing blank line. Some
-                // Chat Completions servers also close after finish_reason rather
+                // For provider compatibility, accept a final frame without a
+                // trailing blank line. Some Chat Completions servers also close after finish_reason rather
                 // than sending a separate [DONE] sentinel.
                 if !frame.is_empty() {
                     let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
