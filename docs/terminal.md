@@ -28,7 +28,9 @@ Each confirmed withdrawal returns its original draft, caret and attachments sepa
 
 Ctrl-C immediately requests cancellation of foreground work, including unanswered questions, without confirmation. It does not promise immediate termination: Ion still joins started work and cleanup, and effects are not undone. Transferred background work has a [separate lifetime](delegation.md#lifetime-and-recovery). While [attached to a program](processes.md#attach-and-detach), Ctrl-C is forwarded to that program instead. External editors handle their own Ctrl-C.
 
-A pending clipboard read in the composer is cancelled first. Esc dismisses local UI. Stopping work via Esc, clearing a draft, cancelling a question with Esc and quitting with a shortcut require confirmation.
+A pending clipboard read in the composer is cancelled first. Esc dismisses local UI. Stopping work via Esc, clearing a draft, and cancelling a question with Esc require a second press of the same key.
+
+To leave chat, enter `/quit`. With an empty composer and no attachments, press Ctrl-D twice (or Ctrl-C twice while idle). The first press shows the confirmation; it does not close the Session.
 
 Reported key repeats cannot submit input, accept completions or choices, toggle tool output or question/picker controls, open an external editor, or start another cancellation. Ordinary held-key editing and navigation still repeat. Legacy terminals cannot distinguish auto-repeat from another press.
 
