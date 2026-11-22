@@ -1123,7 +1123,7 @@ def exercise_orientation(work, env, endpoint):
             assert Path(header["cwd"]).resolve() == cwd.resolve()
             terminal.wait_ready(lambda: "Session " + header["id"][:8] in terminal.text())
             terminal.send("/name Release\r")
-            terminal.wait(lambda: " · Release" in terminal.text())
+            terminal.wait(lambda: "Release · " in terminal.text())
             terminal.send("/help model\r")
             terminal.wait(lambda: "Usage: /model [MODEL]" in terminal.text())
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:

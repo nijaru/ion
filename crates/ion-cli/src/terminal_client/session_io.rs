@@ -25,7 +25,7 @@ pub(super) enum ReadOutput {
         missing: bool,
     },
     SelectModel(ion_ai::ModelRef),
-    Reload(Box<(crate::keybindings::KeyBindings, crate::themes::Themes)>),
+    Reload(Box<Presentation>),
     SessionInfo(String),
     Context(super::navigation::ContextPickerValue),
     Fork(super::navigation::ForkPickerValue),
@@ -108,12 +108,18 @@ pub(super) struct ReadFinished {
     result: Result<ReadOutput>,
 }
 
+pub(super) struct Presentation {
+    pub(super) keys: crate::keybindings::KeyBindings,
+    pub(super) themes: crate::themes::Themes,
+    pub(super) footer: super::orientation::Footer,
+}
+
 pub(super) struct Binding {
     operation: BindingOperationId,
     origin: super::recovery::Origin,
     pub(super) source: Option<EditorDraft>,
     restore: Option<ion_ai::Message>,
-    presentation: Option<Box<(crate::keybindings::KeyBindings, crate::themes::Themes)>>,
+    presentation: Option<Box<Presentation>>,
 }
 
 pub(super) enum UiEffect {
@@ -407,10 +413,10 @@ pub(super) fn binding_finished(
             if let Some(pending) = pending {
                 ui.session_io.restore = pending.restore;
                 if let Some(presentation) = pending.presentation {
-                    let (keys, themes) = *presentation;
                     ui.editor.break_edit_focus();
-                    ui.keys = keys;
-                    ui.install_reloaded_theme(themes);
+                    ui.keys = presentation.keys;
+                    ui.footer = presentation.footer;
+                    ui.install_reloaded_theme(presentation.themes);
                     ui.print(super::resource_commands::reloaded(
                         control.resources(),
                         control.commands(),

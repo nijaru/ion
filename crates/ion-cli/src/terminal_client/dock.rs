@@ -7,6 +7,7 @@ use super::paint::Prepared;
 use super::picker::PickerPaint;
 use super::question::QuestionTarget;
 use super::{ActiveOperation, Frontend, orientation, visible_status};
+
 use crate::presentation_style::Role;
 use crate::terminal_completion::CompletionFrame;
 use crate::terminal_input::input_window;
@@ -250,7 +251,11 @@ impl Dock {
             crate::display_text::push_wrapped(&mut status, &format!("Notice · {notice}"), width);
         }
         let mut earlier_rows = 0;
-        if let Some(value) = visible_status(ui, operation) {
+        let progress = operation
+            .filter(|op| !op.is_cancelled() && visible_status(ui, None).is_none())
+            .map(|op| format!("{} · {}", op.controls(&ui.keys), op.label()));
+        let status_value = progress.clone().or_else(|| visible_status(ui, operation));
+        if let Some(value) = status_value {
             earlier_rows = status.len();
             crate::display_text::push_wrapped(&mut status, &value, width);
         }
@@ -305,7 +310,36 @@ impl Dock {
         // leave the spare rows to the transcript instead of decorating it.
         let rule = (width >= 3 && spare_rows >= 8)
             .then(|| Line::styled("─".repeat(width), ui.themes.theme().style(Role::Secondary)));
-        let body_rows = spare_rows - 2 * usize::from(rule.is_some());
+        let top = rule.as_ref().map(|rule| {
+            let Some(progress) = progress.filter(|_| width >= 8) else {
+                return rule.clone();
+            };
+            use unicode_width::UnicodeWidthStr;
+            let (progress, clipped) =
+                crate::display_text::fit_line_with_status(&progress, width - 7);
+            if clipped {
+                return rule.clone();
+            }
+            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let spinner = frames[ui.spinner_frame % frames.len()];
+            let tail = "─".repeat(width - 6 - progress.width());
+            status.remove(earlier_rows);
+            ui.spinner_visible = true;
+            let theme = ui.themes.theme();
+            use ratatui::text::Span;
+            Line::from(vec![
+                Span::styled("── ", theme.style(Role::Secondary)),
+                Span::styled(spinner.to_string(), theme.style(Role::Running)),
+                Span::styled(format!(" {progress} "), theme.style(Role::Secondary)),
+                Span::styled(tail, theme.style(Role::Secondary)),
+            ])
+        });
+        let body_rows = budget
+            - status.len()
+            - completion.rows.len()
+            - composer.lines.len()
+            - footer.len()
+            - 2 * usize::from(rule.is_some());
         let mut rows = Vec::new();
         for text in status {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::Secondary)));
@@ -320,7 +354,7 @@ impl Dock {
             };
             rows.push(Line::styled(text.clone(), ui.themes.theme().style(role)));
         }
-        rows.extend(rule.iter().cloned());
+        rows.extend(top);
         let composer_top = rows.len();
         for text in composer.lines {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::UserInput)));

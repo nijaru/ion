@@ -261,8 +261,19 @@ def qualify(mode):
                 case.before_broken_reply = threading.Event()
                 output.clear()
                 os.write(master, b"Try a write while the policy is broken.\r")
+                frames = set()
+
+                def streaming_with_spinner():
+                    visible = painted_text(output)
+                    if "BROKEN_DONE" not in visible or reason not in visible:
+                        return False
+                    for row in visible.splitlines():
+                        if row.startswith("── ") and "Working" in row:
+                            frames.update(set(row) & set("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"))
+                    return len(frames) >= 2
+
                 try:
-                    wait(lambda: all(text in painted_text(output) for text in ("BROKEN_DONE", reason)))
+                    wait(streaming_with_spinner)
                 finally:
                     case.before_broken_reply.set()
                 wait(lambda: b"BROKEN_DONE" in output and program_ready(output))

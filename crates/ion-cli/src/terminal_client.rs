@@ -139,6 +139,9 @@ use activity::ActiveOperation;
 struct Frontend {
     keys: KeyBindings,
     themes: crate::themes::Themes,
+    footer: orientation::Footer,
+    spinner_frame: usize,
+    spinner_visible: bool,
     theme_io: theme_io::ThemeIo,
     theme_preview_name: Option<String>,
     theme_picker: Option<theme_selection::ThemePicker>,
@@ -181,6 +184,7 @@ pub struct ChatInit {
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
+    let footer = orientation::Footer::load(init.services.config_root())?;
     let mut runtime = init.setup.into_control::<EditorDraft>();
     let questions = runtime
         .attach_question_responder()
@@ -198,6 +202,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         mode: init.tui_mode,
         keys: init.keys,
         themes: init.themes,
+        footer,
         ..Frontend::default()
     };
     let mut interrupt = init.interrupt;
@@ -228,6 +233,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         let mut poll_control = true;
         let mut theme_poll = tokio::time::interval(Duration::from_secs(1));
         theme_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut spinner = tokio::time::interval(Duration::from_millis(100));
+        spinner.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.reconcile_recovery(runtime.session().id())?;
@@ -244,7 +251,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             program.blocked_question = ui.question_owns_input();
             program.publish(terminal, runtime.is_busy() || ui.session_io.reports_work())?;
             let queued = runtime.queued_inputs(terminal.size()?.0 as usize);
-            let painted = draw(terminal, screen, &mut ui, ActiveOperation::from_state(runtime.state()), Some(runtime.agent().model()), &queued).await?;
+            let operation = ActiveOperation::from_state(runtime.state());
+            ui.spinner_visible = false;
+            let painted = draw(terminal, screen, &mut ui, operation, Some(runtime.agent().model()), &queued).await?;
             #[cfg(debug_assertions)]
             if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
                 panic!("ION smoke panic after first terminal draw");
@@ -295,6 +304,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 },
                 _ = tokio::time::sleep(Duration::from_millis(50)), if retry_paint => continue,
+                _ = spinner.tick(), if painted && ui.spinner_visible => {
+                    ui.spinner_frame = ui.spinner_frame.wrapping_add(1);
+                    continue;
+                },
                 _ = theme_poll.tick(), if ui.themes.watch_name().is_some() && !ui.session_io.reloading_presentation() => {
                     ui.theme_io.poll(&ui.themes);
                     continue;

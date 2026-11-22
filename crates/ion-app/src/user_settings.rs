@@ -29,11 +29,18 @@ impl Default for UserSettings {
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Sections<S: Default, Q: Default, V: Default, T: Default = IgnoredAny> {
+struct Sections<
+    S: Default,
+    Q: Default,
+    V: Default,
+    T: Default = IgnoredAny,
+    F: Default = IgnoredAny,
+> {
     shell: S,
     search: Q,
     tool_veto: V,
     theme: T,
+    footer: F,
 }
 impl UserSettings {
     pub fn load(root: &Path) -> Result<Self> {
@@ -75,6 +82,13 @@ impl UserSettings {
         Ok(self
             .decode::<Sections<IgnoredAny, IgnoredAny, IgnoredAny, Option<String>>>("theme")?
             .theme)
+    }
+
+    /// Decode terminal footer preferences only for clients that display them.
+    pub fn footer<F: DeserializeOwned + Default>(&self) -> Result<F> {
+        Ok(self
+            .decode::<Sections<IgnoredAny, IgnoredAny, IgnoredAny, IgnoredAny, F>>("footer")?
+            .footer)
     }
 
     /// Patch only the preference in a fresh document under the cooperating

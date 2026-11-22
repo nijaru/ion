@@ -449,19 +449,20 @@ pub(super) fn handle_builtin(
             let io = runtime.session().io()?;
             ui.session_io
                 .start_presentation_reload(runtime.session(), async move {
-                    let (keys, themes) = io
+                    let presentation = io
                         .run(move |_| {
                             Ok((|| -> Result<_> {
-                                Ok((
-                                    crate::keybindings::KeyBindings::load(&root)?,
-                                    themes.reloaded()?,
-                                ))
+                                Ok(super::session_io::Presentation {
+                                    keys: crate::keybindings::KeyBindings::load(&root)?,
+                                    themes: themes.reloaded()?,
+                                    footer: super::orientation::Footer::load(&root)?,
+                                })
                             })())
                         })
                         .await??;
-                    Ok(super::session_io::ReadOutput::Reload(Box::new((
-                        keys, themes,
-                    ))))
+                    Ok(super::session_io::ReadOutput::Reload(Box::new(
+                        presentation,
+                    )))
                 })?;
         }
         Builtin::Session => {

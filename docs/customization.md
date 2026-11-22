@@ -7,13 +7,33 @@ agent engine or writing a plugin.
 In chat, `/skills`, `/prompts` and `/commands` list the current catalog. Type `/`
 to browse command completions; Tab completes a choice without submitting it.
 `/reload` refreshes project instructions, skills, prompts, command metadata,
-keybindings and themes. It reports loaded counts and the files and reasons for
-warnings. Reloading and listing resources do not invoke a model or run a command.
+keybindings, themes and footer preferences. It reports loaded counts and the
+files and reasons for warnings. Reloading and listing resources do not invoke a model or run a command.
 
 Unrecognized slash-prefixed text, including absolute file paths, is ordinary
 model input. Known skills and templates expand into prompts. Built-in controls
 and explicit `/command:NAME` invocations keep their command behavior; an invalid
 `/command:NAME` reports an error instead of becoming a prompt.
+
+## Configure the terminal footer
+
+Set `footer` in `~/.ion/settings.json` (or `$ION_HOME/settings.json`) and run `/reload` in chat:
+
+```json
+{
+  "footer": {
+    "primary": ["model", "reasoning", "context"],
+    "secondary": ["workspace"]
+  }
+}
+```
+
+Available fields: `model`, `reasoning`, `context`, `workspace`, `session`, and
+`help`. List each field at most once. Put the most useful fields first on each
+line; later fields drop off when space runs out. The primary line stays below
+the secondary line and takes priority when only one row fits. Use an empty
+list to hide a line. The footer setting does not hide errors, stop controls,
+or other prompts that need your attention.
 
 ## Add a skill
 

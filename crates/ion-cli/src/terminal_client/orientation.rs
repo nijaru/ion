@@ -4,7 +4,45 @@ use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
 use super::Frontend;
-use crate::display_text::fit_line;
+
+#[derive(Clone, Copy, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Field {
+    Model,
+    Reasoning,
+    Context,
+    Workspace,
+    Session,
+    Help,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct Footer {
+    primary: Vec<Field>,
+    secondary: Vec<Field>,
+}
+
+impl Default for Footer {
+    fn default() -> Self {
+        Self {
+            primary: vec![Field::Model, Field::Reasoning, Field::Help],
+            secondary: vec![Field::Session, Field::Context, Field::Workspace],
+        }
+    }
+}
+
+impl Footer {
+    pub(super) fn load(root: &std::path::Path) -> anyhow::Result<Self> {
+        let footer: Self = ion_app::user_settings::UserSettings::load(root)?.footer()?;
+        let mut seen = Vec::new();
+        for field in footer.primary.iter().chain(&footer.secondary) {
+            anyhow::ensure!(!seen.contains(field), "footer fields must not be repeated");
+            seen.push(*field);
+        }
+        Ok(footer)
+    }
+}
 
 pub(super) fn rows(
     ui: &Frontend,
@@ -15,10 +53,17 @@ pub(super) fn rows(
     let Some(model) = model.filter(|_| budget > 0) else {
         return Vec::new();
     };
-    let mut rows = Vec::new();
     let settled = !ui.session_io.blocked && ui.session_io.binding.is_none();
-    if budget > 1 {
-        let context = ui
+    let value = |field| match field {
+        Field::Model => Some(format!("{}/{}", model.provider, model.model)),
+        Field::Session => (!ui.session_label.is_empty()).then(|| ui.session_label.clone()),
+        Field::Workspace => (!ui.cwd.as_os_str().is_empty()).then(|| ui.cwd.display().to_string()),
+        Field::Reasoning => ui
+            .reasoning_preference
+            .filter(|_| settled)
+            .map(|effort| format!("reasoning {effort}")),
+        Field::Help => Some("/help".to_owned()),
+        Field::Context => ui
             .context_estimate
             .as_ref()
             .filter(|_| settled && !ui.session_io.refreshing() && ui.conversation.live().is_none())
@@ -32,53 +77,77 @@ pub(super) fn rows(
                 )),
                 Ok(_) => None,
                 Err(_) => Some("context unavailable".into()),
-            })
-            // Do not truncate an estimate into a misleading partial denominator
-            // or let it displace all Session/workspace orientation on narrow screens.
-            .filter(|text| UnicodeWidthStr::width(text.as_str()) <= width / 2);
-        let location_width =
-            width.saturating_sub(context.as_ref().map_or(0, |text| text.len() + 3));
-        // Keep the Session recognizable even when its workspace path is long.
-        let session = fit_line(&ui.session_label, location_width / 2);
-        let remaining = location_width.saturating_sub(UnicodeWidthStr::width(session.as_str()) + 3);
-        let location = format!(
-            "{} · {session}",
-            fit_line(&ui.cwd.to_string_lossy(), remaining)
-        );
-        let location = match context {
-            Some(context) => format!("{location} · {context}"),
-            None => location,
-        };
-        rows.push(Line::styled(
-            fit_line(&location, width),
-            ui.themes
-                .theme()
-                .style(crate::presentation_style::Role::Secondary),
-        ));
-    }
-    // Binding completion requires a fresh History before its preference can
-    // accompany the current model. Painting never locks Session storage.
-    let reasoning = ui.reasoning_preference.filter(|_| settled);
-    let identity = match reasoning {
-        Some(reasoning) => format!(
-            "{}/{} · reasoning {reasoning} · /help",
-            model.provider, model.model
-        ),
-        None => format!("{}/{} · /help", model.provider, model.model),
+            }),
     };
-    rows.push(Line::styled(
-        fit_line(&identity, width),
-        ui.themes
-            .theme()
-            .style(crate::presentation_style::Role::Secondary),
-    ));
-    rows
+    let row = |fields: &[Field]| {
+        let mut text = String::new();
+        let mut remaining = width;
+        for &field in fields {
+            let Some(raw) = value(field) else { continue };
+            let separator = if text.is_empty() { "" } else { " · " };
+            let room = remaining.saturating_sub(UnicodeWidthStr::width(separator));
+            if room == 0 {
+                break;
+            }
+            let (fitted, clipped) = crate::display_text::fit_line_with_status(&raw, room);
+            // Keep fields whole on overflow, except for long identifiers and paths.
+            if clipped && !matches!(field, Field::Model | Field::Session | Field::Workspace) {
+                break;
+            }
+            if fitted == "…" && !text.is_empty() {
+                break;
+            }
+            text.push_str(separator);
+            text.push_str(&fitted);
+            remaining = width.saturating_sub(UnicodeWidthStr::width(text.as_str()));
+        }
+        (!text.is_empty()).then(|| {
+            Line::styled(
+                text,
+                ui.themes
+                    .theme()
+                    .style(crate::presentation_style::Role::Secondary),
+            )
+        })
+    };
+    let primary = row(&ui.footer.primary);
+    let secondary = if budget > usize::from(primary.is_some()) {
+        row(&ui.footer.secondary)
+    } else {
+        None
+    };
+    secondary.into_iter().chain(primary).collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::terminal_client::Editor;
+
+    #[test]
+    fn configured_footer_drops_lower_priority_fields_and_then_the_secondary_row() {
+        let ui = Frontend {
+            footer: serde_json::from_str(
+                r#"{"primary":["help","model"],"secondary":["workspace"]}"#,
+            )
+            .unwrap(),
+            cwd: "/workspace".into(),
+            ..Frontend::default()
+        };
+        let model = ModelRef {
+            provider: "p".into(),
+            model: "m".into(),
+        };
+        let rendered = |width, budget| {
+            rows(&ui, Some(&model), width, budget)
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rendered(30, 2), ["/workspace", "/help · p/m"]);
+        assert_eq!(rendered(30, 1), ["/help · p/m"]);
+        assert_eq!(rendered(7, 1), ["/help"]);
+    }
 
     #[test]
     fn context_chrome_is_an_estimate_and_never_truncates_its_denominator() {
