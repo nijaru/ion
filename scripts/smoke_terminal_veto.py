@@ -230,18 +230,24 @@ def qualify(mode):
                  and "prompts blocked" not in painted_text(output))
             assert PRIVATE.encode() not in output
 
-        def reload(expected_events, expected_requests):
+        def binding_command(command, marker, expected_events, expected_requests):
             output.clear()
-            os.write(master, b"/reload\r")
-            wait(lambda: "Reloaded" in painted_text(output) and "› " in painted_text(output))
+            os.write(master, command)
+
+            def ready():
+                screen = painted_text(output)
+                return (marker in screen and "› " in screen and "context ~" in screen
+                        and "prompts blocked" not in screen and program_ready(output))
+
+            wait(ready)
             assert len(case.events()) == expected_events and len(case.requests) == expected_requests
 
+        def reload(expected_events, expected_requests):
+            binding_command(b"/reload\r", "Reloaded", expected_events, expected_requests)
+
         def rebind(expected_events, expected_requests):
-            output.clear()
-            os.write(master, b"/model smoke/veto-model\r")
-            wait(lambda: "Selected smoke/veto-model" in painted_text(output)
-                 and "› " in painted_text(output))
-            assert len(case.events()) == expected_events and len(case.requests) == expected_requests
+            binding_command(b"/model smoke/veto-model\r", "Selected smoke/veto-model",
+                            expected_events, expected_requests)
 
         try:
             wait(lambda: program_ready(output))
