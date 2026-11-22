@@ -195,9 +195,12 @@ impl DetailView {
 
     fn top(&self, page: &Page, height: usize) -> usize {
         let limit = page.document.len.saturating_sub(height.max(1));
-        self.anchor
-            .as_ref()
-            .map_or(limit, |anchor| page.document.locate(anchor).min(limit))
+        // A chosen tool is a document to read from its heading. Only the
+        // conversation view follows the tail until the reader moves away.
+        self.anchor.as_ref().map_or_else(
+            || if self.tool.is_some() { 0 } else { limit },
+            |anchor| page.document.locate(anchor).min(limit),
+        )
     }
 
     /// Positive movement reads newer rows; only deliberate navigation replaces
@@ -207,7 +210,7 @@ impl DetailView {
         let top = self.top(page, self.viewport);
         let limit = page.document.len.saturating_sub(self.viewport.max(1));
         let next = top.saturating_add_signed(movement).min(limit);
-        if movement > 0 && next == limit && (self.tool.is_some() || page.end == page.total) {
+        if movement > 0 && next == limit && self.tool.is_none() && page.end == page.total {
             self.anchor = None;
             self.through = None;
         } else if next != top {
@@ -616,6 +619,30 @@ mod tests {
     }
 
     #[test]
+    fn selected_tools_open_at_the_heading_and_can_scroll_to_the_end() {
+        let mut first = activity(0);
+        let mut second = activity(1);
+        for tool in [&mut first, &mut second] {
+            tool.result.as_mut().unwrap().value = serde_json::json!({
+                "stdout": (1..=60).map(|n| format!("line {n}")).collect::<Vec<_>>().join("\n"),
+            });
+        }
+        let identity = first.identity;
+        let history = tool_history(vec![first, second]);
+        let mut view = DetailView::new(Some((NonZeroUsize::MIN, identity)));
+        view.prepare(history.items.iter(), &[], 0, 30);
+        assert!(view.window(8)[0].starts_with("Tool 1: exec"));
+        view.scroll_by(isize::MAX);
+        assert!(view.window(8).join("\n").contains("line 60"));
+        let bottom = view.anchor.clone();
+        view.prepare(history.items.iter(), &[], 0, 24);
+        assert_eq!(view.anchor, bottom);
+        view.navigate(KeyAction::Later);
+        view.prepare(history.items.iter(), &[], 0, 24);
+        assert!(view.window(8)[0].starts_with("Tool 2: exec"));
+    }
+
+    #[test]
     fn termination_is_a_source_anchored_inspection_entry_after_continuation() {
         let history = TranscriptProjection {
             items: vec![
@@ -702,11 +729,12 @@ mod tests {
     }
 
     fn read_marker(view: &mut DetailView, marker: &str) {
+        let direction = if view.tool.is_some() { 1 } else { -1 };
         for _ in 0..10_000 {
             if view.window(8)[0].contains(marker) {
                 return;
             }
-            view.scroll_by(-1);
+            view.scroll_by(direction);
         }
         panic!("marker not reachable: {marker}");
     }
