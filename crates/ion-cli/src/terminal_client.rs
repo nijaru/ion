@@ -168,6 +168,7 @@ struct Frontend {
     // Selected preference from accepted History, not an active Turn's controls.
     reasoning_preference: Option<ion_ai::Reasoning>,
     context_estimate: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
+    usage_totals: ion_core::UsageTotals,
 }
 
 pub struct ChatInit {

@@ -14,6 +14,10 @@ enum Field {
     Workspace,
     Session,
     Help,
+    InputTokens,
+    OutputTokens,
+    CacheRead,
+    CacheWrite,
 }
 
 #[derive(serde::Deserialize)]
@@ -27,7 +31,13 @@ impl Default for Footer {
     fn default() -> Self {
         Self {
             primary: vec![Field::Model, Field::Reasoning, Field::Help],
-            secondary: vec![Field::Session, Field::Context, Field::Workspace],
+            secondary: vec![
+                Field::Session,
+                Field::Context,
+                Field::InputTokens,
+                Field::OutputTokens,
+                Field::Workspace,
+            ],
         }
     }
 }
@@ -44,6 +54,13 @@ impl Footer {
     }
 }
 
+fn token_field(label: &str, count: ion_core::TokenCount, observations: usize) -> Option<String> {
+    (count.unreported < observations).then(|| {
+        let partial = if count.unreported == 0 { "" } else { "+?" };
+        format!("{label}{}{partial}", count.reported)
+    })
+}
+
 pub(super) fn rows(
     ui: &Frontend,
     model: Option<&ModelRef>,
@@ -54,7 +71,17 @@ pub(super) fn rows(
         return Vec::new();
     };
     let settled = !ui.session_io.blocked && ui.session_io.binding.is_none();
+    let usage = ui.usage_totals;
+    let tokens = |label, count| {
+        settled
+            .then(|| token_field(label, count, usage.observations))
+            .flatten()
+    };
     let value = |field| match field {
+        Field::InputTokens => tokens("↑", usage.input_tokens),
+        Field::OutputTokens => tokens("↓", usage.output_tokens),
+        Field::CacheRead => tokens("R", usage.cache_read_input_tokens),
+        Field::CacheWrite => tokens("W", usage.cache_write_input_tokens),
         Field::Model => Some(format!("{}/{}", model.provider, model.model)),
         Field::Session => (!ui.session_label.is_empty()).then(|| ui.session_label.clone()),
         Field::Workspace => (!ui.cwd.as_os_str().is_empty()).then(|| ui.cwd.display().to_string()),

@@ -536,6 +536,10 @@ def exercise_usage(work, base_env, endpoint):
                    XDG_CONFIG_HOME=str(sandbox / "config"), XDG_STATE_HOME=str(sandbox / "state"))
         subprocess.run([binary, "use", "smoke", "model", "--endpoint", endpoint,
                         "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        (sandbox / "ion/settings.json").write_text(json.dumps({"footer": {
+            "primary": ["input_tokens", "output_tokens", "cache_read", "cache_write", "model"],
+            "secondary": [],
+        }}))
         database = sandbox / "conversation.sqlite"
         before = len(requests)
         terminal = Terminal(cwd, env, mode, ["--cwd", cwd, "--session", database,
@@ -546,6 +550,7 @@ def exercise_usage(work, base_env, endpoint):
         release.clear()
         try:
             terminal.wait(lambda: len(requests) == before + 1 and b"state=done" in terminal.output)
+            terminal.wait(lambda: "↑1017 · ↓17 · R555 · smoke/model" in terminal.text())
             terminal.output.clear()
             terminal.send("/session\r")
             terminal.wait(lambda: "Total tokens: 1034" in terminal.text())
@@ -567,6 +572,7 @@ def exercise_usage(work, base_env, endpoint):
             assert not release.is_set() and len(requests) == before + 2
             release.set()
             terminal.wait(lambda: b"state=done" in terminal.output)
+            terminal.wait(lambda: "↑1017+? · ↓17+? · R555+? · smoke/model" in terminal.text())
             terminal.output.clear()
             terminal.send("/session\r")
             terminal.wait(lambda: "Total tokens: 1034 reported (incomplete)" in terminal.text())

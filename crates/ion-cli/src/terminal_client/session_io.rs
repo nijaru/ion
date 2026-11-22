@@ -50,12 +50,14 @@ pub(super) struct History {
     label: String,
     reasoning: ion_ai::Reasoning,
     context: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
+    usage_totals: ion_core::UsageTotals,
     unfinished: bool,
 }
 
 impl History {
     pub(super) fn prepare(view: SessionView) -> Self {
         let projection = conversation::Prepared::new(&view);
+        let usage_totals = view.usage().total();
         let prompts = view
             .entries
             .iter()
@@ -85,6 +87,7 @@ impl History {
             label,
             reasoning: view.reasoning,
             context: None,
+            usage_totals,
             unfinished,
         }
     }
@@ -699,6 +702,7 @@ impl Frontend {
             label,
             reasoning,
             context,
+            usage_totals,
             ..
         } = history;
         // The first native snapshot installs display facts, not a navigation.
@@ -725,6 +729,7 @@ impl Frontend {
         self.session_label = label;
         self.reasoning_preference = Some(reasoning);
         self.context_estimate = context;
+        self.usage_totals = usage_totals;
     }
 
     #[cfg(test)]

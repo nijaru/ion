@@ -28,12 +28,18 @@ Set `footer` in `~/.ion/settings.json` (or `$ION_HOME/settings.json`) and run `/
 }
 ```
 
-Available fields: `model`, `reasoning`, `context`, `workspace`, `session`, and
-`help`. List each field at most once. Put the most useful fields first on each
+Available fields: `model`, `reasoning`, `context`, `workspace`, `session`,
+`help`, `input_tokens`, `output_tokens`, `cache_read`, and `cache_write`.
+List each field at most once. Put the most useful fields first on each
 line; later fields drop off when space runs out. The primary line stays below
 the secondary line and takes priority when only one row fits. Use an empty
 list to hide a line. The footer setting does not hide errors, stop controls,
 or other prompts that need your attention.
+
+`↑` and `↓` show recorded Session input and output tokens. `R` and `W` are
+cache reads and writes, already included in input. A count followed by `+?`
+is a subtotal with some measurements missing; an entirely unreported count
+is hidden. These are not billing totals. See `/session` for the breakdown.
 
 ## Add a skill
 
