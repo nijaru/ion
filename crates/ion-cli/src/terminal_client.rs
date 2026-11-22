@@ -47,7 +47,7 @@ mod navigation;
 mod orientation;
 pub(crate) mod paint;
 mod picker;
-mod provider_balance;
+mod provider_usage;
 mod question;
 mod recovery;
 mod resource_commands;
@@ -170,7 +170,7 @@ struct Frontend {
     reasoning_preference: Option<ion_ai::Reasoning>,
     context_estimate: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
     usage_totals: ion_core::UsageTotals,
-    provider_balance: provider_balance::BalanceStatus,
+    provider_usage: provider_usage::UsageStatus,
 }
 
 pub struct ChatInit {
@@ -241,7 +241,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         spinner.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             terminal.check_active().context("terminal lifecycle failed")?;
-            ui.provider_balance.bind(if ui.footer.show_provider_balance() { runtime.provider_balance() } else { None });
+            ui.provider_usage.bind(runtime.provider_usage().filter(|source| ui.footer.shows_provider_usage(source.kind())));
             ui.reconcile_recovery(runtime.session().id())?;
             if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, ui.conversation.revision()) {
                 ui.session_io.blocked = true;
@@ -279,7 +279,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             let retry_paint = !painted;
             let readiness = runtime.completion_changes();
             let gesture_deadline = ui.gestures.deadline();
-            let balance_deadline = ui.provider_balance.deadline();
+            let usage_deadline = ui.provider_usage.deadline();
             let event = tokio::select! {
                 _ = tokio::time::sleep_until(gesture_deadline.unwrap_or_else(tokio::time::Instant::now)), if gesture_deadline.is_some() => {
                     ui.gestures.expire(tokio::time::Instant::now());
@@ -310,11 +310,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 },
                 _ = tokio::time::sleep(Duration::from_millis(50)), if retry_paint => continue,
-                _ = tokio::time::sleep_until(balance_deadline.unwrap_or_else(tokio::time::Instant::now)), if balance_deadline.is_some() => {
-                    ui.provider_balance.start();
+                _ = tokio::time::sleep_until(usage_deadline.unwrap_or_else(tokio::time::Instant::now)), if usage_deadline.is_some() => {
+                    ui.provider_usage.start();
                     continue;
                 },
-                () = ui.provider_balance.complete(), if ui.provider_balance.pending() => continue,
+                () = ui.provider_usage.complete(), if ui.provider_usage.pending() => continue,
                 _ = spinner.tick(), if painted && ui.spinner_visible => {
                     ui.spinner_frame = ui.spinner_frame.wrapping_add(1);
                     continue;
@@ -690,7 +690,7 @@ async fn login_in_terminal(
                     .context("join credential save")?;
             // A late directory sync failure can follow publication of the new
             // key. Retire the old balance after any attempted save.
-            ui.provider_balance.credential_changed(provider);
+            ui.provider_usage.credential_changed(provider);
             saved
         }
         Err(error) => Err(error),

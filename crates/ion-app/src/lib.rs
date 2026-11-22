@@ -39,8 +39,10 @@ pub mod model_setup;
 mod preparation;
 mod process;
 mod project_instructions;
-mod provider_balance;
-pub use provider_balance::{Balance, BalanceAmount, Currency, ProviderBalance};
+mod provider_usage;
+pub use provider_usage::{
+    Balance, BalanceAmount, Currency, ProviderUsage, ProviderUsageKind, ProviderUsageReading,
+};
 
 mod question;
 mod question_tool;

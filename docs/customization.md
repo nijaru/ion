@@ -30,7 +30,7 @@ Set `footer` in `~/.ion/settings.json` (or `$ION_HOME/settings.json`) and run `/
 
 Available fields: `model`, `reasoning`, `context`, `workspace`, `session`,
 `help`, `input_tokens`, `output_tokens`, `cache_read`, `cache_write`, and
-`provider_balance`.
+`provider_balance`, and `provider_key_usage`.
 List each field at most once. Put the most useful fields first on each
 line; later fields drop off when space runs out. The primary line stays below
 the secondary line and takes priority when only one row fits. Use an empty
@@ -42,11 +42,16 @@ cache reads and writes, already included in input. A count followed by `+?`
 is a subtotal with some measurements missing; an entirely unreported count
 is hidden. These are not billing totals. See `/session` for the breakdown.
 
-`provider_balance` is separate from Session usage. For a bound model on
-DeepSeek's official HTTPS endpoint, Ion uses the selected credential to
-read the account balance at startup and about once a minute, without blocking
-chat. Unsupported providers, proxy routes, and unavailable readings omit the
-field. Remove it from the footer to disable these reads.
+Provider usage is separate from Session token counts. On official routes,
+`provider_balance` shows the DeepSeek account balance, and `provider_key_usage`
+shows how much remains under an OpenRouter key's own cap, or the key's reported
+spend if cap information is unavailable. It does not show OpenRouter account
+credit or other budget limits.
+
+Ion reads these fields with the selected inference credential at startup and
+about once a minute, without blocking chat. Unsupported providers, proxy
+routes, and unavailable readings omit the field. Remove the corresponding
+field from the footer to disable these reads.
 
 ## Add a skill
 

@@ -19,6 +19,7 @@ enum Field {
     CacheRead,
     CacheWrite,
     ProviderBalance,
+    ProviderKeyUsage,
 }
 
 #[derive(serde::Deserialize)]
@@ -38,6 +39,7 @@ impl Default for Footer {
                 Field::InputTokens,
                 Field::OutputTokens,
                 Field::ProviderBalance,
+                Field::ProviderKeyUsage,
                 Field::Workspace,
             ],
         }
@@ -45,9 +47,12 @@ impl Default for Footer {
 }
 
 impl Footer {
-    pub(super) fn show_provider_balance(&self) -> bool {
-        self.primary.contains(&Field::ProviderBalance)
-            || self.secondary.contains(&Field::ProviderBalance)
+    pub(super) fn shows_provider_usage(&self, kind: ion_app::ProviderUsageKind) -> bool {
+        let field = match kind {
+            ion_app::ProviderUsageKind::DeepSeekBalance => Field::ProviderBalance,
+            ion_app::ProviderUsageKind::OpenRouterKey => Field::ProviderKeyUsage,
+        };
+        self.primary.contains(&field) || self.secondary.contains(&field)
     }
 
     pub(super) fn load(root: &std::path::Path) -> anyhow::Result<Self> {
@@ -58,6 +63,26 @@ impl Footer {
             seen.push(*field);
         }
         Ok(footer)
+    }
+}
+
+fn provider_usage_text(field: Field, reading: &ion_app::ProviderUsageReading) -> Option<String> {
+    use ion_app::ProviderUsageReading;
+    match (field, reading) {
+        (Field::ProviderBalance, ProviderUsageReading::Balance(balance)) => {
+            Some(balance_text(balance))
+        }
+        (Field::ProviderKeyUsage, ProviderUsageReading::KeyCapRemaining(amount)) => Some(
+            if amount.as_f64().is_some_and(|remaining| remaining <= 0.0) {
+                "key cap reached".into()
+            } else {
+                format!("key cap ${amount} left")
+            },
+        ),
+        (Field::ProviderKeyUsage, ProviderUsageReading::KeySpend(amount)) => {
+            Some(format!("key spend ${amount}"))
+        }
+        _ => None,
     }
 }
 
@@ -107,7 +132,10 @@ pub(super) fn rows(
         Field::OutputTokens => tokens("↓", usage.output_tokens),
         Field::CacheRead => tokens("R", usage.cache_read_input_tokens),
         Field::CacheWrite => tokens("W", usage.cache_write_input_tokens),
-        Field::ProviderBalance => ui.provider_balance.current().map(balance_text),
+        Field::ProviderBalance | Field::ProviderKeyUsage => ui
+            .provider_usage
+            .current()
+            .and_then(|reading| provider_usage_text(field, reading)),
         Field::Model => Some(format!("{}/{}", model.provider, model.model)),
         Field::Session => (!ui.session_label.is_empty()).then(|| ui.session_label.clone()),
         Field::Workspace => (!ui.cwd.as_os_str().is_empty()).then(|| ui.cwd.display().to_string()),
@@ -176,6 +204,26 @@ pub(super) fn rows(
 mod tests {
     use super::*;
     use crate::terminal_client::Editor;
+
+    #[test]
+    fn provider_key_usage_is_distinct_from_account_balance() {
+        use ion_app::{ProviderUsageKind, ProviderUsageReading};
+        let footer: Footer =
+            serde_json::from_str(r#"{"primary":["provider_key_usage"],"secondary":[]}"#).unwrap();
+        assert!(footer.shows_provider_usage(ProviderUsageKind::OpenRouterKey));
+        assert!(!footer.shows_provider_usage(ProviderUsageKind::DeepSeekBalance));
+        let usage = ProviderUsageReading::KeySpend(serde_json::Number::from_f64(2.75).unwrap());
+        assert_eq!(
+            provider_usage_text(Field::ProviderKeyUsage, &usage).as_deref(),
+            Some("key spend $2.75")
+        );
+        assert!(provider_usage_text(Field::ProviderBalance, &usage).is_none());
+        let exhausted = ProviderUsageReading::KeyCapRemaining(0.into());
+        assert_eq!(
+            provider_usage_text(Field::ProviderKeyUsage, &exhausted).as_deref(),
+            Some("key cap reached")
+        );
+    }
 
     #[test]
     fn configured_footer_drops_lower_priority_fields_and_then_the_secondary_row() {

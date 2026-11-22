@@ -529,8 +529,8 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     pub fn agent(&self) -> &Arc<Agent> {
         self.setup.agent()
     }
-    pub fn provider_balance(&self) -> Option<&Arc<crate::ProviderBalance>> {
-        self.setup.runtime.provider_balance.as_ref()
+    pub fn provider_usage(&self) -> Option<&Arc<crate::ProviderUsage>> {
+        self.setup.runtime.provider_usage.as_ref()
     }
     pub fn resources(&self) -> &Resources {
         self.setup.resources()

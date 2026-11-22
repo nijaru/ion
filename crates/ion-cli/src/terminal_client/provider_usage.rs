@@ -2,21 +2,21 @@
 use std::{sync::Arc, time::Duration};
 
 use ion_ai::BoxFuture;
-use ion_app::{Balance, ProviderBalance};
+use ion_app::{ProviderUsage, ProviderUsageReading};
 use tokio::time::Instant;
 
 const REFRESH: Duration = Duration::from_secs(60);
 
 #[derive(Default)]
-pub(super) struct BalanceStatus {
-    source: Option<Arc<ProviderBalance>>,
+pub(super) struct UsageStatus {
+    source: Option<Arc<ProviderUsage>>,
     next: Option<Instant>,
-    pending: Option<BoxFuture<'static, Option<Balance>>>,
-    current: Option<(Instant, Balance)>,
+    pending: Option<BoxFuture<'static, Option<ProviderUsageReading>>>,
+    current: Option<(Instant, ProviderUsageReading)>,
 }
 
-impl BalanceStatus {
-    pub(super) fn bind(&mut self, source: Option<&Arc<ProviderBalance>>) {
+impl UsageStatus {
+    pub(super) fn bind(&mut self, source: Option<&Arc<ProviderUsage>>) {
         if match (&self.source, source) {
             (Some(old), Some(new)) => Arc::ptr_eq(old, new),
             (None, None) => true,
@@ -59,17 +59,17 @@ impl BalanceStatus {
     }
 
     pub(super) async fn complete(&mut self) {
-        let balance = self.pending.as_mut().expect("pending refresh").await;
+        let reading = self.pending.as_mut().expect("pending refresh").await;
         self.pending = None;
         let next = Instant::now() + REFRESH;
-        self.current = balance.map(|balance| (next + Duration::from_secs(5), balance));
+        self.current = reading.map(|reading| (next + Duration::from_secs(5), reading));
         self.next = Some(next);
     }
 
-    pub(super) fn current(&self) -> Option<&Balance> {
+    pub(super) fn current(&self) -> Option<&ProviderUsageReading> {
         self.current
             .as_ref()
             .filter(|(expires, _)| Instant::now() < *expires)
-            .map(|(_, balance)| balance)
+            .map(|(_, reading)| reading)
     }
 }

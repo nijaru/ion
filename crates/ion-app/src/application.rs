@@ -70,7 +70,7 @@ pub struct ApplicationRuntime {
     /// Process supervision captured by this runtime, not a tool grant. Managed
     /// delegation joins/releases this child's scope before returning its result.
     pub processes: Option<Arc<crate::ProcessOwner>>,
-    pub provider_balance: Option<Arc<crate::ProviderBalance>>,
+    pub provider_usage: Option<Arc<crate::ProviderUsage>>,
 }
 
 impl ApplicationRuntime {
@@ -81,7 +81,7 @@ impl ApplicationRuntime {
             shell: None,
             allow_file_attachments: false,
             processes: None,
-            provider_balance: None,
+            provider_usage: None,
         }
     }
 }
@@ -357,10 +357,7 @@ impl CodingApplication {
             shell: Some(native),
             allow_file_attachments: true,
             processes: Some(self.processes.clone()),
-            provider_balance: crate::ProviderBalance::for_selection(
-                selected,
-                self.host.credentials(),
-            ),
+            provider_usage: crate::ProviderUsage::for_selection(selected, self.host.credentials()),
         })
     }
 }
