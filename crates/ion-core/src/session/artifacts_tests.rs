@@ -59,6 +59,19 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
     let reference = output.artifacts[0].clone();
     assert_eq!(reference.sha256, format!("{:x}", Sha256::digest(&expected)));
     assert_eq!(bytes(&session, &reference), expected);
+    let mut exported = Vec::new();
+    let settlement = std::num::NonZeroU64::new(2).unwrap();
+    assert_eq!(
+        Session::export_artifact(&path, settlement, 0, &mut exported).unwrap(),
+        reference,
+    );
+    assert_eq!(exported, expected);
+    exported.clear();
+    assert!(matches!(
+        Session::export_artifact(&path, settlement, 1, &mut exported),
+        Err(SessionError::ArtifactNotReferenced { entry: 2, index: 1 })
+    ));
+    assert!(exported.is_empty());
     let origin: Vec<u8> = session
         .store()
         .lock()

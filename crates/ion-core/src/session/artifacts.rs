@@ -66,6 +66,44 @@ pub struct ArtifactWriter {
 }
 
 impl Session {
+    /// Stream the exact captured bytes from a committed result in a saved
+    /// Session, without opening it for writing or repairing history. This
+    /// operator API uses the result's journal entry, not a model history grant.
+    pub fn export_artifact(
+        path: impl AsRef<std::path::Path>,
+        entry: std::num::NonZeroU64,
+        index: usize,
+        mut output: impl Write,
+    ) -> Result<ArtifactRef, SessionError> {
+        let path = super::database_path(path.as_ref())?;
+        let connection =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        super::configure_connection(&connection)?;
+        let snapshot = connection.unchecked_transaction()?;
+        super::read_header(&snapshot)?;
+        let result = super::read_entry(&snapshot, entry.get())?;
+        let reference =
+            references(&result)
+                .get(index)
+                .ok_or(SessionError::ArtifactNotReferenced {
+                    entry: entry.get(),
+                    index,
+                })?;
+        let mut offset = 0;
+        let mut digest = Sha256::new();
+        loop {
+            let page = read_page(&snapshot, reference, offset, PAGE_BYTES)?;
+            digest.update(&page.bytes);
+            output.write_all(&page.bytes)?;
+            let Some(next) = page.next_offset else { break };
+            offset = next;
+        }
+        if format!("{:x}", digest.finalize()) != reference.sha256 {
+            return Err(SessionError::InvalidHistory);
+        }
+        Ok(reference.clone())
+    }
+
     pub fn artifact_sink(self: &Arc<Self>) -> ArtifactSink {
         ArtifactSink(self.clone(), None)
     }

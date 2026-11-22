@@ -174,12 +174,26 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert run(env, workspace, "--session", session_id, "export").stdout.count("PRIVATE_") == 200
         assert run(env, workspace, "--session", session_id, "run", "RESUME").stdout.strip() == "DIRECT_OK"
         binary_records = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "BINARY_CAPTURE").stdout.splitlines()]
+        binary_session = next(record["id"] for record in binary_records if record["type"] == "session")
         binary_parent = next(record for record in binary_records if record["type"] == "tool_finished")
         binary_page = binary_parent["output"]["result"]
         assert binary_page["encoding"] == "base64" and base64.b64decode(binary_page["data"], validate=True) == bytes(range(256)), binary_parent
         assert binary_page["offset"] == 0 and binary_page["data_bytes"] == 256 and binary_page["next_offset"] == 256 and binary_page["total_bytes"] == 76800, binary_page
         binary_child = next(record for record in binary_records if record["type"] == "child_tool_finished")
         assert artifact_bytes(work, binary_child["artifacts"][0]) == bytes(range(256)) * 300
+        before_export = len(requests)
+        saved = json.loads(run(env, workspace, "--session", binary_session, "inspect").stdout)
+        entry = next(
+            n for n, item in enumerate(saved["entries"], 1)
+            if item["kind"] == "child_tool_result"
+            and binary_child["artifacts"][0] in item["data"]["outcome"]["output"]["artifacts"]
+        )
+        artifact = [binary, "--cwd", workspace, "--session", binary_session, "artifact", str(entry)]
+        exported = subprocess.run([*artifact, "0"], env=env, capture_output=True, timeout=10, check=True)
+        assert exported.stdout == bytes(range(256)) * 300 and not exported.stderr
+        missing = subprocess.run([*artifact, "1"], env=env, capture_output=True, timeout=10)
+        assert missing.returncode != 0 and not missing.stdout and b"does not reference artifact 1" in missing.stderr
+        assert len(requests) == before_export
         # The guard must cover unread lines, not just this first-line page.
         (workspace / "guarded").write_text("PRIVATE_GUARD_\n" * 4000)
         guarded = [json.loads(line) for line in run(env, workspace, "--code-mode", "--json", "run", "GUARD").stdout.splitlines()]

@@ -90,7 +90,15 @@ The coding `history` tool searches recorded evidence without rerunning effects. 
 
 ### Read an artifact
 
-Call `history` with `{"action":"artifact","entry":N,"artifact":0}` to read a referenced capture by one-based source entry and zero-based artifact index. For composed child calls, Code Mode uses `inspectSaved({kind:'artifact',parent,child,artifact:0})`, including committed children of the current invocation.
+To save a capture without running a model or reopening the Session for writing:
+
+```sh
+ion --session ID artifact 42 0 > command-output.log
+```
+
+In `ion --session ID inspect`, count `entries` from 1 to find the result that contains the capture. Count its `artifacts` from 0. For shell commands, use the settlement entry, not the admission entry. The export writes raw bytes, so redirect stdout rather than displaying it in a terminal. Ion warns on stderr if the capture is incomplete. Discard the output file if the command fails.
+
+The model can call `history` with `{"action":"artifact","entry":N,"artifact":0}` to read a referenced capture by one-based source entry and zero-based artifact index. For composed child calls, Code Mode uses `inspectSaved({kind:'artifact',parent,child,artifact:0})`, including committed children of the current invocation.
 
 Pages return readable UTF-8 text where possible, otherwise exact base64 bytes. Check `encoding`: `data_bytes` counts the page's raw bytes, while `total_bytes` is the full capture size. Consume the page's data even when `next_offset` is null (EOF); otherwise follow `next_offset`. Offsets and the maximum 16 KiB page limit count raw bytes. Text pages preserve character boundaries without replacing malformed bytes.
 
