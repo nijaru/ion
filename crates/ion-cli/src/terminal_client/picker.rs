@@ -861,17 +861,22 @@ impl Pickers {
                     })
                 });
                 if let Some(index) = index {
-                    let setting = match picker.items[index].value {
+                    // These actions leave the picker in place. Recorded tool
+                    // details take input priority until the inspector closes.
+                    let retained = match picker.items[index].value {
                         PickerValue::Setting(setting) => Some(PickerValue::Setting(setting)),
                         PickerValue::Themes => Some(PickerValue::Themes),
                         PickerValue::CompletionDelivery(policy) => {
                             Some(PickerValue::CompletionDelivery(policy))
                         }
+                        PickerValue::RecordedTool(identity) => {
+                            Some(PickerValue::RecordedTool(identity))
+                        }
                         _ => None,
                     };
-                    if setting.is_some() {
+                    if retained.is_some() {
                         self.invalidate_visibility();
-                        return setting;
+                        return retained;
                     }
                 }
                 let value = index.map(|index| picker.items.remove(index).value);

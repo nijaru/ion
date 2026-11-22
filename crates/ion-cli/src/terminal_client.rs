@@ -1309,7 +1309,9 @@ impl Frontend {
         match self.keys.action(DETAILS, key) {
             Some(KeyAction::Cancel | KeyAction::ExpandTools) => {
                 self.details = None;
-                self.status = "Details closed".into();
+                if self.pickers.active().is_none() {
+                    self.status = "Details closed".into();
+                }
             }
             Some(KeyAction::Copy) => {
                 if self

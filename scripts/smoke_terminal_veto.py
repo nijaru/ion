@@ -270,7 +270,14 @@ def qualify(mode):
             wait(lambda: b"Tool 3: write" in output and DIRECT.encode() in output)
             output.clear()
             os.write(master, b"\x0f")
-            wait(lambda: "Details closed" in painted_text(output))
+            wait(lambda: "Recorded tools" in painted_text(output)
+                 and "› direct" in painted_text(output)
+                 and "3 · write" in painted_text(output)
+                 and "2 · code_mode" not in painted_text(output))
+            output.clear()
+            os.write(master, b"\x1b")
+            wait(lambda: "context ~" in painted_text(output)
+                 and "Recorded tools" not in painted_text(output))
             assert len(case.requests) == 2 and len(case.events()) == 4
 
             reload(4, 2)
