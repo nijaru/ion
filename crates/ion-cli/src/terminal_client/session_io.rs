@@ -538,9 +538,7 @@ pub(super) fn apply(
         }
         Ok(ReadOutput::Notice(notice)) => ui.print(notice),
         Ok(ReadOutput::CredentialRemoved(provider)) => {
-            if runtime.agent().model().provider == provider {
-                ui.provider_balance.invalidate();
-            }
+            ui.provider_balance.credential_changed(&provider);
             ui.print(format!("Removed saved {provider} credential"));
         }
         Ok(ReadOutput::Picker(picker)) => ui.pickers.open(*picker),

@@ -348,7 +348,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             let access = if runtime.is_busy() {
                                 Err(anyhow::anyhow!("This action is available after the operation"))
                             } else if missing {
-                                login_in_terminal(terminal, screen, init.services.credentials(), &selection.provider, &mut program, &ui.termination).await?
+                                login_in_terminal(terminal, screen, init.services.credentials(), &selection.provider, &mut program, &mut ui).await?
                             } else { Ok(()) };
                             let result = access.and_then(|()| configuration::model_access_ready(&runtime, &mut ui, init.services.clone(), selection));
                             match result {
@@ -661,7 +661,7 @@ async fn login_in_terminal(
     credentials: &CredentialStore,
     provider: &str,
     program: &mut ProgramStatusState,
-    termination: &CancellationToken,
+    ui: &mut Frontend,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
     terminal.release_inline(screen).await?;
@@ -673,7 +673,7 @@ async fn login_in_terminal(
     // Once a key is submitted, the existing save below must still be joined.
     let entry = tokio::select! {
         biased;
-        _ = termination.cancelled() => Ok(Err(ion_terminal::SecretRejection::Cancelled)),
+        _ = ui.termination.cancelled() => Ok(Err(ion_terminal::SecretRejection::Cancelled)),
         entry = terminal.read_secret(&prompt) => entry,
     }
     .context("read login credential")?;
@@ -683,14 +683,19 @@ async fn login_in_terminal(
     {
         Ok(key) => {
             let credentials = credentials.clone();
-            let provider = provider.to_owned();
-            tokio::task::spawn_blocking(move || credentials.save_api_key(&provider, &key))
-                .await
-                .context("join credential save")?
+            let target = provider.to_owned();
+            let saved =
+                tokio::task::spawn_blocking(move || credentials.save_api_key(&target, &key))
+                    .await
+                    .context("join credential save")?;
+            // A late directory sync failure can follow publication of the new
+            // key. Retire the old balance after any attempted save.
+            ui.provider_balance.credential_changed(provider);
+            saved
         }
         Err(error) => Err(error),
     };
-    let restored = reacquire_inline_screen(terminal, screen, termination).await;
+    let restored = reacquire_inline_screen(terminal, screen, &ui.termination).await;
     program.blocked_auth = false;
     program.publish(terminal, false)?;
     *screen = restored.context("restore inline chat after login")?;

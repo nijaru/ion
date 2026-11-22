@@ -209,7 +209,7 @@ async fn run(
                     host.credentials(),
                     &selection.provider,
                     &mut program,
-                    &ui.termination,
+                    ui,
                 )
                 .await?
             } else {

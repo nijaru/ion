@@ -7,6 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{CredentialResolver, CredentialStore, Selection};
 
+const DEEPSEEK_PROVIDER: &str = "deepseek";
 const DEEPSEEK_BALANCE: &str = "https://api.deepseek.com/user/balance";
 const MAX_RESPONSE_BYTES: usize = 16 * 1024;
 
@@ -35,11 +36,16 @@ pub enum Currency {
 }
 
 impl ProviderBalance {
+    pub fn provider(&self) -> &'static str {
+        // A balance source today is only constructed for the official DeepSeek route.
+        DEEPSEEK_PROVIDER
+    }
+
     pub(crate) fn for_selection(
         selection: &Selection,
         store: &CredentialStore,
     ) -> Option<Arc<Self>> {
-        if selection.provider != "deepseek" || !official_deepseek(&selection.endpoint) {
+        if selection.provider != DEEPSEEK_PROVIDER || !official_deepseek(&selection.endpoint) {
             return None;
         }
         let credentials = store

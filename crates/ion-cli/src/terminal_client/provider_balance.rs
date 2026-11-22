@@ -28,7 +28,17 @@ impl BalanceStatus {
         self.invalidate();
     }
 
-    pub(super) fn invalidate(&mut self) {
+    pub(super) fn credential_changed(&mut self, provider: &str) {
+        if self
+            .source
+            .as_ref()
+            .is_some_and(|source| source.provider() == provider)
+        {
+            self.invalidate();
+        }
+    }
+
+    fn invalidate(&mut self) {
         self.pending = None;
         self.current = None;
         self.next = self.source.as_ref().map(|_| Instant::now());

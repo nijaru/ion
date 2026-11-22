@@ -186,22 +186,10 @@ pub(super) async fn dispatch_command(
             }
         }
         CommandKind::Builtin(Builtin::Login) if !args.is_empty() => {
-            match login_in_terminal(
-                terminal,
-                screen,
-                services.credentials(),
-                args,
-                program,
-                &ui.termination,
-            )
-            .await?
+            match login_in_terminal(terminal, screen, services.credentials(), args, program, ui)
+                .await?
             {
-                Ok(()) => {
-                    if runtime.agent().model().provider == args {
-                        ui.provider_balance.invalidate();
-                    }
-                    ui.status = "Credential saved".into();
-                }
+                Ok(()) => ui.status = "Credential saved".into(),
                 // Credential entry is modal, never a recoverable model prompt.
                 Err(error) => ui.status = format!("{error:#}"),
             }

@@ -363,7 +363,7 @@ pub(super) async fn apply_picker(
                 services.credentials(),
                 &provider,
                 program,
-                &ui.termination,
+                ui,
             )
             .await?
             {
