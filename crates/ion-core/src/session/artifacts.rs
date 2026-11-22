@@ -89,18 +89,11 @@ impl Session {
                     entry: entry.get(),
                     index,
                 })?;
-        let mut offset = 0;
-        let mut digest = Sha256::new();
-        loop {
-            let page = read_page(&snapshot, reference, offset, PAGE_BYTES)?;
-            digest.update(&page.bytes);
-            output.write_all(&page.bytes)?;
-            let Some(next) = page.next_offset else { break };
-            offset = next;
-        }
-        if format!("{:x}", digest.finalize()) != reference.sha256 {
-            return Err(SessionError::InvalidHistory);
-        }
+        validate(&snapshot, reference)?;
+        scan_chunks(&snapshot, reference, |_, body, _| {
+            output.write_all(body)?;
+            Ok(())
+        })?;
         Ok(reference.clone())
     }
 
@@ -444,33 +437,57 @@ pub(super) fn copy(
                 origin
             ],
         )?;
-        let mut statement = source.prepare(
-            "SELECT byte_offset,body,checksum FROM artifact_chunks WHERE artifact=?1 ORDER BY byte_offset",
-        )?;
-        let mut rows = statement.query([reference.id.to_string()])?;
-        let mut bytes = 0u64;
-        let mut digest = Sha256::new();
-        while let Some(row) = rows.next()? {
-            let body: Vec<u8> = row.get(1)?;
-            let hash: String = row.get(2)?;
-            if u64::try_from(row.get::<_, i64>(0)?).map_err(|_| SessionError::InvalidHistory)?
-                != bytes
-                || body.is_empty()
-                || body.len() > CHUNK_BYTES
-                || chunk_checksum(reference.id, bytes, &body) != hash
-            {
-                return Err(SessionError::InvalidHistory);
-            }
-            digest.update(&body);
+        scan_chunks(source, reference, |offset, body, hash| {
             target.execute(
                 "INSERT INTO artifact_chunks(artifact,byte_offset,body,checksum) VALUES (?1,?2,?3,?4)",
-                params![reference.id.to_string(), i64::try_from(bytes).map_err(|_| SessionError::InvalidHistory)?, &body, hash],
+                params![reference.id.to_string(), offset, body, hash],
             )?;
-            bytes += body.len() as u64;
-        }
-        if bytes != reference.bytes || format!("{:x}", digest.finalize()) != reference.sha256 {
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
+// Whole-artifact readers share a single ordered scan. Verify each chunk before
+// handing it off, then check the stream against the previously validated receipt.
+fn scan_chunks(
+    connection: &Connection,
+    reference: &ArtifactRef,
+    mut visit: impl FnMut(i64, &[u8], &str) -> Result<(), SessionError>,
+) -> Result<(), SessionError> {
+    let mut statement = connection.prepare(
+        "SELECT byte_offset,body,checksum FROM artifact_chunks WHERE artifact=?1 ORDER BY byte_offset",
+    )?;
+    let mut rows = statement.query([reference.id.to_string()])?;
+    let mut bytes = 0u64;
+    let mut digest = Sha256::new();
+    while let Some(row) = rows.next()? {
+        let offset: i64 = row.get(0)?;
+        let body = row
+            .get_ref(1)?
+            .as_blob()
+            .map_err(|_| SessionError::InvalidHistory)?;
+        let hash = row
+            .get_ref(2)?
+            .as_str()
+            .map_err(|_| SessionError::InvalidHistory)?;
+        let end = bytes
+            .checked_add(body.len() as u64)
+            .ok_or(SessionError::InvalidHistory)?;
+        if u64::try_from(offset).ok() != Some(bytes)
+            || body.is_empty()
+            || body.len() > CHUNK_BYTES
+            || end > reference.bytes
+            || chunk_checksum(reference.id, bytes, body) != hash
+        {
             return Err(SessionError::InvalidHistory);
         }
+        digest.update(body);
+        visit(offset, body, hash)?;
+        bytes = end;
+    }
+    if bytes != reference.bytes || format!("{:x}", digest.finalize()) != reference.sha256 {
+        return Err(SessionError::InvalidHistory);
     }
     Ok(())
 }

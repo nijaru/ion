@@ -302,7 +302,7 @@ async fn private_future_and_opaque_references_do_not_grant_reads() {
 
 #[tokio::test]
 async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
-    let (root, _, session) = fixture();
+    let (root, path, session) = fixture();
     session.store().lock().unwrap().connection.execute_batch("CREATE TRIGGER fail_capture BEFORE INSERT ON artifact_chunks BEGIN SELECT RAISE(ABORT,'injected capture failure'); END;").unwrap();
     let mut writer = session.artifact_sink().start("failed").unwrap();
     writer
@@ -332,11 +332,30 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
         .connection
         .execute_batch("DROP TRIGGER fail_capture")
         .unwrap();
-    let mut writer = session.artifact_sink().start("partial").unwrap();
-    writer.write_bytes(b"prefix").await.unwrap();
-    let reference = writer.finish_async(false).await.unwrap();
+    let output = session
+        .run_user_shell(
+            "synthetic partial capture".into(),
+            true,
+            CancellationToken::new(),
+            |_, _, sink| async move {
+                let mut writer = sink.start("partial").unwrap();
+                writer.write_bytes(b"prefix").await.unwrap();
+                crate::ToolOutput {
+                    artifacts: vec![writer.finish_async(false).await.unwrap()],
+                    ..crate::ToolOutput::success(json!({}))
+                }
+            },
+        )
+        .await
+        .unwrap();
+    let reference = &output.artifacts[0];
     assert!(!reference.complete);
-    assert_eq!(bytes(&session, &reference), b"prefix");
+    assert_eq!(bytes(&session, reference), b"prefix");
+    let settlement = std::num::NonZeroU64::new(2).unwrap();
+    let mut exported = Vec::new();
+    let receipt = Session::export_artifact(&path, settlement, 0, &mut exported).unwrap();
+    assert_eq!(&receipt, reference);
+    assert_eq!(exported, b"prefix");
     session
         .store()
         .lock()
@@ -347,7 +366,13 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
             params![b"BROKEN".as_slice(), reference.id.to_string()],
         )
         .unwrap();
-    assert!(session.read_artifact(&reference, 0, 1).is_err());
+    assert!(session.read_artifact(reference, 0, 1).is_err());
+    exported.clear();
+    assert!(matches!(
+        Session::export_artifact(&path, settlement, 0, &mut exported),
+        Err(SessionError::InvalidHistory)
+    ));
+    assert!(exported.is_empty(), "do not emit a corrupt chunk");
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }
