@@ -11,7 +11,7 @@ use crate::display_text::{fit_line, push_wrapped};
 use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, KeyAction, KeyBindings};
 use crate::terminal_commands::Builtin;
 use crate::transcript_detail::{DetailView, tools};
-use crate::transcript_render::kind_label;
+use crate::transcript_render::{activity_subject, state_label};
 use anyhow::{Context, Result};
 use ion_ai::{Content, ModelRef};
 use ion_app::attachments::AttachmentSource;
@@ -61,7 +61,7 @@ use clipboard_input::*;
 use command::{CommandInput, dispatch_command};
 use editor::{Editor, EditorDraft, RecoveredDraft};
 use interaction::{apply_picker, submit_editor, submit_initial_prompts};
-use picker::{Picker, PickerValue, Pickers};
+use picker::{Picker, PickerItem, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
 pub use setup::{choose_session, setup_model};
 
@@ -1321,23 +1321,49 @@ impl Frontend {
         Action::None
     }
 
-    fn list_tools(&mut self) {
-        let names = tools(self.conversation.items())
+    fn open_tool_picker(&mut self) {
+        let mut items: Vec<_> = tools(self.conversation.items())
             .enumerate()
             .map(|(index, activity)| {
-                format!(
-                    "{}:{} ({})",
+                let mut label = format!(
+                    "{} · {} · {}",
                     index + 1,
                     activity.name,
-                    kind_label(activity.activity.kind)
-                )
+                    state_label(activity.state)
+                );
+                if let Some(subject) = activity_subject(activity, &self.cwd) {
+                    label.push_str(" · ");
+                    label.push_str(&crate::display_text::fit_line(&subject, 200));
+                }
+                PickerItem {
+                    label,
+                    detail: None,
+                    value: PickerValue::RecordedTool(activity.identity),
+                }
             })
-            .collect::<Vec<_>>();
-        self.print(if names.is_empty() {
-            "No tools in this session".into()
-        } else {
-            format!("Tools: {}", names.join(" · "))
+            .collect();
+        if items.is_empty() {
+            self.status = "No tools in this session".into();
+            return;
+        }
+        items.reverse();
+        self.pickers.open(Picker {
+            title: "Recorded tools",
+            query: String::new(),
+            selected: 0,
+            items,
         });
+    }
+
+    fn open_recorded_tool(&mut self, identity: ion_core::TranscriptActivityIdentity) {
+        let number = tools(self.conversation.items())
+            .position(|activity| activity.identity == identity)
+            .and_then(|index| std::num::NonZeroUsize::new(index + 1));
+        if let Some(number) = number {
+            self.details = Some(DetailView::new(Some((number, identity))));
+        } else {
+            self.status = "Tool no longer in the transcript; reopen /tools".into();
+        }
     }
 
     fn discard_provisional(&mut self) {

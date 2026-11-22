@@ -310,6 +310,10 @@ pub(super) async fn apply_picker(
         return Ok(());
     }
     let result = match value {
+        PickerValue::RecordedTool(identity) => {
+            ui.open_recorded_tool(identity);
+            return Ok(());
+        }
         PickerValue::Context { target, .. } => {
             if let Err(error) = super::navigation::apply_context(runtime, ui, target) {
                 ui.status = format!("{error:#}");

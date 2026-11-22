@@ -54,7 +54,7 @@ Compact mode hides successful file contents, directory listings, and search matc
 
 Mutation rows show recorded line additions/removals for that operation, not repository totals. Counts cover the snapshot diff even when patch capture is truncated; an uncaptured comparison is reported separately from write success. Expansion shows recorded directory entries, file-search results and remote-tool text or structured values. It cannot recover data omitted during capture.
 
-Command rows distinguish nonzero exits from signal termination. Recorded wait failures show the unavailable status and retained cause. Use `/tools` to list recorded operations, `/tool N` for raw tool evidence or `/tool all` for the raw conversation inspector. For captures beyond the displayed result, see [retained evidence](sessions.md#retained-evidence-and-captures).
+Command rows distinguish nonzero exits from signal termination. Recorded wait failures show the unavailable status and retained cause. Use `/tools` to search recorded operations by tool name, subject, or number. Enter opens the selected result. Use `/tool` for the latest operation, `/tool N` for a specific result, or `/tool all` for the raw conversation inspector. `/tools unavailable` lists tools that could not be registered. For captures beyond the displayed result, see [retained evidence](sessions.md#retained-evidence-and-captures).
 
 ## External editors and terminal state
 

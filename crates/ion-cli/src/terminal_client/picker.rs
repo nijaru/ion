@@ -32,6 +32,7 @@ pub(super) enum PickerValue {
     Model(ModelRef),
     Reasoning(ion_ai::Reasoning),
     Login(String),
+    RecordedTool(ion_core::TranscriptActivityIdentity),
     Setting(super::configuration::Setting),
     Themes,
     Theme(String),

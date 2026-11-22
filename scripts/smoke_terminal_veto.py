@@ -250,6 +250,23 @@ def qualify(mode):
             visible = painted_text(output)
             assert DIRECT in visible and NESTED in visible, (mode, visible)
             assert "Skipped" in visible, visible
+
+            output.clear()
+            os.write(master, b"/tools\r")
+            wait(lambda: "Recorded tools" in painted_text(output)
+                 and "3 · write" in painted_text(output))
+            os.write(master, b"direct")
+            wait(lambda: "› direct" in painted_text(output)
+                 and "3 · write" in painted_text(output)
+                 and "2 · code_mode" not in painted_text(output))
+            output.clear()
+            os.write(master, b"\r")
+            wait(lambda: b"Tool 3: write" in output and DIRECT.encode() in output)
+            output.clear()
+            os.write(master, b"\x0f")
+            wait(lambda: "Details closed" in painted_text(output))
+            assert len(case.requests) == 2 and len(case.events()) == 4
+
             reload(4, 2)
             message("Try a write after resource reload.", b"RETAINED_DONE")
             assert "Operator blocked retained" in painted_text(output)

@@ -627,11 +627,17 @@ pub(super) fn handle_builtin(
                 lines.join("\n")
             });
         }
+        Builtin::Tools if args.is_empty() => ui.open_tool_picker(),
         Builtin::Tools => {
-            ui.list_tools();
+            anyhow::ensure!(args == "unavailable", "use /tools [unavailable]");
             let catalog = runtime.agent().tool_catalog();
-            for (name, reason) in catalog.unavailable() {
-                ui.print(format!("Unavailable tool {name}: {reason}"));
+            let mut notices = catalog.unavailable().peekable();
+            if notices.peek().is_none() {
+                ui.status = "No unavailable tool registrations".into();
+            } else {
+                for (name, reason) in notices {
+                    ui.print(format!("Unavailable tool {name}: {reason}"));
+                }
             }
         }
         Builtin::Tool => {
