@@ -1,36 +1,17 @@
 # Ion development
 
-Follow the shared `nijaru/dotfiles/instructions/AGENTS.md` rules. Source is the implementation authority. This is unreleased v0: replace obsolete APIs and modules with their callers; do not add compatibility shims or preserve weak abstractions solely because they exist.
+Source is the implementation authority. This is unreleased v0: replace obsolete APIs and modules with their callers rather than adding compatibility shims.
 
 ## Design and reference policy
 
-Ion is one reusable Rust agent engine with a complete coding application, not
-a coding-only kernel or multiple loops. Pi (including Pi Durable) and fx are
-Ion's primary references. Start with Pi for runtime, context, tools, Session
-semantics and interaction; start with fx for visual presentation. Target
-capabilities that matter in use, not upstream feature parity. Pick the next
-slice from the first material blocker in a real workflow; a reference feature
-or minor UI difference alone is not a priority. Reimplement useful semantics
-idiomatically in Rust, not upstream classes or parallel runtimes.
-The model chooses the coding actions; inspect/edit/test is not a hard-coded
-runtime loop. Reuse working code; remove obsolete abstractions through all real
-callers. Do not claim daily-use readiness without sustained-use evidence and
-maintainer acceptance. No autonomous pull requests.
-
-For Ion implementation, review, and design changes, use
+Ion is one reusable Rust engine with a complete coding application. The model
+chooses coding actions; do not hard-code an inspect/edit/test loop or add another
+runtime. Prioritize material blockers in real workflows over upstream parity.
+For behavior changes and reviews, use
 [ion-reference-implementation](.agents/skills/ion-reference-implementation/SKILL.md).
-Read the relevant source and callers before choosing behavior or design. Consult
-Codex, other agents, documentation, engineering writeups, and papers where they
-inform the decision. Record what Ion adopts and what it deliberately does
-differently. Purely mechanical edits need no fresh reference audit.
-
-Maintainer-private design, execution plan and source evidence may be available
-through the owner's knowledge repository. Consult them when accessible under
-the shared working agreements, but public usage and implementation contracts
-must remain understandable from this repository alone. Do not recreate public
-design/roadmap copies or treat old research snapshots as current instructions.
-Keep session notes, progress, and next-task choices out of `AGENTS.md`; it is
-standing guidance for every session.
+Pi, Pi Durable, Codex, fx, and other relevant sources can inform the same decision.
+Do not claim daily-use readiness without sustained-use evidence and maintainer
+acceptance.
 
 ## Source navigation
 
@@ -53,6 +34,6 @@ cargo build --locked -p ion
 
 Use `scripts/smoke.sh` for an offline built headless/reopen path; relevant `scripts/smoke_*.py` for streaming, coding effects, recovery and cancellation. Exercise the real entry point plus independent tool/filesystem/Session outcomes. Keep focused protection for crash, concurrency, recovery and effect invariants. For native UI, run real terminal workflows; PTY/tmux checks alone are insufficient.
 
-Before **live Ion model tests** read private `projects/ion/preferred-models.md`: it governs approved routes, cost/privacy and isolation. Synthetic model fixtures suffice for routine mechanical checks. Never silently spend on unapproved routes.
+Use offline model fixtures by default. Before live Ion model tests, confirm maintainer approval for the route, spending, data, and test isolation.
 
 Multiple sessions may share a worktree. Inspect status, stage only owned changes, and preserve unrelated files and secrets.

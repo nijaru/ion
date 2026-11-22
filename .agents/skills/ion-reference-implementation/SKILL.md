@@ -11,13 +11,11 @@ upstream examples or translate upstream classes literally.
 
 ## Establish behavior and ownership
 
-1. Name the real user workflow and affected boundary. Inspect current reference
-   source for that behavior, including its callers, not just an isolated helper.
-   Start with Pi/Pi Durable and fx, using each where it is relevant. Consult
-   Codex and other agents for mechanisms that clarify the choice; use official
-   docs and specs for external contracts, and engineering writeups or papers
-   for design trade-offs and evidence. Check claims about current behavior
-   against the implementation where available. Don't blend independent runtimes.
+1. Name the real user workflow and affected boundary. Choose references by
+   relevance to the decision, not by domain or a fixed order. Inspect the
+   relevant source and callers in Pi, Pi Durable, Codex, fx, or other systems;
+   use official docs for external contracts and measured evidence for performance.
+   Check claims about current behavior against the implementation.
 2. Record the inspected revision and relevant files, or cite the specific
    document or paper, in the working session. A fetched revision is not
    necessarily the checkout HEAD: inspect the actual Git blobs or verify HEAD.
@@ -34,10 +32,8 @@ upstream examples or translate upstream classes literally.
    different implementation structures. Resolve consequential conflicts before
    implementing.
 
-Keep this contract task-local, not in a new per-task design document. Do not
-require a whole-repository survey for a local change. Read private design/plan
-owners when prior intent matters, without copying private material into public
-instructions or inventing a second work queue.
+Keep the working contract task-local. Do not require a whole-repository survey
+for a local change. Keep public changes understandable on their own.
 
 ## Replace the cause through its callers
 
@@ -95,6 +91,4 @@ needed for the task at the selected current revision.
   and `codex-rs/tui/src/chatwidget.rs`; follow the relevant effect, task or
   interaction owner rather than treating Codex as a second product target.
 
-Navigation checked 2026-11-21 at Pi `5f89cc0a7df6`, fx `d5c465fa94d1`
-and Codex `c6a41e32f673`. Re-resolve moved files or changed behavior rather than
-attributing an older checkout's implementation to a newly fetched revision.
+Re-resolve moved files and verify the inspected revision before citing behavior.
