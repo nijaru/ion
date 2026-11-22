@@ -29,7 +29,8 @@ Set `footer` in `~/.ion/settings.json` (or `$ION_HOME/settings.json`) and run `/
 ```
 
 Available fields: `model`, `reasoning`, `context`, `workspace`, `session`,
-`help`, `input_tokens`, `output_tokens`, `cache_read`, and `cache_write`.
+`help`, `input_tokens`, `output_tokens`, `cache_read`, `cache_write`, and
+`provider_balance`.
 List each field at most once. Put the most useful fields first on each
 line; later fields drop off when space runs out. The primary line stays below
 the secondary line and takes priority when only one row fits. Use an empty
@@ -40,6 +41,12 @@ or other prompts that need your attention.
 cache reads and writes, already included in input. A count followed by `+?`
 is a subtotal with some measurements missing; an entirely unreported count
 is hidden. These are not billing totals. See `/session` for the breakdown.
+
+`provider_balance` is separate from Session usage. For a bound model on
+DeepSeek's official HTTPS endpoint, Ion uses the selected credential to
+read the account balance at startup and about once a minute, without blocking
+chat. Unsupported providers, proxy routes, and unavailable readings omit the
+field. Remove it from the footer to disable these reads.
 
 ## Add a skill
 

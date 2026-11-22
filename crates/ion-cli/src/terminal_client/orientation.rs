@@ -18,6 +18,7 @@ enum Field {
     OutputTokens,
     CacheRead,
     CacheWrite,
+    ProviderBalance,
 }
 
 #[derive(serde::Deserialize)]
@@ -36,6 +37,7 @@ impl Default for Footer {
                 Field::Context,
                 Field::InputTokens,
                 Field::OutputTokens,
+                Field::ProviderBalance,
                 Field::Workspace,
             ],
         }
@@ -43,6 +45,11 @@ impl Default for Footer {
 }
 
 impl Footer {
+    pub(super) fn show_provider_balance(&self) -> bool {
+        self.primary.contains(&Field::ProviderBalance)
+            || self.secondary.contains(&Field::ProviderBalance)
+    }
+
     pub(super) fn load(root: &std::path::Path) -> anyhow::Result<Self> {
         let footer: Self = ion_app::user_settings::UserSettings::load(root)?.footer()?;
         let mut seen = Vec::new();
@@ -52,6 +59,24 @@ impl Footer {
         }
         Ok(footer)
     }
+}
+
+fn balance_text(balance: &ion_app::Balance) -> String {
+    use ion_app::Currency;
+    let mut text = String::from(if balance.is_available {
+        "balance"
+    } else {
+        "insufficient balance"
+    });
+    for amount in &balance.balance_infos {
+        text.push(' ');
+        text.push_str(match amount.currency {
+            Currency::Usd => "$",
+            Currency::Cny => "¥",
+        });
+        text.push_str(&amount.total_balance);
+    }
+    text
 }
 
 fn token_field(label: &str, count: ion_core::TokenCount, observations: usize) -> Option<String> {
@@ -82,6 +107,7 @@ pub(super) fn rows(
         Field::OutputTokens => tokens("↓", usage.output_tokens),
         Field::CacheRead => tokens("R", usage.cache_read_input_tokens),
         Field::CacheWrite => tokens("W", usage.cache_write_input_tokens),
+        Field::ProviderBalance => ui.provider_balance.current().map(balance_text),
         Field::Model => Some(format!("{}/{}", model.provider, model.model)),
         Field::Session => (!ui.session_label.is_empty()).then(|| ui.session_label.clone()),
         Field::Workspace => (!ui.cwd.as_os_str().is_empty()).then(|| ui.cwd.display().to_string()),

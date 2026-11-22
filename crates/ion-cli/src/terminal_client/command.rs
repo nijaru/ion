@@ -196,7 +196,12 @@ pub(super) async fn dispatch_command(
             )
             .await?
             {
-                Ok(()) => ui.status = "Credential saved".into(),
+                Ok(()) => {
+                    if runtime.agent().model().provider == args {
+                        ui.provider_balance.invalidate();
+                    }
+                    ui.status = "Credential saved".into();
+                }
                 // Credential entry is modal, never a recoverable model prompt.
                 Err(error) => ui.status = format!("{error:#}"),
             }
@@ -588,9 +593,7 @@ pub(super) fn handle_builtin(
                     io.run(move |_| {
                         Ok((|| -> Result<_> {
                             services.credentials().remove(&provider)?;
-                            Ok(super::session_io::ReadOutput::Notice(format!(
-                                "Removed saved {provider} credential"
-                            )))
+                            Ok(super::session_io::ReadOutput::CredentialRemoved(provider))
                         })())
                     })
                     .await?

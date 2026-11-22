@@ -15,6 +15,7 @@ type ReadFuture = Pin<Box<dyn Future<Output = Result<ReadOutput>> + Send>>;
 pub(super) enum ReadOutput {
     History(Box<History>),
     Notice(String),
+    CredentialRemoved(String),
     Picker(Box<super::Picker>),
     Models {
         choices: ion_app::ModelChoices,
@@ -536,6 +537,12 @@ pub(super) fn apply(
             }
         }
         Ok(ReadOutput::Notice(notice)) => ui.print(notice),
+        Ok(ReadOutput::CredentialRemoved(provider)) => {
+            if runtime.agent().model().provider == provider {
+                ui.provider_balance.invalidate();
+            }
+            ui.print(format!("Removed saved {provider} credential"));
+        }
         Ok(ReadOutput::Picker(picker)) => ui.pickers.open(*picker),
         Ok(ReadOutput::Models { choices, current }) => {
             ui.pickers
