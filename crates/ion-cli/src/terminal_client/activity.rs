@@ -89,6 +89,24 @@ impl ActiveOperation {
     }
 }
 
+pub(super) struct RetryProgress {
+    attempt: usize,
+    max_retries: usize,
+    until: tokio::time::Instant,
+}
+
+impl RetryProgress {
+    pub(super) fn label(&self, now: tokio::time::Instant) -> Option<String> {
+        (now < self.until).then(|| {
+            let remaining = (self.until - now).as_nanos().div_ceil(1_000_000_000);
+            format!(
+                "Retrying ({}/{}) in {remaining}s…",
+                self.attempt, self.max_retries
+            )
+        })
+    }
+}
+
 /// Returned errors have already been made visible in UI status. The caller
 /// may keep interacting after an ordinary operation failure; shutdown instead
 /// combines those failures with its primary I/O error.
@@ -146,6 +164,33 @@ pub(super) fn apply(
             ui.status.clear();
         }
         ControlUpdate::Activity(Observation::Event { operation, event }) => {
+            if let AgentEvent::ProviderRetry {
+                attempt,
+                max_retries,
+                delay_ms,
+            } = event.as_ref()
+            {
+                ui.retry_progress = tokio::time::Instant::now()
+                    .checked_add(std::time::Duration::from_millis(*delay_ms))
+                    .map(|until| RetryProgress {
+                        attempt: *attempt,
+                        max_retries: *max_retries,
+                        until,
+                    });
+                // Native chat shows the transient retry in the activity indicator,
+                // not also as a transcript-side notice. Headless diagnostics stay intact.
+                return Ok(None);
+            }
+            if matches!(
+                event.as_ref(),
+                AgentEvent::TextDelta { .. }
+                    | AgentEvent::ThinkingDelta { .. }
+                    | AgentEvent::ModelOutputObserved
+                    | AgentEvent::AssistantCommitted { .. }
+                    | AgentEvent::TurnEnded { .. }
+            ) {
+                ui.retry_progress = None;
+            }
             if matches!(
                 event.as_ref(),
                 AgentEvent::ContextCompactionRetry { .. }
@@ -174,6 +219,7 @@ pub(super) fn apply(
             }
         }
         ControlUpdate::Activity(Observation::Gap { .. }) => {
+            ui.retry_progress = None;
             // Drop the whole partial projection. Host may resume observations
             // at a committed boundary, but LiveTranscript's tool/child indexes
             // require an uninterrupted Turn. Stay on committed facts until the
@@ -242,6 +288,7 @@ pub(super) fn apply(
             ui.note(format!("Input source quarantined as recovery {id}; inspect with /recovery {id}. Not restored or replayed."));
         }
         ControlUpdate::Settled(mut settlement) => {
+            ui.retry_progress = None;
             let observed_success = matches!(&settlement.outcome, OperationOutcome::Turn(Ok(_)))
                 && ui.conversation.live_for(settlement.operation);
             if observed_success && let Some(live) = ui.conversation.live() {
@@ -343,6 +390,7 @@ pub(super) fn apply(
         }
         ControlUpdate::QuestionChanged => {}
         ControlUpdate::Idle => {
+            ui.retry_progress = None;
             ui.discard_provisional();
             ui.conversation.clear_live();
         }

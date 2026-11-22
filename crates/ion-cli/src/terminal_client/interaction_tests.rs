@@ -404,7 +404,7 @@ fn question_cancel_and_its_hint_use_the_same_request_and_preserve_the_composer()
 }
 
 #[tokio::test]
-async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
+async fn short_busy_dock_prefers_activity_to_stale_notices_but_not_current_feedback() {
     let mut fixture = tests::Fixture::new();
     let operation_id = fixture
         .control
@@ -416,6 +416,7 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
     };
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         for status in [String::new(), "diagnostic ".repeat(128)] {
+            let has_current_feedback = !status.is_empty();
             let mut ui = Frontend {
                 status,
                 mode,
@@ -437,11 +438,13 @@ async fn narrow_busy_dock_keeps_the_stop_action_before_secondary_hints() {
                 );
                 for height in [2, 8] {
                     let dock = Dock::prepare(&mut ui, Some(operation), None, &[], 24, height);
-                    assert!(
-                        dock.rows
-                            .iter()
-                            .any(|row| row.to_string().contains("Ctrl-C stops"))
-                    );
+                    assert!(dock.rows.iter().any(|row| row.to_string().contains(
+                        if has_current_feedback {
+                            "diagnostic"
+                        } else {
+                            "Working (Ctrl-C)"
+                        }
+                    )));
                     assert!(dock.rows.len() + dock.body_rows <= height);
                     assert!(dock.cursor.is_some());
                 }

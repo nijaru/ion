@@ -431,9 +431,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b"\x0f")
                     closed_active = True
                 if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
-                    assert "Ctrl-C stops · Working · Details closed".encode() in output[active_start:], "detail-close notice hid the active operation"
-                    os.write(master, b"Also check that the updated file has two lines.\r")
-                    sent_steering = True
+                    rows = painted_text(output[active_start:]).splitlines()
+                    if (any(line.startswith("── ") and "Working (Ctrl-C to interrupt)" in line for line in rows)
+                            and any(line == "Details closed" for line in rows)):
+                        os.write(master, b"Also check that the updated file has two lines.\r")
+                        sent_steering = True
                 if sent_steering and not sent_second:
                     time.sleep(0.1)
                     os.write(master, b"What did we finish previously?\x1b")

@@ -1458,6 +1458,40 @@ fn composer_keeps_complete_error_feedback_and_source_cursor_at_common_widths() {
 }
 
 #[test]
+fn composer_keeps_activity_separate_from_feedback_and_falls_back_to_spinner() {
+    let mut ui = Frontend {
+        status: "Draft saved".into(),
+        ..Frontend::default()
+    };
+    let mut operation = ActiveOperation {
+        kind: activity::OperationKind::Coding,
+        stop_requested: false,
+    };
+    for (width, label) in [
+        (80, "Working (Ctrl-C to interrupt)"),
+        (20, "Working"),
+        (11, ""),
+    ] {
+        let dock = dock::Dock::prepare(&mut ui, Some(operation), None, &[], width, 24);
+        let (caret, _) = dock.cursor.unwrap();
+        let rule = dock.rows[caret - 1].to_string();
+        assert_eq!(dock.rows[caret - 2].to_string(), "Draft saved");
+        assert!(rule.contains('⠋') && rule.contains(label));
+        assert_eq!(rule.contains("Working"), !label.is_empty());
+        assert_eq!(rule.contains("to interrupt"), width == 80);
+        assert_eq!(dock.rows[caret - 1].width(), width);
+    }
+    operation.stop_requested = true;
+    let dock = dock::Dock::prepare(&mut ui, Some(operation), None, &[], 80, 24);
+    assert!(
+        dock.rows
+            .iter()
+            .any(|row| row.to_string().starts_with("Cancelling turn…"))
+    );
+    assert!(!dock.rows.iter().any(|row| row.to_string().contains('⠋')));
+}
+
+#[test]
 fn composer_bounds_overflowing_feedback_without_hiding_the_caret() {
     for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
         let mut ui = Frontend {

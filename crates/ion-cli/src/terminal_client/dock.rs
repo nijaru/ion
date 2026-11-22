@@ -1,16 +1,67 @@
 //! One measured interaction dock for both conversation viewports.
 use ion_ai::ModelRef;
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
+use unicode_width::UnicodeWidthStr;
 
 use super::interaction::InputTarget;
 use super::paint::Prepared;
 use super::picker::PickerPaint;
 use super::question::QuestionTarget;
-use super::{ActiveOperation, Frontend, orientation, visible_status};
+use super::{ActiveOperation, Frontend, orientation, status_feedback, visible_status};
 
 use crate::presentation_style::Role;
 use crate::terminal_completion::CompletionFrame;
 use crate::terminal_input::input_window;
+
+fn activity_border(ui: &Frontend, operation: ActiveOperation, width: usize) -> Line<'static> {
+    const FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let spinner = FRAMES[ui.spinner_frame % FRAMES.len()];
+    let theme = ui.themes.theme();
+    let border = theme.style(Role::Secondary);
+    let retry = ui
+        .retry_progress
+        .as_ref()
+        .and_then(|retry| retry.label(tokio::time::Instant::now()));
+    let label = retry.as_deref().unwrap_or_else(|| operation.label());
+    let mut variants = Vec::new();
+    if ui.gestures.prompt().is_none() && ui.clipboard_cancel_target().is_none() {
+        let stop = ui.keys.hint(crate::keybindings::KeyAction::Interrupt);
+        variants.push(format!("{label} ({stop} to interrupt)"));
+        variants.push(format!("{label} ({stop})"));
+    }
+    variants.push(label.to_owned());
+    let spinner = Span::styled(
+        spinner.to_string(),
+        theme.style(if retry.is_some() {
+            Role::Warning
+        } else {
+            Role::Running
+        }),
+    );
+    for text in variants {
+        // Leave at least one rule cell at the right edge.
+        let room = width.saturating_sub(7);
+        if room == 0 {
+            break;
+        }
+        let (text, clipped) = crate::display_text::fit_line_with_status(&text, room);
+        if !clipped {
+            let tail = "─".repeat(width - 6 - text.width());
+            return Line::from(vec![
+                Span::styled("── ", border),
+                spinner,
+                Span::styled(format!(" {text} "), border),
+                Span::styled(tail, border),
+            ]);
+        }
+    }
+    let prefix = (width - 1).min(2);
+    Line::from(vec![
+        Span::styled("─".repeat(prefix), border),
+        spinner,
+        Span::styled("─".repeat(width - prefix - 1), border),
+    ])
+}
 
 /// A transient rendering of Host custody, never a second mutable input queue.
 fn queue_rows(
@@ -250,17 +301,23 @@ impl Dock {
         {
             crate::display_text::push_wrapped(&mut status, &format!("Notice · {notice}"), width);
         }
-        let mut earlier_rows = 0;
-        let progress = operation
-            .filter(|op| !op.is_cancelled() && visible_status(ui, None).is_none())
-            .map(|op| format!("{} · {}", op.controls(&ui.keys), op.label()));
-        let status_value = progress.clone().or_else(|| visible_status(ui, operation));
+        let earlier_rows = status.len();
+        let activity = operation.filter(|op| !op.is_cancelled());
+        let status_value = if activity.is_some() {
+            status_feedback(ui)
+        } else {
+            visible_status(ui, operation)
+        };
         if let Some(value) = status_value {
-            earlier_rows = status.len();
             crate::display_text::push_wrapped(&mut status, &value, width);
         }
         status.extend(queue_rows(queued, &ui.keys, width, (budget / 3).max(1)));
+        // Drop an older transcript notice before taking the border away from
+        // active work. Current feedback and queued inputs still get first claim.
         let status_budget = budget.saturating_sub(1);
+        let indicator_space =
+            usize::from(activity.is_some() && status.len() - earlier_rows < status_budget);
+        let status_budget = status_budget - indicator_space;
         if status.len() > status_budget {
             // Older notices yield first. Keep the current feedback's prefix
             // (including stop controls) and one caret row; mark omitted source.
@@ -280,14 +337,15 @@ impl Dock {
             || !ui.conversation.mutable_items().is_empty()
             || ui.view.is_reading()
             || ui.mode == super::TuiMode::Fullscreen;
-        let body_minimum = usize::from(has_body && budget > status.len() + 1);
-        let discovery_room = budget.saturating_sub(1 + status.len() + body_minimum);
+        let body_minimum = usize::from(has_body && budget > status.len() + 1 + indicator_space);
+        let discovery_room =
+            budget.saturating_sub(1 + status.len() + body_minimum + indicator_space);
         let completion =
             ui.editor
                 .completion
                 .rows(width, discovery_room.min((budget / 3).max(1)), &ui.keys);
         let editor_room = budget
-            .saturating_sub(status.len() + completion.rows.len() + body_minimum)
+            .saturating_sub(status.len() + completion.rows.len() + body_minimum + indicator_space)
             .max(1);
         let editor_budget = if has_body {
             editor_room.div_ceil(2)
@@ -295,51 +353,26 @@ impl Dock {
             editor_room
         };
         let composer = input_window(&ui.editor.draft, ui.editor.cursor, width, editor_budget);
+        let spare_rows = budget - status.len() - completion.rows.len() - composer.lines.len();
+        // Active progress is more useful than passive footer fields, but never
+        // takes the caret, feedback, completion, or last live transcript row.
+        let indicator = activity.filter(|_| spare_rows > body_minimum);
         let footer = orientation::rows(
             ui,
             model,
             width,
-            budget.saturating_sub(
-                status.len() + completion.rows.len() + composer.lines.len() + body_minimum,
-            ),
+            spare_rows - body_minimum - usize::from(indicator.is_some()),
         );
-        let spare_rows = budget.saturating_sub(
-            status.len() + completion.rows.len() + composer.lines.len() + footer.len(),
-        );
-        // The frame yields to everything interactive. In a short viewport,
-        // leave the spare rows to the transcript instead of decorating it.
+        let spare_rows = spare_rows - footer.len();
         let rule = (width >= 3 && spare_rows >= 8)
             .then(|| Line::styled("─".repeat(width), ui.themes.theme().style(Role::Secondary)));
-        let top = rule.as_ref().map(|rule| {
-            let Some(progress) = progress.filter(|_| width >= 8) else {
-                return rule.clone();
-            };
-            use unicode_width::UnicodeWidthStr;
-            let (progress, clipped) =
-                crate::display_text::fit_line_with_status(&progress, width - 7);
-            if clipped {
-                return rule.clone();
-            }
-            let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            let spinner = frames[ui.spinner_frame % frames.len()];
-            let tail = "─".repeat(width - 6 - progress.width());
-            status.remove(earlier_rows);
+        let top = if let Some(operation) = indicator {
             ui.spinner_visible = true;
-            let theme = ui.themes.theme();
-            use ratatui::text::Span;
-            Line::from(vec![
-                Span::styled("── ", theme.style(Role::Secondary)),
-                Span::styled(spinner.to_string(), theme.style(Role::Running)),
-                Span::styled(format!(" {progress} "), theme.style(Role::Secondary)),
-                Span::styled(tail, theme.style(Role::Secondary)),
-            ])
-        });
-        let body_rows = budget
-            - status.len()
-            - completion.rows.len()
-            - composer.lines.len()
-            - footer.len()
-            - 2 * usize::from(rule.is_some());
+            Some(activity_border(ui, operation, width))
+        } else {
+            rule.clone()
+        };
+        let body_rows = spare_rows - usize::from(top.is_some()) - usize::from(rule.is_some());
         let mut rows = Vec::new();
         for text in status {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::Secondary)));

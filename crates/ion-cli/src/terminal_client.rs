@@ -142,6 +142,7 @@ struct Frontend {
     footer: orientation::Footer,
     spinner_frame: usize,
     spinner_visible: bool,
+    retry_progress: Option<activity::RetryProgress>,
     theme_io: theme_io::ThemeIo,
     theme_preview_name: Option<String>,
     theme_picker: Option<theme_selection::ThemePicker>,
@@ -1498,7 +1499,7 @@ fn settlement_program_status(outcome: &ion_app::OperationOutcome) -> ProgramStat
     }
 }
 
-fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {
+fn status_feedback(ui: &Frontend) -> Option<String> {
     if let Some(prompt) = ui.gestures.prompt() {
         return Some(prompt.to_owned());
     }
@@ -1563,19 +1564,21 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
     }
     if ui.clipboard_cancel_target().is_some() {
         let controls = format!("{} cancels paste", ui.keys.hint(KeyAction::Interrupt));
-        if let Some(operation) = operation {
-            status = if status.is_empty() {
-                operation.label().into()
-            } else {
-                format!("{} · {status}", operation.label())
-            };
-        }
         return Some(if status.is_empty() {
             controls
         } else {
             format!("{controls} · {status}")
         });
     }
+    (!status.is_empty()).then_some(status)
+}
+
+fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<String> {
+    let feedback = status_feedback(ui);
+    if ui.gestures.prompt().is_some() || ui.clipboard_cancel_target().is_some() {
+        return feedback;
+    }
+    let status = feedback.unwrap_or_default();
     if let Some(operation) = operation {
         let label = operation.label();
         return Some(if operation.is_cancelled() {
