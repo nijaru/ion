@@ -389,7 +389,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         help_start = preparation_start = 0
         preparation_requests = None
         opened_active = closed_active = False
-        sent_selected = selected_scrolled = closed_selected = False
+        sent_selected = closed_selected = False
         active_start = tool_start = selected_start = 0
         control_phase = None
         control_start = 0
@@ -463,11 +463,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     selected_start = len(output)
                     os.write(master, b"/tool\r")
                     sent_selected = True
-                if sent_selected and not selected_scrolled and b"Tool 4: exec" in output[selected_start:]:
-                    # A selected result opens at its heading, not at the stdout tail.
-                    os.write(master, b"\x1b[6~")
-                    selected_scrolled = True
-                if selected_scrolled and b"sample data updated" in output[selected_start:] and not closed_selected:
+                # The command outcome and stdout must be reachable on the
+                # first screen without paging through capture metadata.
+                if sent_selected and b"Tool 4: exec" in output[selected_start:] and b"sample data updated" in output[selected_start:] and not closed_selected:
                     os.write(master, b"\x0f")
                     closed_selected = True
                 if closed_selected and b"Details closed" in output[selected_start:] and not sent_compact:

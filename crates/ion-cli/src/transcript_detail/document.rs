@@ -8,7 +8,7 @@ use crate::transcript_render::{
     BlockLayout, ReadingPoint, kind_label, source_message_layout, source_thinking_layout,
     state_label,
 };
-use ion_core::{TranscriptActivity, TranscriptItem};
+use ion_core::{ToolActivityKind, TranscriptActivity, TranscriptItem};
 use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::ops::Range;
@@ -36,6 +36,7 @@ pub(super) enum Field {
     Subject,
     ArgumentsLabel,
     ResultLabel,
+    ResultMetadataLabel,
     ResultNotice,
     Json {
         field: JsonField,
@@ -89,6 +90,7 @@ impl Document {
             | Field::Heading
             | Field::ArgumentsLabel
             | Field::ResultLabel
+            | Field::ResultMetadataLabel
             | Field::DiffLabel => Some(Role::Heading),
             Field::ResultNotice | Field::Readiness | Field::TurnTermination => Some(Role::Warning),
             Field::CallId
@@ -266,12 +268,22 @@ impl Document {
             ),
             width,
         );
-        self.raw(key, Field::CallId, "Call ID: ", &activity.call_id, width);
         if let Some(subject) = &activity.activity.subject {
             self.raw(key, Field::Subject, "Subject: ", subject, width);
         }
-        self.generated(key, Field::ArgumentsLabel, "Arguments", width);
-        self.json(key, JsonField::Arguments, &activity.arguments, width);
+        let patch = crate::edit_diff::recorded(activity);
+        let command = activity.result.as_ref().and_then(|result| {
+            (activity.activity.kind == ToolActivityKind::Command
+                && ["stdout", "stderr"]
+                    .iter()
+                    .any(|stream| result.value[*stream].is_string()))
+            .then(|| result.value.as_object())
+            .flatten()
+        });
+        let result_first = patch.is_some() || command.is_some();
+        if !result_first {
+            self.request(activity, key, width);
+        }
         self.generated(key, Field::ResultLabel, "Result", width);
         if let Some(result) = &activity.result {
             if let Some(notice) = result
@@ -280,20 +292,7 @@ impl Document {
             {
                 self.generated(key, Field::ResultNotice, notice, width);
             }
-            if let Some(diff) = crate::edit_diff::recorded(activity) {
-                for (field, value) in diff.fields {
-                    if field != "diff" {
-                        self.json_value(
-                            key,
-                            JsonField::Result,
-                            value,
-                            &mut vec![PathPart::Key(field.clone())],
-                            &format!("{field}: "),
-                            false,
-                            width,
-                        );
-                    }
-                }
+            if let Some(diff) = patch {
                 self.generated(key, Field::DiffLabel, &diff.heading(), width);
                 if diff.text.is_empty() {
                     self.generated(key, Field::Diff, "No text changes", width);
@@ -311,6 +310,13 @@ impl Document {
                     let source = MappedLine::raw(Line::from(spans), 0..diff.text.len());
                     self.push(key, Field::Diff, BlockLayout::mapped(source, width));
                 }
+                self.metadata(
+                    key,
+                    diff.fields.iter().filter(|(name, _)| *name != "diff"),
+                    width,
+                );
+            } else if let Some(fields) = command {
+                self.command_result(key, fields, result.is_error, width);
             } else {
                 self.json(key, JsonField::Result, &result.value, width);
             }
@@ -321,6 +327,9 @@ impl Document {
         } else {
             self.generated(key, Field::ResultNotice, "[no committed result]", width);
         }
+        if result_first {
+            self.request(activity, key, width);
+        }
         for (index, child) in activity.children.iter().enumerate() {
             self.generated(
                 EntryKey::Tool(child.identity),
@@ -330,6 +339,86 @@ impl Document {
             );
             self.activity(child, &format!("{number}.{}", index + 1), width);
         }
+    }
+
+    fn request(&mut self, activity: &TranscriptActivity, key: EntryKey, width: usize) {
+        self.generated(key, Field::ArgumentsLabel, "Arguments", width);
+        self.json(key, JsonField::Arguments, &activity.arguments, width);
+        self.raw(key, Field::CallId, "Call ID: ", &activity.call_id, width);
+    }
+
+    fn command_result(
+        &mut self,
+        key: EntryKey,
+        fields: &serde_json::Map<String, Value>,
+        failed: bool,
+        width: usize,
+    ) {
+        let streams = if failed {
+            ["stderr", "stdout"]
+        } else {
+            ["stdout", "stderr"]
+        };
+        let priority = [
+            "exit_code",
+            "signal",
+            "timed_out",
+            "cancelled",
+            "wait_error",
+            streams[0],
+            streams[1],
+        ];
+        let important = |name: &str, value: &Value| {
+            priority.contains(&name)
+                && match value {
+                    Value::Null => false,
+                    Value::Bool(value) => *value,
+                    Value::String(text) => !text.is_empty(),
+                    _ => true,
+                }
+        };
+        for name in priority {
+            if let Some((name, value)) = fields
+                .get_key_value(name)
+                .filter(|(name, value)| important(name, value))
+            {
+                self.result_field(key, name, value, width);
+            }
+        }
+        self.metadata(
+            key,
+            fields
+                .iter()
+                .filter(|(name, value)| !important(name, value)),
+            width,
+        );
+    }
+
+    fn metadata<'a>(
+        &mut self,
+        key: EntryKey,
+        fields: impl Iterator<Item = (&'a String, &'a Value)>,
+        width: usize,
+    ) {
+        let mut fields = fields.peekable();
+        if fields.peek().is_some() {
+            self.generated(key, Field::ResultMetadataLabel, "Result metadata", width);
+            for (name, value) in fields {
+                self.result_field(key, name, value, width);
+            }
+        }
+    }
+
+    fn result_field(&mut self, key: EntryKey, name: &str, value: &Value, width: usize) {
+        self.json_value(
+            key,
+            JsonField::Result,
+            value,
+            &mut vec![PathPart::Key(name.to_owned())],
+            &format!("{}: ", serde_json::to_string(name).expect("JSON key")),
+            false,
+            width,
+        );
     }
 
     fn artifacts(&mut self, key: EntryKey, artifacts: &[ion_core::ArtifactRef], width: usize) {

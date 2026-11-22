@@ -915,18 +915,12 @@ mod tests {
                 "missing readable result line {expected:?}: {rows:?}"
             );
         }
-        assert!(rows.join("\n").contains("\"exit_code\": 1"));
-        assert!(rows.join("\n").contains("\"cancelled\": false"));
         assert!(rows.iter().all(|row| !row.contains(['\u{1b}', '\u{7}'])));
-        assert!(
-            rows.iter()
-                .position(|row| row.contains("\"stdout\""))
-                .unwrap()
-                < rows
-                    .iter()
-                    .position(|row| row.contains("Traceback"))
-                    .unwrap()
-        );
+        let first_row = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap();
+        assert!(first_row("\"exit_code\": 1") < first_row("Traceback"));
+        assert!(first_row("Traceback") < first_row("Result metadata"));
+        assert!(first_row("Result metadata") < first_row("\"cancelled\": false"));
+        assert!(first_row("Result metadata") < first_row("\"stdout\""));
         assert!(view.copy_evidence().unwrap().1.contains(&json_text(&value)));
         let marker = rows
             .iter()
@@ -961,6 +955,26 @@ mod tests {
     }
 
     #[test]
+    fn edit_inspection_shows_the_patch_before_large_arguments() {
+        let mut tool = activity(0);
+        tool.activity.kind = ToolActivityKind::Edit;
+        tool.name = "edit".into();
+        tool.arguments = serde_json::json!({"old_text": "long argument\n".repeat(500)});
+        tool.result.as_mut().unwrap().value = serde_json::json!({
+            "diff": {"text": "--- file\n+++ file\n@@ -1 +1 @@\n-old\n+changed\n", "truncated": false},
+            "new_digest": "evidence",
+        });
+        let mut view = DetailView::new(Some((NonZeroUsize::MIN, tool.identity)));
+        let history = tool_history(vec![tool]);
+        view.prepare(history.items.iter(), &[], 0, 80);
+        let first = view.window(9).join("\n");
+        assert!(first.contains("Recorded edit diff") && first.contains("+changed"));
+        assert!(!first.contains("Arguments"));
+        let (_, evidence) = view.copy_evidence().unwrap();
+        assert!(evidence.contains("long argument") && evidence.contains("new_digest"));
+    }
+
+    #[test]
     fn inspection_json_matches_pretty_values_without_emitting_controls() {
         let controls: String = ('\0'..='\u{1f}').collect();
         let mut tool = activity(0);
@@ -974,7 +988,10 @@ mod tests {
         view.prepare(history.items.iter(), &[], 0, 1000);
         let rows = view.rows();
         let start = rows.iter().position(|row| row == "Arguments").unwrap() + 1;
-        let end = rows.iter().position(|row| row == "Result").unwrap();
+        let end = rows
+            .iter()
+            .position(|row| row.starts_with("Call ID:"))
+            .unwrap();
         assert_eq!(rows[start..end].join("\n"), expected);
         assert!(
             rows.iter()
