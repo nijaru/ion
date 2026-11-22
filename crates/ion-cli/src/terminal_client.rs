@@ -27,6 +27,7 @@ use ratatui::text::Line;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 mod activity;
+mod artifact;
 mod attach;
 mod block_presenter;
 mod clipboard_input;

@@ -1326,6 +1326,10 @@ mod tests {
         assert!(output.contains("Result"));
         assert!(output.contains("END_MARKER"));
         assert!(output.contains("Session artifact 0 · stdout · 1234 bytes · complete"));
+        let save = output
+            .find("Captures 0: stdout · /tool 1 save INDEX PATH")
+            .unwrap();
+        assert!(save < output.find("END_MARKER").unwrap());
         let (_, evidence) = selected.copy_evidence().unwrap();
         assert!(evidence.contains("Session artifact 0 · stdout · 1234 bytes · complete"));
         assert!(evidence.contains(&"a".repeat(64)));

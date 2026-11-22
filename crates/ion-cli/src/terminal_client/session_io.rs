@@ -32,6 +32,10 @@ pub(super) enum ReadOutput {
     Fork(super::navigation::ForkPickerValue),
     Switch(PathBuf),
     Exported(PathBuf),
+    ArtifactExport {
+        path: PathBuf,
+        result: Result<bool, ion_core::SessionError>,
+    },
     RecoverySaved {
         id: u64,
         path: PathBuf,
@@ -589,6 +593,22 @@ pub(super) fn apply(
         Ok(ReadOutput::Exported(path)) => {
             ui.status = format!("Transcript saved to {}", path.display())
         }
+        Ok(ReadOutput::ArtifactExport { path, result }) => match result {
+            Ok(complete) => {
+                let coverage = if complete {
+                    ""
+                } else {
+                    " (incomplete capture)"
+                };
+                ui.status = format!("Artifact saved to {}{coverage}", path.display());
+            }
+            Err(error) => {
+                if let Some(source) = source {
+                    ui.return_command_source(source);
+                }
+                ui.status = format!("Artifact not saved to {}: {error}", path.display());
+            }
+        },
         Ok(ReadOutput::RecoverySaved { id, path }) => {
             ui.status = format!(
                 "Recovery {id} inspection backup saved to {}; not replay/import authority",

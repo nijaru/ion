@@ -75,10 +75,7 @@ impl Session {
         index: usize,
         mut output: impl Write,
     ) -> Result<ArtifactRef, SessionError> {
-        let path = super::database_path(path.as_ref())?;
-        let connection =
-            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        super::configure_connection(&connection)?;
+        let connection = open_export_source(path.as_ref())?;
         let snapshot = connection.unchecked_transaction()?;
         super::read_header(&snapshot)?;
         let result = super::read_entry(&snapshot, entry.get())?;
@@ -89,12 +86,23 @@ impl Session {
                     entry: entry.get(),
                     index,
                 })?;
-        validate(&snapshot, reference)?;
-        scan_chunks(&snapshot, reference, |_, body, _| {
-            output.write_all(body)?;
-            Ok(())
-        })?;
+        stream_capture(&snapshot, reference, &mut output)?;
         Ok(reference.clone())
+    }
+
+    /// Operator-level streaming read of a known capture receipt. Use a separate
+    /// snapshot so a slow destination never holds the Session writer mutex.
+    pub fn stream_artifact(
+        &self,
+        reference: &ArtifactRef,
+        output: impl Write,
+    ) -> Result<(), SessionError> {
+        let connection = open_export_source(self.path())?;
+        let snapshot = connection.unchecked_transaction()?;
+        if super::read_header(&snapshot)?.id != self.id() {
+            return Err(SessionError::InvalidDatabase);
+        }
+        stream_capture(&snapshot, reference, output)
     }
 
     pub fn artifact_sink(self: &Arc<Self>) -> ArtifactSink {
@@ -112,6 +120,25 @@ impl Session {
         let store = self.lock_store()?;
         read_page(&store.connection, reference, offset, limit)
     }
+}
+
+fn open_export_source(path: &std::path::Path) -> Result<Connection, SessionError> {
+    let path = super::database_path(path)?;
+    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    super::configure_connection(&connection)?;
+    Ok(connection)
+}
+
+fn stream_capture(
+    connection: &Connection,
+    reference: &ArtifactRef,
+    mut output: impl Write,
+) -> Result<(), SessionError> {
+    validate(connection, reference)?;
+    scan_chunks(connection, reference, |_, body, _| {
+        output.write_all(body)?;
+        Ok(())
+    })
 }
 
 fn io_error(error: impl std::fmt::Display) -> io::Error {

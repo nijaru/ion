@@ -46,6 +46,7 @@ pub(super) enum Field {
     DiffLabel,
     Diff,
     Artifact(usize),
+    ArtifactHelp,
     Image(usize),
     ChildLabel,
     Readiness,
@@ -96,6 +97,7 @@ impl Document {
             Field::CallId
             | Field::Subject
             | Field::Artifact(_)
+            | Field::ArtifactHelp
             | Field::Image(_)
             | Field::ChildLabel => Some(Role::Secondary),
             _ => None,
@@ -270,6 +272,23 @@ impl Document {
         );
         if let Some(subject) = &activity.activity.subject {
             self.raw(key, Field::Subject, "Subject: ", subject, width);
+        }
+        if let Some(result) = &activity.result
+            && !result.artifacts.is_empty()
+        {
+            let captures = result
+                .artifacts
+                .iter()
+                .enumerate()
+                .map(|(index, capture)| format!("{index}: {}", capture.label))
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.generated(
+                key,
+                Field::ArtifactHelp,
+                &format!("Captures {captures} · /tool {number} save INDEX PATH"),
+                width,
+            );
         }
         let patch = crate::edit_diff::recorded(activity);
         let command = activity.result.as_ref().and_then(|result| {
