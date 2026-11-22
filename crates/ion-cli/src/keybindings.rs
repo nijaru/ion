@@ -199,9 +199,11 @@ impl KeyBindings {
     }
 
     pub(crate) fn hint(&self, action: KeyAction) -> String {
-        self.keys[action as usize]
-            .first()
-            .map_or_else(|| "unbound".into(), ToString::to_string)
+        self.bound_hint(action).unwrap_or_else(|| "unbound".into())
+    }
+
+    pub(crate) fn bound_hint(&self, action: KeyAction) -> Option<String> {
+        self.keys[action as usize].first().map(ToString::to_string)
     }
 
     pub(crate) fn label(&self, action: KeyAction) -> String {

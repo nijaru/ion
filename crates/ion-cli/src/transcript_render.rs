@@ -752,7 +752,7 @@ fn render_shell(
         &output.value,
         "  ",
         width,
-        detail,
+        &detail.for_user_shell(),
         4,
         !output.is_error,
     );

@@ -970,10 +970,15 @@ impl Frontend {
 
     #[cfg(test)]
     fn pending_history_rows(&mut self, width: usize) -> Vec<Line<'static>> {
-        self.history_rows(width, conversation::Rows::Pending)
+        self.history_rows(width, conversation::Rows::Pending, true)
     }
 
-    fn history_rows(&mut self, width: usize, selection: conversation::Rows) -> Vec<Line<'static>> {
+    fn history_rows(
+        &mut self,
+        width: usize,
+        selection: conversation::Rows,
+        immutable_scrollback: bool,
+    ) -> Vec<Line<'static>> {
         let mut rows = Vec::new();
         if let Some(banner) = self.conversation.banner() {
             rows.push(Line::default());
@@ -990,7 +995,8 @@ impl Frontend {
                 self.themes.theme(),
                 self.thinking_visibility,
                 &self.cwd,
-            ),
+            )
+            .with_inspector_hint(immutable_scrollback),
         );
         rows.extend(content);
         rows
@@ -1475,7 +1481,8 @@ fn draw_prepared(
     } else {
         conversation::Rows::Pending
     };
-    let commit_rows = ui.history_rows(width.max(1) as usize, selection);
+    let immutable_scrollback = !screen.is_dedicated();
+    let commit_rows = ui.history_rows(width.max(1) as usize, selection, immutable_scrollback);
     let width = width.max(1) as usize;
     let physical_budget = height.max(1) as usize;
     let dock = dock::Dock::prepare(ui, operation, model, queued, width, physical_budget);
@@ -1491,7 +1498,8 @@ fn draw_prepared(
             ui.themes.theme(),
             ui.thinking_visibility,
             &ui.cwd,
-        ),
+        )
+        .with_inspector_hint(immutable_scrollback),
     );
     let body_height = live_rows.len();
     let cursor = dock.cursor.map(|(row, col)| (body_height + row, col));

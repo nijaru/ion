@@ -185,12 +185,12 @@ fn disclosure(
     let message = if omitted > 0 {
         Some(format!(
             "… {omitted} more recorded {label} · {}",
-            detail.details_key
+            detail.details_hint()
         ))
     } else if shortened {
         Some(format!(
             "… long recorded value shortened · {}",
-            detail.details_key
+            detail.details_hint()
         ))
     } else {
         None

@@ -467,9 +467,10 @@ fn disclosure_hints_follow_configured_or_disabled_detail_action() {
         open: false,
         activities,
     })];
-    for (config, expected) in [
-        (r#"{"app.tools.expand":"f8"}"#, "F8"),
-        (r#"{"app.tools.expand":[]}"#, "unbound"),
+    for (config, immutable_scrollback, expected) in [
+        (r#"{"app.tools.expand":"f8"}"#, false, "F8"),
+        (r#"{"app.tools.expand":[]}"#, false, "/tools"),
+        (r#"{"app.tools.expand":"f8"}"#, true, "/tools"),
     ] {
         let keys = crate::keybindings::KeyBindings::parse(config.as_bytes()).unwrap();
         let theme = Theme::default();
@@ -479,7 +480,8 @@ fn disclosure_hints_follow_configured_or_disabled_detail_action() {
             &theme,
             ThinkingVisibility::Hidden,
             std::path::Path::new("/workspace"),
-        );
+        )
+        .with_inspector_hint(immutable_scrollback);
         let published = rows(&items, 160, &options);
         for label in [
             "read outputs folded",
@@ -494,7 +496,10 @@ fn disclosure_hints_follow_configured_or_disabled_detail_action() {
             assert!(notice.to_string().contains(expected), "{notice}");
         }
         let live = window_rows(&items, 160, 4, &options);
-        assert!(live.iter().any(|row| row.to_string().contains(expected)));
+        assert!(
+            live.iter()
+                .any(|row| row.to_string().contains("more · /tools"))
+        );
         assert!(
             published
                 .iter()
@@ -1264,6 +1269,23 @@ fn shell_preview_shows_observed_output_outcome_and_context_choice() {
     assert!(!rendered.contains("temporary"));
     assert!(rendered.contains("earlier stdout lines"));
     assert!(!rendered.contains("\u{1b}"));
+    let archive = rows(
+        &projection.items,
+        120,
+        &RenderOptions::new(
+            OutputDetail::Compact,
+            &crate::keybindings::KeyBindings::default(),
+            &Theme::default(),
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        )
+        .with_inspector_hint(true),
+    );
+    assert!(
+        archive
+            .iter()
+            .any(|row| row.to_string().contains("earlier stdout lines · /tool all"))
+    );
 }
 
 fn activity(

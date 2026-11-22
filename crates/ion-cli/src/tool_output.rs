@@ -24,12 +24,14 @@ impl OutputDetail {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct RenderOptions<'a> {
     pub cwd: &'a std::path::Path,
     pub theme: &'a Theme,
     pub detail: OutputDetail,
     pub thinking: ThinkingVisibility,
-    pub details_key: String,
+    expand_hint: Option<String>,
+    inspect_command: &'static str,
 }
 
 impl<'a> RenderOptions<'a> {
@@ -45,8 +47,27 @@ impl<'a> RenderOptions<'a> {
             theme,
             detail,
             thinking,
-            details_key: keys.hint(crate::keybindings::KeyAction::ExpandTools),
+            expand_hint: keys.bound_hint(crate::keybindings::KeyAction::ExpandTools),
+            inspect_command: "/tools",
         }
+    }
+
+    pub(crate) fn with_inspector_hint(mut self, immutable_scrollback: bool) -> Self {
+        if immutable_scrollback {
+            self.expand_hint = None;
+        }
+        self
+    }
+
+    pub(crate) fn for_user_shell(&self) -> Self {
+        Self {
+            inspect_command: "/tool all",
+            ..self.clone()
+        }
+    }
+
+    pub(crate) fn details_hint(&self) -> &str {
+        self.expand_hint.as_deref().unwrap_or(self.inspect_command)
     }
 }
 
@@ -255,10 +276,10 @@ pub(crate) fn render_folded_summary(
         rows,
         prefix,
         &format!(
-            "… {} {} outputs folded · /settings expanded · {}",
+            "… {} {} outputs folded · {}",
             activities.len(),
             crate::transcript_render::kind_label(first.activity.kind),
-            detail.details_key
+            detail.details_hint()
         ),
         width,
         detail.theme,
@@ -313,7 +334,7 @@ pub(crate) fn render_command(
                     prefix,
                     &format!(
                         "{stream} · {line_count} {unit} folded · {}",
-                        detail.details_key
+                        detail.details_hint()
                     ),
                     width,
                     detail.theme,
@@ -343,9 +364,9 @@ pub(crate) fn render_command(
             let notice = match output[format!("{stream}_omitted_bytes")].as_u64() {
                 Some(bytes) => format!(
                     "… {stream} truncated · {bytes} raw bytes omitted · {}",
-                    detail.details_key
+                    detail.details_hint()
                 ),
-                None => format!("… {stream} truncated · {}", detail.details_key),
+                None => format!("… {stream} truncated · {}", detail.details_hint()),
             };
             note(rows, prefix, &notice, width, detail.theme);
         }
@@ -488,15 +509,12 @@ fn render_text(
         let omitted = count.saturating_sub(compact_lines);
         let notice = if omitted > 0 {
             format!(
-                "… {omitted} {} {label} lines · /settings expanded · {}",
+                "… {omitted} {} {label} lines · {}",
                 if tail { "earlier" } else { "more" },
-                detail.details_key
+                detail.details_hint()
             )
         } else {
-            format!(
-                "… long line shortened · /settings expanded · {}",
-                detail.details_key
-            )
+            format!("… long line shortened · {}", detail.details_hint())
         };
         note(rows, prefix, &notice, width, detail.theme);
     }

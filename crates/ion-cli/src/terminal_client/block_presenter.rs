@@ -118,7 +118,7 @@ struct Format {
     theme: Theme,
     detail: OutputDetail,
     thinking: ThinkingVisibility,
-    details_key: String,
+    details_hint: String,
 }
 
 struct Layout {
@@ -186,7 +186,7 @@ impl BlockPresenter {
             theme: options.theme.clone(),
             detail: options.detail,
             thinking: options.thinking,
-            details_key: options.details_key.clone(),
+            details_hint: options.details_hint().to_owned(),
         };
         if selection_changed || self.format.as_ref() != Some(&format) {
             self.layouts.clear();
@@ -348,10 +348,7 @@ impl BlockPresenter {
         let mut rows = crate::transcript_render::context_summary(items, width, options.theme);
         if rows.is_empty() {
             rows.push(Line::styled(
-                crate::display_text::fit_line(
-                    &format!("… earlier conversation · {}", options.details_key),
-                    width,
-                ),
+                crate::display_text::fit_line("… earlier conversation · /tool all", width),
                 options
                     .theme
                     .style(crate::presentation_style::Role::Secondary),
@@ -422,9 +419,8 @@ impl BlockPresenter {
                 rows.push(Line::styled(
                     crate::display_text::fit_line(
                         &format!(
-                            "└ {} more · {}",
-                            group.activities.len() - shown - pinned,
-                            options.details_key
+                            "└ {} more · /tools",
+                            group.activities.len() - shown - pinned
                         ),
                         width,
                     ),

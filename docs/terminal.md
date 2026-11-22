@@ -48,7 +48,7 @@ Unsaved recovery sources and receipt fences are lost when the process exits. Sav
 
 ## Inspect tool output
 
-Ctrl-O expands or collapses tool output without switching between inline and fullscreen. In a dedicated pane it also redraws earlier tool output in scrollback. In a shared shell pane it changes live and future output only; use `/tool N` to inspect earlier results.
+Ctrl-O expands or collapses tool output without switching between inline and fullscreen. In a dedicated pane it also redraws earlier tool output in scrollback. In a shared shell pane it changes live and future output only. Folded tool rows point to `/tools`, and folded `!` shell output points to `/tool all`, so you can inspect earlier results without rewriting the terminal's scrollback.
 
 Compact mode hides successful file contents, directory listings, and search matches. It keeps result counts, partial ranges, capture warnings, and errors visible. Expand or use `/tool N` to see what was recorded.
 

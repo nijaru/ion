@@ -147,7 +147,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
             for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "FINAL_ONCE", "-observed data", "+UPDATED_SNAPSHOT"):
                 assert history.count(marker) == 1, f"{marker} was republished or lost:\n{history}"
-            assert history.count("stdout · 4 lines folded") == 1, f"successful output fold lost or replayed:\n{history}"
+            assert history.count("stdout · 4 lines folded · /tools") == 1, f"shared scrollback lost the folded output or its inspector hint:\n{history}"
             assert "COMMAND_OUTPUT_ONCE" not in history, "compact success output was not folded"
             assert "Working" not in history, f"mutable operation chrome leaked into history:\n{history}"
             assert "THINK_1" not in history and "THINK_2" not in history, "hidden thinking was published retroactively"

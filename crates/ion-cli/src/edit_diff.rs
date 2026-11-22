@@ -104,9 +104,12 @@ pub(crate) fn render(
         .collect::<Vec<_>>();
     let more = source.next().is_some();
     let footer = if diff.truncated {
-        Some(format!("… diff capture truncated · {}", detail.details_key))
+        Some(format!(
+            "… diff capture truncated · {}",
+            detail.details_hint()
+        ))
     } else if more {
-        Some(format!("… more diff · {}", detail.details_key))
+        Some(format!("… more diff · {}", detail.details_hint()))
     } else if lines.is_empty() {
         Some("No text changes".into())
     } else {
