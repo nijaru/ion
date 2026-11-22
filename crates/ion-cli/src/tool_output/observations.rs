@@ -20,18 +20,9 @@ impl Collection {
     }
 }
 
-pub(super) fn render(
-    rows: &mut Vec<MappedLine>,
-    activity: &TranscriptActivity,
-    prefix: &str,
-    width: usize,
-    detail: &RenderOptions<'_>,
-) {
-    let Some(result) = &activity.result else {
-        return;
-    };
-    let value = &result.value;
-    let collection = match activity.activity.kind {
+fn collection(activity: &TranscriptActivity) -> Option<(Collection, &[Value])> {
+    let value = &activity.result.as_ref()?.value;
+    match activity.activity.kind {
         ToolActivityKind::List => value["entries"]
             .as_array()
             .map(|items| (Collection::Entries, items)),
@@ -44,8 +35,42 @@ pub(super) fn render(
                     .map(|items| (Collection::Matches, items))
             }),
         _ => None,
+    }
+    .map(|(kind, items)| (kind, items.as_slice()))
+}
+
+pub(crate) fn compact_count(activity: &TranscriptActivity) -> Option<String> {
+    if activity.state != ActivityState::Completed || activity.result.as_ref()?.is_error {
+        return None;
+    }
+    let (kind, items) = collection(activity)?;
+    let label = if items.len() == 1 {
+        match kind {
+            Collection::Entries => "entry",
+            Collection::Files => "file",
+            Collection::Matches => "match",
+        }
+    } else {
+        kind.label()
     };
-    if let Some((collection, items)) = collection {
+    Some(format!("{} {label}", items.len()))
+}
+
+pub(super) fn render(
+    rows: &mut Vec<MappedLine>,
+    activity: &TranscriptActivity,
+    prefix: &str,
+    width: usize,
+    detail: &RenderOptions<'_>,
+) {
+    let Some(result) = &activity.result else {
+        return;
+    };
+    let value = &result.value;
+    let fold = detail.detail == OutputDetail::Compact
+        && activity.state == ActivityState::Completed
+        && !result.is_error;
+    if !fold && let Some((collection, items)) = collection(activity) {
         let label = collection.label();
         note(
             rows,

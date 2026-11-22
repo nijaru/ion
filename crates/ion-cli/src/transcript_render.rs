@@ -1318,10 +1318,11 @@ fn display_activity(
     }
     append_result_summary(&mut summary, activity);
     if options.detail == OutputDetail::Compact
-        && let Some(range) = crate::tool_output::compact_read_range(activity)
+        && let Some(annotation) = crate::tool_output::compact_read_range(activity)
+            .or_else(|| crate::tool_output::compact_discovery_count(activity))
     {
         summary.push_str(" · ");
-        summary.push_str(&range);
+        summary.push_str(&annotation);
     }
     let detail = activity
         .children

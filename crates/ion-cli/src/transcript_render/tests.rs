@@ -1402,10 +1402,21 @@ fn recorded_discovery_and_external_output_is_visible_including_nested_calls() {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>()
                 .join("\n");
-                assert!(
+                let discovery = matches!(kind, ToolActivityKind::List | ToolActivityKind::Search);
+                let show_first = !discovery || mode == OutputDetail::Expanded;
+                assert_eq!(
                     rendered.contains(first),
+                    show_first,
                     "{kind:?}, nested={nested}, {mode:?}: {rendered}"
                 );
+                if discovery && mode == OutputDetail::Compact {
+                    assert!(
+                        ["4 entries", "4 files", "4 matches"]
+                            .iter()
+                            .any(|count| rendered.contains(count)),
+                        "{rendered}"
+                    );
+                }
                 assert_eq!(
                     rendered.contains(last),
                     mode == OutputDetail::Expanded,
@@ -1413,7 +1424,11 @@ fn recorded_discovery_and_external_output_is_visible_including_nested_calls() {
                 );
                 assert!(rendered.contains("PARTIAL_OBSERVATION"), "{rendered}");
                 assert!(rendered.contains("not shared with model"), "{rendered}");
-                assert_eq!(rendered.matches(first).count(), 1, "{rendered}");
+                assert_eq!(
+                    rendered.matches(first).count(),
+                    usize::from(show_first),
+                    "{rendered}"
+                );
             }
         }
     }
@@ -1608,7 +1623,7 @@ fn external_structured_values_and_capture_notices_are_literal_and_width_safe() {
     .collect::<Vec<_>>()
     .join("\n");
     assert!(
-        rendered.contains("0 recorded")
+        rendered.contains("Listed root · 0 entries")
             && rendered.contains("EMPTY_PARTIAL_SCAN")
             && rendered.contains("not proof of absence"),
         "{rendered}"

@@ -50,7 +50,7 @@ Unsaved recovery sources and receipt fences are lost when the process exits. Sav
 
 Ctrl-O expands or collapses tool output without switching between inline and fullscreen. In a dedicated pane it also redraws earlier tool output in scrollback. In a shared shell pane it changes live and future output only; use `/tool N` to inspect earlier results.
 
-Compact mode hides successful file contents but keeps partial ranges, capture warnings, and errors visible. Expand or use `/tool N` to see what was recorded.
+Compact mode hides successful file contents, directory listings, and search matches. It keeps result counts, partial ranges, capture warnings, and errors visible. Expand or use `/tool N` to see what was recorded.
 
 Mutation rows show recorded line additions/removals for that operation, not repository totals. Counts cover the snapshot diff even when patch capture is truncated; an uncaptured comparison is reported separately from write success. Expansion shows recorded directory entries, file-search results and remote-tool text or structured values. It cannot recover data omitted during capture.
 

@@ -51,6 +51,7 @@ impl<'a> RenderOptions<'a> {
 }
 
 mod observations;
+pub(crate) use observations::compact_count as compact_discovery_count;
 
 pub(crate) enum RecordedExit {
     Code(i64),
