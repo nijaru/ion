@@ -132,6 +132,37 @@ def entries(database):
         return [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
 
 
+def pressured_run(command, env, json_output):
+    """Start with a full publication pipe, independent of event sizes."""
+    read_fd, write_fd = os.pipe()
+    padding = b"x" * 4096
+    size = 0
+    try:
+        if hasattr(fcntl, "F_SETPIPE_SZ"):
+            fcntl.fcntl(write_fd, fcntl.F_SETPIPE_SZ, 4096)
+        os.set_blocking(write_fd, False)
+        while True:
+            try:
+                size += os.write(write_fd, padding)
+            except BlockingIOError:
+                break
+        os.set_blocking(write_fd, True)
+        child = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
+                                 stdout=write_fd if json_output else subprocess.PIPE,
+                                 stderr=subprocess.PIPE if json_output else write_fd)
+    except BaseException:
+        os.close(read_fd)
+        raise
+    finally:
+        os.close(write_fd)
+    pipe = os.fdopen(read_fd, "rb", buffering=0)
+    if json_output:
+        child.stdout = pipe
+    else:
+        child.stderr = pipe
+    return child, pipe, size
+
+
 def session_database(state, workspace):
     matches = []
     for path in state.rglob("*.sqlite"):
@@ -361,14 +392,11 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
             command = [binary, "--cwd", workspace]
             if json_output:
                 command.append("--json")
-            child = subprocess.Popen(command + ["run", "JSON_PRESSURE" if json_output else "TEXT_PRESSURE"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            child, pipe, padding = pressured_run(command + ["run", "JSON_PRESSURE" if json_output else "TEXT_PRESSURE"], env, json_output)
             native_pid = None
             writer_probe = None
             try:
-                pipe = child.stdout if json_output else child.stderr
                 if hasattr(fcntl, "F_SETPIPE_SZ"):
-                    # Change only this owned fixture pipe, not production limits.
-                    fcntl.fcntl(pipe.fileno(), fcntl.F_SETPIPE_SZ, 4096)
                     # Linux pipe page/atomic-write rules can stall a writer well
                     # below byte capacity. Probe kernel writability, without
                     # writing data or consuming the recipient's buffered output.
@@ -418,6 +446,10 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                 if writer_probe is not None:
                     os.close(writer_probe)
                     writer_probe = None
+                while padding:
+                    data = pipe.read(padding)
+                    assert data and data == b"x" * len(data), "fixture padding was not preserved"
+                    padding -= len(data)
                 stdout, stderr = child.communicate(timeout=8)
                 assert child.returncode == 1, (stdout, stderr)
                 if json_output:
@@ -471,7 +503,9 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
             command = [binary, "--cwd", workspace]
             if json_output:
                 command.append("--json")
-            child = subprocess.Popen(command + ["run", "TEXT_PRESSURE"], env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            # Establish backpressure independently of the size of human tool previews.
+            # This test drops a reader while publication is pending, not an idle pipe.
+            child, pipe, _ = pressured_run(command + ["run", "TEXT_PRESSURE"], env, json_output)
             try:
                 deadline = time.monotonic() + 8
                 while not (workspace / "native.ready").exists() and time.monotonic() < deadline:
@@ -479,11 +513,10 @@ with tempfile.TemporaryDirectory(prefix="ion-headless-") as temporary:
                     time.sleep(0.01)
                 assert (workspace / "native.ready").exists(), "native fixture did not start"
                 native_pid = int((workspace / "native.pid").read_text())
+                pipe.close()
                 if json_output:
-                    child.stdout.close()
                     child.stdout = None
                 else:
-                    child.stderr.close()
                     child.stderr = None
                 stdout, stderr = child.communicate(timeout=8)
                 assert child.returncode == 1, (child.returncode, stdout, stderr)

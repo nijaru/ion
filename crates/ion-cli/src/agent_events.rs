@@ -208,7 +208,13 @@ fn child_output(outcome: &ion_core::ChildOutcome) -> std::borrow::Cow<'_, ion_co
 }
 
 fn output_diagnostic(label: &str, output: &ion_core::ToolOutput) -> String {
-    let mut text = format!("[{label}] {}", output.value);
+    const PREVIEW_BYTES: usize = 1024;
+    let value = output.value.to_string();
+    let end = value.floor_char_boundary(PREVIEW_BYTES.min(value.len()));
+    let mut text = format!("[{label}] {}", &value[..end]);
+    if end < value.len() {
+        text.push_str("… [result preview truncated; see ion --session <id> inspect]");
+    }
     for metadata in crate::tool_output::artifact_metadata(&output.artifacts) {
         text.push('\n');
         text.push_str(&metadata);
@@ -225,6 +231,33 @@ fn output_diagnostic(label: &str, output: &ion_core::ToolOutput) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn human_output_bounds_large_results_without_changing_machine_events() {
+        let output = ion_core::ToolOutput {
+            value: json!({"exit_code": 1, "stderr": format!("OPENING_ERROR {}END", "é".repeat(4096))}),
+            artifacts: vec![crate::tool_output::tests::artifact("stderr", true)],
+            images: Vec::new(),
+            is_error: true,
+        };
+        let event = AgentEvent::ToolFinished {
+            call_id: "exec".into(),
+            name: "exec".into(),
+            activity: ion_core::ToolActivity::external("exec"),
+            outcome: ion_core::ToolOutcome::Observed {
+                output: output.clone(),
+                projection: ion_core::ToolResultProjection::Observed,
+            },
+        };
+        let human = diagnostic(&event).unwrap();
+        assert!(human.len() < 1300);
+        assert!(human.contains("OPENING_ERROR"));
+        assert!(human.contains("result preview truncated"));
+        assert!(!human.contains("END"));
+        let machine = event_record(&event);
+        assert_eq!(machine["output"], output.value);
+        assert_eq!(machine["artifacts"], json!(output.artifacts));
+    }
 
     #[test]
     fn output_events_retain_typed_artifacts_without_echoing_image_data() {
