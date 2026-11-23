@@ -5,7 +5,7 @@
   replay.
 - This is unreleased v0. Replace obsolete APIs with their callers rather than
   adding compatibility shims.
-- Build the Rust agent that makes daily coding work well, not a Pi clone.
+- Use Pi as the default reference for Ion, not a parity target.
   Use the [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md)
   before changing or reviewing behavior.
 

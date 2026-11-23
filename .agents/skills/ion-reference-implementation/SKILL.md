@@ -6,13 +6,12 @@ description: Use when changing or reviewing a runtime, Session, tool, or termina
 # Ion behavior changes
 
 - Start from a real Ion workflow or correctness problem, not a parity gap.
-  Keep familiar Pi interactions where they reduce friction. Choose behavior and
-  implementation that fit Ion's Rust architecture, durable guarantees, and
-  actual use; no reference implementation is a spec.
-- Treat Pi Durable as a strong reference, especially for runtime and recovery
-  semantics. Draw on Pi, fx, Codex, and others where their actual source and
-  behavior inform the choice. Prefer fx's terminal presentation where it fits.
-  Explain the trade-off when a change affects an established workflow.
+  Use Pi as the default reference: inspect its actual workflow and source and
+  use what fits. Diverge when a different choice better serves Ion's users,
+  Rust architecture, or durability guarantees. Explain material trade-offs.
+- Use Pi Durable as a strong reference for runtime and recovery. Prefer fx's
+  terminal presentation where it fits, and consult Codex and others when they
+  offer a useful comparison. No reference is a specification.
 - Trace the affected clients to the owner of the fact or effect. A queued
   input is not a durable acceptance, provisional output is not history, and a
   stop request is not joined completion. Preserve these distinctions through
