@@ -13,8 +13,10 @@ use tokio_util::sync::CancellationToken;
 
 use super::{ToolOutput, error};
 
-/// Bounded final bytes retained per stream before the private raw capture.
+/// Raw bytes retained per stream in the bounded preview.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+const OUTPUT_HEAD_BYTES: usize = 8 * 1024;
+const OUTPUT_GAP: &str = "\n[… middle of output omitted …]\n";
 /// Quiet-pipe allowance after the direct child exits or a stop is requested.
 pub(crate) const POST_EXIT_OUTPUT_IDLE: Duration = Duration::from_millis(100);
 
@@ -115,7 +117,7 @@ pub(super) async fn run(
         )
     };
     tokio::pin!(captures);
-    let (stdout, stderr) = tokio::select! {
+    let (mut stdout, mut stderr) = tokio::select! {
         biased;
         () = stop.cancelled(), if !cancelled => {
             cancelled = true;
@@ -164,25 +166,23 @@ pub(super) async fn run(
             false,
         ),
     };
-    let stdout_text = String::from_utf8_lossy(&stdout.bytes);
-    let stderr_text = String::from_utf8_lossy(&stderr.bytes);
-    // This describes decoding of the returned tail, not the entire stream:
-    // a byte-boundary cut can require replacement even for valid UTF-8 output.
     let mut artifacts = Vec::new();
-    let stdout_artifact = stdout.artifact.map(|artifact| {
+    let stdout_artifact = stdout.artifact.take().map(|artifact| {
         let index = artifacts.len();
         artifacts.push(artifact);
         index
     });
-    let stderr_artifact = stderr.artifact.map(|artifact| {
+    let stderr_artifact = stderr.artifact.take().map(|artifact| {
         let index = artifacts.len();
         artifacts.push(artifact);
         index
     });
+    let (stdout_text, stdout_lossy) = stdout.preview();
+    let (stderr_text, stderr_lossy) = stderr.preview();
     let result = json!({
         "exit_code": exit_code, "signal": signal, "wait_error": wait_error,
-        "stdout_lossy": matches!(stdout_text, Cow::Owned(_)),
-        "stderr_lossy": matches!(stderr_text, Cow::Owned(_)),
+        "stdout_lossy": stdout_lossy,
+        "stderr_lossy": stderr_lossy,
         "stdout": stdout_text, "stderr": stderr_text,
         "stdout_complete": stdout.complete, "stderr_complete": stderr.complete,
         "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0),
@@ -258,13 +258,32 @@ pub(crate) async fn kill_child(
 
 struct Captured {
     bytes: Vec<u8>,
+    has_gap: bool,
     complete: bool,
     omitted_bytes: Option<u64>,
     artifact: Option<ion_core::ArtifactRef>,
     full_error: Option<String>,
 }
 
+impl Captured {
+    fn preview(&self) -> (Cow<'_, str>, bool) {
+        if self.has_gap {
+            let (head, tail) = self.bytes.split_at(OUTPUT_HEAD_BYTES);
+            // Decode independently: bytes across the gap were not adjacent.
+            let head = String::from_utf8_lossy(head);
+            let tail = String::from_utf8_lossy(tail);
+            let lossy = matches!(head, Cow::Owned(_)) || matches!(tail, Cow::Owned(_));
+            (Cow::Owned(format!("{head}{OUTPUT_GAP}{tail}")), lossy)
+        } else {
+            let text = String::from_utf8_lossy(&self.bytes);
+            let lossy = matches!(text, Cow::Owned(_));
+            (text, lossy)
+        }
+    }
+}
+
 struct CaptureState {
+    head: Vec<u8>,
     bytes: VecDeque<u8>,
     total: u64,
     complete: bool,
@@ -316,6 +335,7 @@ impl OutputCapture {
         let capture_stop = stop_acquisition.clone();
         let task = tokio::spawn(async move {
             let mut state = CaptureState {
+                head: Vec::new(),
                 bytes: VecDeque::with_capacity(MAX_OUTPUT_BYTES),
                 total: 0,
                 complete: false,
@@ -351,11 +371,16 @@ impl OutputCapture {
                             && state.total.saturating_add(n as u64) > MAX_OUTPUT_BYTES as u64)
                             .then(|| state.bytes.iter().copied().collect::<Vec<_>>());
                         state.total = state.total.saturating_add(n as u64);
+                        if state.head.is_empty() && state.total > MAX_OUTPUT_BYTES as u64 {
+                            // The first overflow still has a contiguous prefix above.
+                            state.head = state.bytes.drain(..OUTPUT_HEAD_BYTES).collect();
+                        }
+                        let tail_limit = MAX_OUTPUT_BYTES - state.head.len();
                         let overflow = state
                             .bytes
                             .len()
                             .saturating_add(n)
-                            .saturating_sub(MAX_OUTPUT_BYTES);
+                            .saturating_sub(tail_limit);
                         let remove_existing = overflow.min(state.bytes.len());
                         state.bytes.drain(..remove_existing);
                         state.bytes.extend(&chunk[overflow - remove_existing..n]);
@@ -452,22 +477,31 @@ impl OutputCapture {
                 (&mut self.task).await
             }
         };
-        let mut state = result.unwrap_or_else(|error| CaptureState {
+        let state = result.unwrap_or_else(|error| CaptureState {
+            head: Vec::new(),
             bytes: VecDeque::new(),
             total: 0,
             complete: false,
             artifact: None,
             full_error: Some(format!("output capture task failed: {error}")),
         });
-        let bytes: Vec<u8> = std::mem::take(&mut state.bytes).into();
+        let has_gap = !state.head.is_empty();
+        let bytes = if has_gap {
+            let mut bytes = state.head;
+            bytes.extend(state.bytes);
+            bytes
+        } else {
+            Vec::from(state.bytes)
+        };
         let complete = state.complete;
         let omitted_bytes = complete.then(|| state.total.saturating_sub(bytes.len() as u64));
         Captured {
             bytes,
+            has_gap,
             complete,
             omitted_bytes,
-            artifact: state.artifact.take(),
-            full_error: state.full_error.take(),
+            artifact: state.artifact,
+            full_error: state.full_error,
         }
     }
 }
@@ -508,6 +542,11 @@ mod tests {
         (output, owner)
     }
 
+    fn preview_bytes(stream: &[u8]) -> Vec<u8> {
+        let tail_start = stream.len() - (MAX_OUTPUT_BYTES - OUTPUT_HEAD_BYTES);
+        [&stream[..OUTPUT_HEAD_BYTES], &stream[tail_start..]].concat()
+    }
+
     #[tokio::test]
     async fn untracked_overflow_reports_missing_custody_without_changing_exit_status() {
         let output = tools(&std::env::temp_dir())
@@ -523,7 +562,14 @@ mod tests {
             .await;
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["exit_code"], 0);
-        assert_eq!(output.value["stdout"], "x".repeat(MAX_OUTPUT_BYTES));
+        assert_eq!(
+            output.value["stdout"],
+            format!(
+                "{}{OUTPUT_GAP}{}",
+                "x".repeat(OUTPUT_HEAD_BYTES),
+                "x".repeat(MAX_OUTPUT_BYTES - OUTPUT_HEAD_BYTES)
+            )
+        );
         assert_eq!(output.value["stdout_complete"], true);
         assert_eq!(
             output.value["stdout_omitted_bytes"],
@@ -647,10 +693,7 @@ mod tests {
                 } else {
                     &payload[..before_release]
                 };
-                assert_eq!(
-                    captured.bytes,
-                    observed[observed.len() - MAX_OUTPUT_BYTES..]
-                );
+                assert_eq!(captured.bytes, preview_bytes(observed));
                 assert_eq!(
                     captured.omitted_bytes,
                     complete.then_some((observed.len() - MAX_OUTPUT_BYTES) as u64)
@@ -711,7 +754,7 @@ mod tests {
                 assert!(reference.complete);
                 assert!(captured.complete, "an interrupted read is retryable");
                 let payload = [prefix.as_slice(), tail].concat();
-                assert_eq!(captured.bytes, payload[payload.len() - MAX_OUTPUT_BYTES..]);
+                assert_eq!(captured.bytes, preview_bytes(&payload));
                 assert_eq!(
                     captured.omitted_bytes,
                     Some((payload.len() - MAX_OUTPUT_BYTES) as u64)
@@ -724,7 +767,7 @@ mod tests {
                 let reference = captured.artifact.as_ref().unwrap();
                 assert!(!reference.complete);
                 assert_eq!(owner.bytes(reference), prefix);
-                assert_eq!(captured.bytes, prefix[prefix.len() - MAX_OUTPUT_BYTES..]);
+                assert_eq!(captured.bytes, preview_bytes(&prefix));
                 assert!(
                     captured
                         .full_error
@@ -793,10 +836,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn utf8_tail_cut_reports_decoding_loss_separately_from_omitted_bytes() {
+    async fn utf8_preview_cut_reports_decoding_loss_separately_from_omitted_bytes() {
         let (output, owner) = run_exec(
             &std::env::temp_dir(),
-            json!({"command": "printf '\\303\\251'; head -c 65535 /dev/zero | tr '\\000' x"}),
+            json!({"command": "head -c 8191 /dev/zero | tr '\\000' x; printf '\\303\\251'; head -c 57344 /dev/zero | tr '\\000' x"}),
             CancellationToken::new(),
         )
         .await;
@@ -815,16 +858,25 @@ mod tests {
         assert_eq!(output.value["stdout_omitted_bytes"], 1);
         assert_eq!(
             output.value["stdout"],
-            format!("\u{fffd}{}", "x".repeat(MAX_OUTPUT_BYTES - 1))
+            format!(
+                "{}\u{fffd}{OUTPUT_GAP}{}",
+                "x".repeat(OUTPUT_HEAD_BYTES - 1),
+                "x".repeat(MAX_OUTPUT_BYTES - OUTPUT_HEAD_BYTES)
+            )
         );
         assert_eq!(
             capture,
-            [b"\xc3\xa9".as_slice(), &vec![b'x'; MAX_OUTPUT_BYTES - 1]].concat()
+            [
+                &vec![b'x'; OUTPUT_HEAD_BYTES - 1],
+                b"\xc3\xa9".as_slice(),
+                &vec![b'x'; MAX_OUTPUT_BYTES - OUTPUT_HEAD_BYTES]
+            ]
+            .concat()
         );
     }
 
     #[tokio::test]
-    async fn long_command_output_keeps_raw_captures_and_lossy_failure_tails() {
+    async fn long_command_output_keeps_raw_captures_and_lossy_previews() {
         let (output, owner) = run_exec(
             &std::env::temp_dir(),
             json!({"command":"yes x | head -c 70000; printf '\\377\\377\\000END_MARKER\\n'; yes e | head -c 70000 >&2; printf '\\377\\377\\000ERROR_MARKER\\n' >&2"}),
@@ -861,12 +913,20 @@ mod tests {
                 output.value[format!("{stream}_omitted_bytes")],
                 expected.len() - MAX_OUTPUT_BYTES
             );
-            let tail = &expected[expected.len() - MAX_OUTPUT_BYTES..];
+            let head = &expected[..OUTPUT_HEAD_BYTES];
+            let tail = &expected[expected.len() - (MAX_OUTPUT_BYTES - OUTPUT_HEAD_BYTES)..];
             let rendered = output.value[stream].as_str().unwrap();
-            assert_eq!(rendered, String::from_utf8_lossy(tail));
+            assert_eq!(
+                rendered,
+                format!(
+                    "{}{OUTPUT_GAP}{}",
+                    String::from_utf8_lossy(head),
+                    String::from_utf8_lossy(tail)
+                )
+            );
             // Two invalid bytes expand to replacements; omission is measured
             // in raw bytes, never in this longer text representation.
-            assert_eq!(rendered.len(), MAX_OUTPUT_BYTES + 4);
+            assert_eq!(rendered.len(), MAX_OUTPUT_BYTES + OUTPUT_GAP.len() + 4);
             assert!(rendered.contains('\0'));
             assert!(rendered.ends_with(if stream == "stdout" {
                 "END_MARKER\n"
@@ -1155,7 +1215,7 @@ mod tests {
                     };
                     // Continuous ready output cannot accidentally hit the idle
                     // cutoff. No artifact sink: this lifecycle fixture retains
-                    // only the bounded tail, not an unbounded test database.
+                    // only the bounded preview, not an unbounded test database.
                     let run = catalog.execute(ion_core::ToolInvocation::untracked(&call, stop));
                     let cancel_when_ready = async {
                         if cancel {
