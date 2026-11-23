@@ -466,13 +466,11 @@ impl OutputCapture {
                     }
                 }
             }
-            // A small complete stream normally needs no artifact. If decoding
-            // would destroy bytes, preserve its raw evidence through the same
-            // Session capture. Do this only after acquisition, so a UTF-8 sequence
-            // split across pipe reads is not mistaken for invalid output.
-            if state.complete
-                && state.head.is_empty()
-                && std::str::from_utf8(state.bytes.make_contiguous()).is_err()
+            // Small streams normally need no artifact. Preserve the bytes
+            // acquired if a UTF-8 preview would be lossy, even without EOF.
+            // Decide after acquisition so a sequence split across reads does
+            // not trigger capture if it is complete in the final buffer.
+            if state.head.is_empty() && std::str::from_utf8(state.bytes.make_contiguous()).is_err()
             {
                 match async {
                     let mut writer = start_artifact(sink.as_ref(), label)?;
@@ -842,6 +840,27 @@ mod tests {
             }
         }
     }
+    #[tokio::test]
+    async fn partial_non_utf8_output_retains_the_observed_bytes() {
+        use tokio::io::AsyncWriteExt;
+
+        let owner = ArtifactFixture::new();
+        let (reader, mut open_pipe) = tokio::io::duplex(32);
+        let bytes = b"\xff\0\xc3";
+        open_pipe.write_all(bytes).await.unwrap();
+        // Simulate an exited command whose descendant still holds the pipe.
+        let captured = OutputCapture::start(reader, Some(owner.sink()), OutputStream::Stdout, None)
+            .finish(&CancellationToken::new(), false)
+            .await;
+        drop(open_pipe);
+        assert!(!captured.complete);
+        assert_eq!(captured.omitted_bytes, None);
+        assert!(captured.preview().1);
+        let reference = captured.artifact.unwrap();
+        assert!(!reference.complete);
+        assert_eq!(owner.bytes(&reference), bytes);
+    }
+
     #[tokio::test]
     async fn small_invalid_output_is_marked_and_preserved_without_failing_the_command() {
         for (command, expected, lossy) in [
