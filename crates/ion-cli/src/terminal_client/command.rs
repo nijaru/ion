@@ -36,12 +36,14 @@ pub(super) enum CommandInput {
     Editor(EditorDraft),
     Shortcut(Builtin),
     CycleModel(ModelCycleDirection),
+    CycleReasoning,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum CommandKind<'a> {
     Builtin(Builtin),
     CycleModel(ModelCycleDirection),
+    CycleReasoning,
     UserCommand(&'a str),
 }
 
@@ -59,6 +61,10 @@ impl CommandInput {
             },
             Self::CycleModel(direction) => ParsedCommand {
                 kind: Some(CommandKind::CycleModel(*direction)),
+                args: "",
+            },
+            Self::CycleReasoning => ParsedCommand {
+                kind: Some(CommandKind::CycleReasoning),
                 args: "",
             },
             Self::Editor(source) => {
@@ -80,7 +86,7 @@ impl CommandInput {
     fn into_editor(self) -> Option<EditorDraft> {
         match self {
             Self::Editor(source) => Some(source),
-            Self::Shortcut(_) | Self::CycleModel(_) => None,
+            Self::Shortcut(_) | Self::CycleModel(_) | Self::CycleReasoning => None,
         }
     }
 }
@@ -175,6 +181,11 @@ pub(super) async fn dispatch_command(
         return Ok(());
     }
     match kind {
+        CommandKind::CycleReasoning => {
+            if let Err(error) = super::configuration::cycle_reasoning(runtime, ui) {
+                ui.status = format!("{error:#}");
+            }
+        }
         CommandKind::CycleModel(direction) => {
             if let Err(error) = super::configuration::select_model(
                 runtime,

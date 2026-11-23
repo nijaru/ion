@@ -1,7 +1,7 @@
 //! Terminal configuration choices; Host remains the admission and binding owner.
 use std::collections::BTreeMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use ion_ai::{ModelRef, ProviderErrorKind, Reasoning};
 use ion_app::{CredentialStatus, Host, SessionControl};
 use ion_core::AgentError;
@@ -86,49 +86,95 @@ impl Pickers {
     }
 }
 
+fn reasoning_levels(agent: &ion_core::Agent) -> Result<Vec<Reasoning>> {
+    let mut levels = Vec::new();
+    for reasoning in [
+        Reasoning::ProviderDefault,
+        Reasoning::Off,
+        Reasoning::Low,
+        Reasoning::Medium,
+        Reasoning::High,
+    ] {
+        match agent.validate_reasoning(reasoning) {
+            Ok(()) => levels.push(reasoning),
+            Err(AgentError::Provider(error)) if error.kind == ProviderErrorKind::Unsupported => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(levels)
+}
+
+pub(super) fn next_reasoning(
+    agent: &ion_core::Agent,
+    current: Reasoning,
+) -> Result<Option<Reasoning>> {
+    let levels = reasoning_levels(agent)?;
+    let next = levels
+        .iter()
+        .position(|level| *level == current)
+        .and_then(|index| levels.get(index + 1))
+        .or_else(|| levels.first());
+    Ok(next.copied().filter(|level| *level != current))
+}
+
+pub(super) fn cycle_reasoning(
+    runtime: &mut SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+) -> Result<()> {
+    anyhow::ensure!(
+        !runtime.is_busy(),
+        "Change generation effort after the operation"
+    );
+    anyhow::ensure!(
+        !ui.session_io.blocks_input(),
+        "Wait for Session refresh before changing generation effort"
+    );
+    let current = ui
+        .reasoning_preference
+        .context("Generation effort is not loaded")?;
+    if let Some(next) = next_reasoning(runtime.agent(), current)? {
+        super::session_io::start_binding(
+            runtime,
+            ui,
+            ion_app::BindingChange::SelectReasoning(next),
+            None,
+        )?;
+    } else {
+        ui.status = "This route has no other generation effort".into();
+    }
+    Ok(())
+}
+
 impl Picker {
     pub fn reasoning_for(agent: &ion_core::Agent, current: Reasoning) -> Result<Self> {
         agent.validate_reasoning(current)?;
-        let mut candidates = vec![
-            Reasoning::ProviderDefault,
-            Reasoning::Off,
-            Reasoning::Low,
-            Reasoning::Medium,
-            Reasoning::High,
-        ];
-        if !candidates.contains(&current) {
-            candidates.push(current);
+        let mut levels = reasoning_levels(agent)?;
+        if !levels.contains(&current) {
+            levels.push(current);
         }
-        let mut items = Vec::new();
-        for reasoning in candidates {
-            match agent.validate_reasoning(reasoning) {
-                Ok(()) => items.push(PickerItem {
-                    label: format!(
-                        "{reasoning}{}",
-                        if reasoning == current {
-                            " (current)"
-                        } else {
-                            ""
-                        }
-                    ),
-                    detail: Some(if reasoning == Reasoning::ProviderDefault {
-                        "Use this route's default generation policy".into()
-                    } else {
-                        "Accepted by this route's adapter; provider mappings may differ".into()
-                    }),
-                    value: PickerValue::Reasoning(reasoning),
-                }),
-                Err(AgentError::Provider(error))
-                    if error.kind == ProviderErrorKind::Unsupported => {}
-                Err(error) => return Err(error.into()),
-            }
-        }
-        let selected = items
+        let selected = levels
             .iter()
-            .position(
-                |item| matches!(item.value, PickerValue::Reasoning(value) if value == current),
-            )
+            .position(|level| *level == current)
             .expect("validated current reasoning is a candidate");
+        let items = levels
+            .into_iter()
+            .map(|reasoning| PickerItem {
+                label: format!(
+                    "{reasoning}{}",
+                    if reasoning == current {
+                        " (current)"
+                    } else {
+                        ""
+                    }
+                ),
+                detail: Some(if reasoning == Reasoning::ProviderDefault {
+                    "Use this route's default generation policy".into()
+                } else {
+                    "Accepted by this route's adapter; provider mappings may differ".into()
+                }),
+                value: PickerValue::Reasoning(reasoning),
+            })
+            .collect();
         Ok(Self {
             title: "Generation effort",
             query: String::new(),

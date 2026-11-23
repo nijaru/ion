@@ -1277,6 +1277,11 @@ def exercise_configuration(work, base_env, endpoint):
             terminal.paint()
             terminal.send("\r")
             terminal.wait_ready(lambda: "smoke/smoke-model · reasoning high · /help" in terminal.text())
+            for effort in ("default", "off", "low", "medium", "high"):
+                terminal.output.clear()
+                terminal.send(b"\x1b[Z")  # Shift-Tab cycles the supported effort and wraps.
+                terminal.wait_ready(lambda: f"smoke/smoke-model · reasoning {effort} · /help" in terminal.text())
+            assert len(requests) == before, "reasoning cycling issued a provider request"
             # The next ready route cannot carry the current reasoning policy.
             # A failed preflight must not skip ahead or replace the old binding.
             models = home / "models.json"

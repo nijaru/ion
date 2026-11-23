@@ -1228,6 +1228,7 @@ impl Frontend {
             Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
             Some(KeyAction::External) => Action::Command(CommandInput::Shortcut(Builtin::Editor)),
             Some(KeyAction::Model) => Action::Command(CommandInput::Shortcut(Builtin::Model)),
+            Some(KeyAction::CycleReasoning) => Action::Command(CommandInput::CycleReasoning),
             Some(KeyAction::ModelForward) => Action::Command(CommandInput::CycleModel(
                 ion_app::ModelCycleDirection::Forward,
             )),

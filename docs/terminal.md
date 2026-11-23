@@ -14,7 +14,7 @@ Opening chat still loads configured application resources and MCP connections. U
 
 Use `/file PATH` to attach a UTF-8 text file or image to the next input. An unquoted path can include spaces; a JSON-quoted path is also accepted, matching completion. Ion does not evaluate shell expressions or attach files merely mentioned in prose. See [saved input and attachments](sessions.md#saved-input-and-attachments) for path expansion and CLI input syntax.
 
-Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use `/reasoning` to change the preference. The cached `context ~input/window` display is a planning estimate, not recorded token usage or an exact tokenizer count; see [context and compaction](sessions.md#context-and-compaction).
+Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use Shift-Tab to cycle the current route's supported levels, or `/reasoning` to choose one directly. The cached `context ~input/window` display is a planning estimate, not recorded token usage or an exact tokenizer count; see [context and compaction](sessions.md#context-and-compaction).
 
 ## Steering and queued input
 

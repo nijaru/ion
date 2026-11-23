@@ -34,6 +34,7 @@ actions! {
     Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Stop work or cancel a clipboard read; clear an idle draft, or press twice on an empty composer to exit";
     Suspend, "app.suspend", GLOBAL, ["ctrl+z"], "Suspend the terminal job";
     Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward or exit an empty composer";
+    CycleReasoning, "app.thinking.cycle", COMPOSER, ["shift+tab"], "Cycle this route's generation effort";
     Model, "app.model.select", COMPOSER, ["ctrl+l"], "Choose Session model";
     ModelForward, "app.model.cycleForward", COMPOSER, ["ctrl+p"], "Cycle to next locally ready model";
     ModelBackward, "app.model.cycleBackward", COMPOSER, ["ctrl+shift+p"], "Cycle to previous locally ready model";
@@ -95,6 +96,7 @@ impl KeyAction {
                 | Self::FollowUp
                 | Self::External
                 | Self::ExpandTools
+                | Self::CycleReasoning
                 | Self::QuestionCollapse
                 | Self::Scope
                 | Self::NamedSessions

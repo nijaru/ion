@@ -2088,6 +2088,13 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
             })
             .collect();
         assert_eq!(actual, expected);
+        for (index, level) in expected.iter().enumerate() {
+            let next = (expected.len() > 1).then(|| expected[(index + 1) % expected.len()]);
+            assert_eq!(
+                configuration::next_reasoning(fixture.control.agent(), *level).unwrap(),
+                next
+            );
+        }
         assert!(
             matches!(picker.items[picker.selected].value, PickerValue::Reasoning(value) if value == current)
         );
