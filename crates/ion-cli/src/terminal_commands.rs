@@ -54,7 +54,7 @@ commands! {
     Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID]", "Choose task progress, result, stop or remove"),
     Attach => (Work, "attach", "[ID]", "Attach to a running PTY program; Ctrl-] detaches"),
     Tools => (Work, "tools", "[output TEXT|unavailable]", "Find recorded tool evidence or list unavailable registrations"),
-    Tool => (Work, "tool", "[N|all|N save INDEX PATH]", "Inspect tool evidence or save a retained artifact"),
+    Tool => (Work, "tool", "[N|all|N or shell:ENTRY save INDEX PATH]", "Inspect tool evidence or save a retained artifact"),
     Settings => (Editor, "settings", "[compact|expanded|thinking show|thinking hide|completion POLICY]", "Change presentation or receiving completion policy"),
     Tui => (Editor, "tui", "[inline|fullscreen]", "Choose the transcript surface"),
     File => (Editor, "file", "PATH", "Attach a UTF-8 text file or image to the next input"),

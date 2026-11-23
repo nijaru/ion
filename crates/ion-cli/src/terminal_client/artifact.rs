@@ -7,7 +7,9 @@ use std::{
 
 use anyhow::{Context, Result};
 use ion_app::SessionControl;
-use ion_core::{ArtifactRef, Session, SessionError, TranscriptActivity};
+use ion_core::{
+    ArtifactRef, Session, SessionError, TranscriptActivity, TranscriptItem, UserShellOutcome,
+};
 
 use super::{EditorDraft, Frontend, command::file_path, session_io::ReadOutput, tools};
 
@@ -42,6 +44,28 @@ fn artifact_at<'a>(
         .with_context(|| format!("Tool {number} has no recorded artifact {index}"))
 }
 
+fn shell_artifact_at<'a>(
+    items: impl IntoIterator<Item = &'a TranscriptItem>,
+    entry: &str,
+    index: usize,
+) -> Result<&'a ArtifactRef> {
+    let entry = entry
+        .parse::<std::num::NonZeroU64>()
+        .context("shell entry numbers are one-based (for example shell:3)")?;
+    let shell = items
+        .into_iter()
+        .find_map(|item| match item {
+            TranscriptItem::UserShell(shell) if shell.source.entry == entry.get() => Some(shell),
+            _ => None,
+        })
+        .with_context(|| format!("Shell entry {entry} not found; use /tool all"))?;
+    match &shell.outcome {
+        Some(UserShellOutcome::Observed { output }) => output.artifacts.get(index),
+        Some(UserShellOutcome::Unknown) | None => None,
+    }
+    .with_context(|| format!("Shell entry {entry} has no recorded artifact {index}"))
+}
+
 pub(super) fn start_save(
     runtime: &SessionControl<EditorDraft>,
     ui: &mut Frontend,
@@ -54,9 +78,15 @@ pub(super) fn start_save(
     );
     let (index, path) = tail
         .split_once(char::is_whitespace)
-        .context("use /tool N save INDEX PATH")?;
+        .context("use /tool N save INDEX PATH or /tool shell:ENTRY save INDEX PATH")?;
     let index = index.parse().context("artifact index must be zero-based")?;
-    let artifact = artifact_at(tools(ui.conversation.items()), number, index)?.clone();
+    let items = ui.conversation.items();
+    let artifact = if let Some(entry) = number.strip_prefix("shell:") {
+        shell_artifact_at(items, entry, index)?
+    } else {
+        artifact_at(tools(items), number, index)?
+    }
+    .clone();
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let path = file_path(path.trim_start(), &ui.cwd, home.as_deref())?;
     let io = runtime.session().io()?;

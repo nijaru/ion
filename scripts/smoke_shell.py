@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
 import sqlite3
@@ -265,16 +266,25 @@ for mode in ("inline", "fullscreen"):
                     step = 3
                 if step == 3 and b"FAILED_STDERR" in segment and b"exit 7" in segment:
                     segment_start = len(output)
-                    os.write(master, b"!!printf '%s%s\\n' PRIVATE_ OUTPUT\r")
+                    os.write(master, b"!!printf '%s%s\\n\\377' PRIVATE_ OUTPUT\r")
                     step = 4
                 if step == 4 and b"PRIVATE_OUTPUT" in segment and b"not shared with model" in segment:
                     segment_start = len(output)
                     os.write(master, b"/tool all\r")
                     step = 5
-                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"User shell" in segment:
-                    os.write(master, b"\x0f")
-                    step = 6
+                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment:
+                    match = re.search(rb"/tool (shell:[0-9]+) save INDEX PATH", segment)
+                    if match:
+                        shell_selector = match.group(1)
+                        segment_start = len(output)
+                        os.write(master, b"\x0f")
+                        step = 6
                 if step == 6 and b"Details closed" in segment:
+                    segment_start = len(output)
+                    os.write(master, b"/tool " + shell_selector + b" save 0 private.bin\r")
+                    step = "saving"
+                if step == "saving" and b"Artifact saved to" in segment:
+                    assert (workspace / "private.bin").read_bytes() == b"PRIVATE_OUTPUT\n\xff"
                     os.write(master, b"/export session.txt\r")
                     step = 7
                 if step == 7 and b"Transcript saved to" in output:
@@ -292,7 +302,7 @@ for mode in ("inline", "fullscreen"):
             assert len(entries) == 3, entries
             assert entries[0][1]["output"]["value"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0][0]["exclude_from_context"]
             assert entries[1][1]["output"]["value"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["value"]["exit_code"] == 7 and entries[1][1]["output"]["is_error"]
-            assert entries[2][1]["output"]["value"]["stdout"] == "PRIVATE_OUTPUT\n" and entries[2][0]["exclude_from_context"]
+            assert entries[2][1]["output"]["value"]["stdout"] == "PRIVATE_OUTPUT\n\ufffd" and entries[2][0]["exclude_from_context"]
             transcript = (workspace / "session.txt").read_text()
             assert "VISIBLE_OUTPUT" in transcript and "PRIVATE_OUTPUT" in transcript and "not shared with model" in transcript
             assert (workspace / "session.txt").stat().st_mode & 0o777 == 0o600

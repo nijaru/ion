@@ -231,6 +231,12 @@ impl Document {
                             );
                             self.json(key, JsonField::Result, &output.value, width);
                             self.artifacts(key, &output.artifacts, width);
+                            self.artifact_help(
+                                key,
+                                &format!("shell:{}", shell.source.entry),
+                                &output.artifacts,
+                                width,
+                            );
                             for (index, image) in output.images.iter().enumerate() {
                                 self.generated(
                                     key,
@@ -273,22 +279,8 @@ impl Document {
         if let Some(subject) = &activity.activity.subject {
             self.raw(key, Field::Subject, "Subject: ", subject, width);
         }
-        if let Some(result) = &activity.result
-            && !result.artifacts.is_empty()
-        {
-            let captures = result
-                .artifacts
-                .iter()
-                .enumerate()
-                .map(|(index, capture)| format!("{index}: {}", capture.label))
-                .collect::<Vec<_>>()
-                .join(", ");
-            self.generated(
-                key,
-                Field::ArtifactHelp,
-                &format!("Captures {captures} · /tool {number} save INDEX PATH"),
-                width,
-            );
+        if let Some(result) = &activity.result {
+            self.artifact_help(key, number, &result.artifacts, width);
         }
         let patch = crate::edit_diff::recorded(activity);
         let command = activity.result.as_ref().and_then(|result| {
@@ -436,6 +428,30 @@ impl Document {
             &mut vec![PathPart::Key(name.to_owned())],
             &format!("{}: ", serde_json::to_string(name).expect("JSON key")),
             false,
+            width,
+        );
+    }
+
+    fn artifact_help(
+        &mut self,
+        key: EntryKey,
+        selector: &str,
+        artifacts: &[ion_core::ArtifactRef],
+        width: usize,
+    ) {
+        if artifacts.is_empty() {
+            return;
+        }
+        let captures = artifacts
+            .iter()
+            .enumerate()
+            .map(|(index, capture)| format!("{index}: {}", capture.label))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.generated(
+            key,
+            Field::ArtifactHelp,
+            &format!("Captures {captures} · /tool {selector} save INDEX PATH"),
             width,
         );
     }

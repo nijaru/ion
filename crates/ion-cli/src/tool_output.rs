@@ -375,7 +375,7 @@ pub(crate) fn render_command(
                 rows,
                 prefix,
                 &format!(
-                    "… {stream} decoding loss · UTF-8 replacement used (possibly at tail boundary)"
+                    "… {stream} decoding loss · UTF-8 replacement used (possibly at a preview boundary)"
                 ),
                 width,
                 detail.theme,

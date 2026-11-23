@@ -58,7 +58,7 @@ Command rows distinguish nonzero exits from signal termination. Recorded wait fa
 
 Use `/tools output TEXT` to find a top-level operation by a case-sensitive snippet from its recorded result, such as a test diagnostic. It searches text in the saved result, not the contents of raw captures. Open a match to inspect it without rerunning the command.
 
-To save a tool capture, use the tool number and capture index shown in the inspector: `/tool 3 save 0 build.log` (or `/tool 3.1 save 0 build.log` for a child call). This writes the exact retained bytes without rerunning the tool or overwriting a file. Ion reports when the capture is incomplete.
+To save a tool capture, use the tool number and capture index shown in the inspector: `/tool 3 save 0 build.log` (or `/tool 3.1 save 0 build.log` for a child call). This writes the exact retained bytes without rerunning the tool or overwriting a file. Ion reports when the capture is incomplete. For a manual `!` or `!!` command, open `/tool all` and use the shell selector shown next to its captures: `/tool shell:ENTRY save INDEX PATH`.
 
 ## External editors and terminal state
 
