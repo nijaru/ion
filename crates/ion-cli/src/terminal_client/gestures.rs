@@ -4,6 +4,7 @@ use ion_terminal::KeyEvent;
 use tokio::time::{Duration, Instant};
 
 const WINDOW: Duration = Duration::from_secs(3);
+const EXIT_WINDOW: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Target {
@@ -150,11 +151,16 @@ impl Gestures {
             Target::Clipboard(_) => "Cancel paste?",
             Target::Question(_) => "Cancel question?",
         };
+        let window = if target == Target::Exit {
+            EXIT_WINDOW
+        } else {
+            WINDOW
+        };
         self.pending = Some(Pending {
             target,
             prompt: format!("{action} {key} again"),
             key,
-            deadline: now + WINDOW,
+            deadline: now + window,
             consumed: false,
         });
         false
@@ -262,15 +268,15 @@ mod tests {
                 assert!(!gestures.confirm(target.clone(), repeat, now));
                 assert!(gestures.prompt().is_none());
                 assert!(!gestures.confirm(target.clone(), press, now));
-                for second in 0..3 {
+                for millis in [0, 100, 200] {
                     assert!(!gestures.confirm(
                         target.clone(),
                         repeat,
-                        now + Duration::from_secs(second)
+                        now + Duration::from_millis(millis)
                     ));
                     assert!(gestures.prompt().is_some());
                 }
-                assert!(gestures.confirm(target.clone(), press, now + Duration::from_secs(2)));
+                assert!(gestures.confirm(target.clone(), press, now + Duration::from_millis(300)));
                 assert!(!gestures.confirm(target.clone(), repeat, now + Duration::from_secs(4)));
                 assert!(gestures.prompt().is_none());
             }

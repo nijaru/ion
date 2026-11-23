@@ -1085,15 +1085,13 @@ mod tests {
     }
 
     #[test]
-    fn confirmed_clear_is_undoable_and_not_a_kill() {
+    fn clear_is_undoable_and_not_a_kill() {
         let mut ui = Frontend::default();
         ui.insert("unsent 🦀");
         assert!(matches!(
             ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None, None),
             super::super::Action::None
         ));
-        assert_eq!(ui.editor.draft, "unsent 🦀");
-        ui.key(key(KeyCode::Char('c'), Modifiers::CONTROL), None, None);
         assert_eq!(ui.editor.draft, "");
         assert!(ui.editor.recovery.kills.entries.is_empty());
         assert!(composer_key(

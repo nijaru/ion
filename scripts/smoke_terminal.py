@@ -254,7 +254,7 @@ def exercise_file_discovery():
                     wait(lambda: b"Read @data.txt selected" in output)
                     if not busy:
                         output.clear()
-                        os.write(master, b"\x03\x03")  # Confirm clearing the draft.
+                        os.write(master, b"\x03")  # Clear the idle draft.
                         wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                     else:
                         output.clear()
@@ -282,7 +282,7 @@ def exercise_file_discovery():
                         output.clear()
                         # Stop stays latched after settlement. A harmless editor
                         # key resets the guard before a separate clear intent.
-                        os.write(master, b"\x01\x03\x03")
+                        os.write(master, b"\x01\x03")
                         wait(lambda: cursor.position[1] == 3 and "›".encode() in output)
                 os.write(master, b"\x04\x04")
                 end = time.monotonic() + 5

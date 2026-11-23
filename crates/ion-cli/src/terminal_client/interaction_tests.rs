@@ -119,16 +119,10 @@ async fn withdrawing_all_preserves_each_caret_attachment_owner_and_current_compo
 }
 
 #[test]
-fn interrupt_requires_confirmation_and_does_not_escalate_after_clear() {
+fn one_interrupt_clears_without_escalating_to_exit() {
     let mut ui = Frontend::default();
     ui.insert("unsent α\n🦀");
     let interrupt = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
-    assert!(matches!(ui.key(interrupt, None, None), Action::None));
-    assert_eq!(
-        ui.editor.draft, "unsent α\n🦀",
-        "first press only arms clear"
-    );
-    assert!(visible_status(&ui, None).unwrap().contains("Clear draft?"));
     assert!(matches!(ui.key(interrupt, None, None), Action::None));
     assert!(ui.editor.draft.is_empty());
     for _ in 0..3 {
@@ -155,11 +149,13 @@ fn clear_restores_rich_draft_cursor_and_survives_an_undo_baseline_change() {
             text: "literal α\r\n".into(),
         }));
     let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    let interrupt = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
     let undo = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL);
     let redo = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL | Modifiers::ALT);
     ui.key(escape, None, None);
     assert_eq!(ui.editor.attachments.len(), 2);
-    ui.key(escape, None, None);
+    assert_eq!(ui.editor.draft, "α\n🦀 end");
+    ui.key(interrupt, None, None);
     assert!(ui.editor.draft.is_empty() && ui.editor.attachments.is_empty());
     ui.key(undo, None, None);
     assert_eq!(
@@ -197,26 +193,31 @@ fn clear_restores_rich_draft_cursor_and_survives_an_undo_baseline_change() {
 }
 
 #[test]
-fn stale_clear_and_different_bound_shortcuts_never_confirm_each_other() {
+fn shortcut_presses_from_different_bindings_cannot_combine_to_exit() {
     let mut ui = Frontend {
         keys: KeyBindings::parse(br#"{"app.interrupt":["ctrl+q","ctrl+c"]}"#).unwrap(),
         ..Frontend::default()
     };
-    ui.insert("old draft");
     let q = KeyEvent::new(KeyCode::Char('q'), Modifiers::CONTROL);
     let c = KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL);
-    ui.key(q, None, None);
-    assert_eq!(ui.gestures.prompt(), Some("Clear draft? Ctrl-Q again"));
-    ui.key(c, None, None);
-    assert_eq!(ui.editor.draft, "old draft");
-    assert_eq!(ui.gestures.prompt(), Some("Clear draft? Ctrl-C again"));
-    // History refresh can replace a baseline without a keyboard event or a
-    // Frontend wrapper. The editor's identity must still reject the old arm.
+    assert!(matches!(ui.key(q, None, None), Action::None));
+    assert_eq!(ui.gestures.prompt(), Some("Exit Ion? Ctrl-Q again"));
+    assert!(matches!(ui.key(c, None, None), Action::None));
+    assert_eq!(ui.gestures.prompt(), Some("Exit Ion? Ctrl-C again"));
+    assert!(matches!(ui.key(c, None, None), Action::Quit));
+}
+
+#[test]
+fn idle_escape_clears_only_an_unsent_shell_command() {
+    let mut ui = Frontend::default();
+    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    ui.insert("unsent text");
+    ui.key(escape, None, None);
+    assert_eq!(ui.editor.draft, "unsent text");
     ui.editor
-        .restore_editor(EditorDraft::at_end("new draft".into()));
-    ui.key(c, None, None);
-    assert_eq!(ui.editor.draft, "new draft");
-    assert!(ui.gestures.prompt().is_none());
+        .restore_editor(EditorDraft::at_end("  !!sleep 9".into()));
+    ui.key(escape, None, None);
+    assert!(ui.editor.draft.is_empty());
 }
 
 #[tokio::test]
@@ -255,21 +256,20 @@ async fn escape_dismisses_local_surfaces_before_stopping_work() {
 }
 
 #[test]
-fn exit_is_guarded_but_forward_delete_and_confirmation_dismissal_are_not() {
+fn ctrl_d_exits_empty_composer_but_not_on_repeat_or_with_attachments() {
     let exit = KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL);
-    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
     let mut ui = Frontend::default();
-    assert!(matches!(ui.key(exit, None, None), Action::None));
-    assert!(
-        visible_status(&ui, None)
-            .unwrap()
-            .contains("Exit Ion? Ctrl-D again")
-    );
-    assert!(matches!(ui.key(escape, None, None), Action::None));
-    assert!(
-        ui.gestures.prompt().is_none(),
-        "Esc dismisses another key's confirmation"
-    );
+    assert!(matches!(
+        ui.key(
+            KeyEvent {
+                repeat: true,
+                ..exit
+            },
+            None,
+            None
+        ),
+        Action::None
+    ));
     ui.insert("α🦀");
     ui.editor.cursor = 0;
     ui.key(exit, None, None);
@@ -278,10 +278,8 @@ fn exit_is_guarded_but_forward_delete_and_confirmation_dismissal_are_not() {
     assert!(ui.editor.draft.is_empty());
     ui.attach(AttachmentSource::ImageFile("image-only.png".into()));
     assert!(matches!(ui.key(exit, None, None), Action::None));
-    assert!(matches!(ui.key(exit, None, None), Action::None));
     assert_eq!(ui.editor.attachments.len(), 1);
     ui.editor.take_attachments();
-    assert!(matches!(ui.key(exit, None, None), Action::None));
     assert!(matches!(ui.key(exit, None, None), Action::Quit));
 }
 

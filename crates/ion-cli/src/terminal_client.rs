@@ -1173,44 +1173,34 @@ impl Frontend {
             return Action::None;
         }
         let action = match input {
-            Some(KeyAction::Interrupt | KeyAction::Cancel) => {
-                let empty = self.editor.draft.is_empty() && self.editor.attachments.is_empty();
-                if empty && input == Some(KeyAction::Cancel) {
-                    return Action::None;
-                }
-                let target = if empty {
-                    gestures::Target::Exit
-                } else {
-                    gestures::Target::Clear(self.editor.baseline)
-                };
-                if !self
-                    .gestures
-                    .confirm(target, key, tokio::time::Instant::now())
-                {
-                    return Action::None;
-                }
-                if empty {
-                    Action::Quit
-                } else {
+            Some(KeyAction::Interrupt | KeyAction::Cancel)
+                if input == Some(KeyAction::Interrupt)
+                    || self.editor.draft.trim_start().starts_with('!') =>
+            {
+                let now = tokio::time::Instant::now();
+                if self.editor.draft.is_empty() && self.editor.attachments.is_empty() {
+                    if self.gestures.confirm(gestures::Target::Exit, key, now) {
+                        return Action::Quit;
+                    }
+                } else if self.gestures.activate(
+                    gestures::Target::Clear(self.editor.baseline),
+                    key,
+                    now,
+                ) {
                     self.editor.clear_draft();
                     self.status = format!(
                         "Draft cleared · {} restores text and attachments",
                         self.keys.hint(KeyAction::Undo)
                     );
-                    Action::None
                 }
+                Action::None
             }
             Some(KeyAction::Exit)
-                if self.editor.draft.is_empty() && self.editor.attachments.is_empty() =>
+                if !key.repeat
+                    && self.editor.draft.is_empty()
+                    && self.editor.attachments.is_empty() =>
             {
-                if self
-                    .gestures
-                    .confirm(gestures::Target::Exit, key, tokio::time::Instant::now())
-                {
-                    Action::Quit
-                } else {
-                    Action::None
-                }
+                Action::Quit
             }
             Some(KeyAction::Tab) => {
                 if !self.editor.completion.wants_files() {

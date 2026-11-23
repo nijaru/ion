@@ -28,9 +28,9 @@ Each confirmed withdrawal returns its original draft, caret and attachments sepa
 
 Press Esc once to stop foreground work from the composer. If a picker or completion menu is open, Esc dismisses it first. Ctrl-C also requests a stop, including when a question is unanswered. A stop request does not promise immediate termination: Ion still joins started work and cleanup, and effects are not undone. Transferred background work has a [separate lifetime](delegation.md#lifetime-and-recovery). While [attached to a program](processes.md#attach-and-detach), Ctrl-C is forwarded to that program instead. External editors handle their own Ctrl-C.
 
-A pending clipboard read in the composer is cancelled first. Clearing an idle draft or cancelling a question with Esc still requires a second press of the same key.
+A pending clipboard read in the composer is cancelled first. At idle, Ctrl-C clears the draft; Ctrl-_ restores its text and attachments. Esc clears an unsent shell command, not an ordinary draft. Cancelling a question with Esc still takes two presses.
 
-To leave chat, enter `/quit`. With an empty composer and no attachments, press Ctrl-D twice (or Ctrl-C twice while idle). The first press shows the confirmation; it does not close the Session.
+To leave chat, enter `/quit` or press Ctrl-D once with an empty composer and no attachments. Two quick Ctrl-C presses also exit if the composer was already empty; clearing a draft cannot turn into an exit.
 
 Reported key repeats cannot submit input, accept completions or choices, toggle tool output or question/picker controls, open an external editor, or start another cancellation. Ordinary held-key editing and navigation still repeat. Legacy terminals cannot distinguish auto-repeat from another press.
 

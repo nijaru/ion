@@ -246,15 +246,13 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                     assert not requests, "composer recovery admitted before Enter"
                     # CSI-u Backspace must edit, not insert a control byte.
                     os.write(master, b"firstX\x1b[127u\x1b[13;2usecondX\x1b[8u")
-                    # A held Ctrl-C cannot confirm clearing the draft, and its
-                    # release must not type the report's parameters. Ordinary
-                    # held navigation and deletion still edit at the source caret.
+                    # One Ctrl-C clears. Held repeats cannot turn that clear
+                    # into an exit, and the release must not type into the draft.
+                    # Ordinary held navigation/deletion still edit at the caret.
                     os.write(master, b"\x1b[99;5:1u\x1b[99;5:2u\x1b[99;5:2u\x1b[99;5:3u")
-                    until(lambda: b"Clear draft?" in output)
-                    checkpoint = len(output)
-                    os.write(master, b"\x1b[99;5:1u\x1b[99;5:3u")
-                    until(lambda: b"Draft cleared" in output[checkpoint:])
-                    os.write(master, b"\x1b[99;5:2u\x1b[99;5:3u\x1f")
+                    until(lambda: b"Draft cleared" in output)
+                    assert child.poll() is None
+                    os.write(master, b"\x1f")
                     os.write(master, b"\x1b[1;1:2DY\x1b[127;1:2u\x1b[1;1:2C")
                     drain(0.25)
                     assert not requests, "Shift-Enter admitted a Turn instead of a draft newline"
@@ -390,7 +388,7 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                     assert not terminal.alternate
                 # Visible answer text can precede Host settlement. Explicit
                 # quit joins either state; Ctrl-C could only request stop.
-                os.write(master, b"\x04\x04")
+                os.write(master, b"\x04")
                 until(lambda: child.poll() is not None)
                 drain()
                 assert child.wait() == 0, output[-2000:]

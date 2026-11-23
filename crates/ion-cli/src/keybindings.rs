@@ -31,9 +31,9 @@ macro_rules! actions {
 }
 
 actions! {
-    Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Stop work once; cancel foreground clipboard read; confirm draft clear or exit";
+    Interrupt, "app.interrupt", GLOBAL, ["ctrl+c"], "Stop work or cancel a clipboard read; clear an idle draft, or press twice on an empty composer to exit";
     Suspend, "app.suspend", GLOBAL, ["ctrl+z"], "Suspend the terminal job";
-    Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward; press twice to exit an empty composer";
+    Exit, "app.exit", EDIT, ["ctrl+d"], "Delete forward or exit an empty composer";
     Model, "app.model.select", COMPOSER, ["ctrl+l"], "Choose Session model";
     ModelForward, "app.model.cycleForward", COMPOSER, ["ctrl+p"], "Cycle to next locally ready model";
     ModelBackward, "app.model.cycleBackward", COMPOSER, ["ctrl+shift+p"], "Cycle to previous locally ready model";
@@ -49,7 +49,7 @@ actions! {
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";
     Confirm, "tui.select.confirm", COMPLETION | PICKER | CHOICE, ["enter"], "Accept the visible selected item";
-    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss local UI, or stop work from the composer; press twice to clear an idle draft or cancel a question";
+    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss local UI, stop work or clear an unsent shell command; press twice to cancel a question";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     SelectPageUp, "tui.select.pageUp", PICKER, ["pageup"], "Move up one visible picker page";
