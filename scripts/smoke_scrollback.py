@@ -189,6 +189,27 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.1)
         check_history()
 
+        # A marker from folded stdout is not present in the exec arguments.
+        # Search saved results, then open the original numbered evidence.
+        tmux("send-keys", "-t", "ion", "-l", "/tools output COMMAND_OUTPUT_ONCE")
+        tmux("send-keys", "-t", "ion", "Enter")
+        while "Recorded tool output · 1 match(es)" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"recorded output search did not find the command:\n{pane}"
+            time.sleep(0.02)
+        assert "3 · exec" in pane, pane
+        tmux("send-keys", "-t", "ion", "Enter")
+        while '"stdout": (text)\n    FIRST_HIDDEN' not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"saved stdout did not open:\n{pane}"
+            time.sleep(0.02)
+        assert "COMMAND_OUTPUT_ONCE" in pane, pane
+        tmux("send-keys", "-t", "ion", "Escape")
+        while "Recorded tool output · 1 match(es)" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"closing evidence lost the output search:\n{pane}"
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "Escape")
+        assert len(requests) == 2, "searching saved results made a model request"
+        check_history()
+
         # Tool expansion in a shared pane must keep the inline draft and
         # leave previously published history untouched.
         viewport_draft = "EXPANDED_UNSENT café 界 👩‍💻"

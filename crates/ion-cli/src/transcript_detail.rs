@@ -477,6 +477,18 @@ pub fn tools<'a>(
     })
 }
 
+/// Search the recorded text, not JSON escapes, property names, or raw captures.
+pub(crate) fn result_contains(value: &serde_json::Value, query: &str) -> bool {
+    match value {
+        serde_json::Value::String(text) => text.contains(query),
+        serde_json::Value::Array(items) => items.iter().any(|value| result_contains(value, query)),
+        serde_json::Value::Object(fields) => {
+            fields.values().any(|value| result_contains(value, query))
+        }
+        _ => false,
+    }
+}
+
 fn format_activity(number: &str, activity: &TranscriptActivity) -> String {
     let mut text = String::new();
     append_activity(&mut text, number, activity);

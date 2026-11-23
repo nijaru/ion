@@ -56,6 +56,8 @@ Mutation rows show recorded line additions/removals for that operation, not repo
 
 Command rows distinguish nonzero exits from signal termination. Recorded wait failures show the unavailable status and retained cause. Use `/tools` to search recorded operations by tool name, subject, or number. Enter opens the selected result at its heading. Closing it returns to the same search and selection. Command output and edit diffs come before capture metadata and raw arguments. Left and Right move to neighboring results. Use `/tool` for the latest operation, `/tool N` for a specific result, or `/tool all` to open the raw conversation inspector at the latest entries. `/tools unavailable` lists tools that could not be registered. For captures beyond the displayed result, see [retained evidence](sessions.md#retained-evidence-and-captures).
 
+Use `/tools output TEXT` to find a top-level operation by a case-sensitive snippet from its recorded result, such as a test diagnostic. It searches text in the saved result, not the contents of raw captures. Open a match to inspect it without rerunning the command.
+
 To save a tool capture, use the tool number and capture index shown in the inspector: `/tool 3 save 0 build.log` (or `/tool 3.1 save 0 build.log` for a child call). This writes the exact retained bytes without rerunning the tool or overwriting a file. Ion reports when the capture is incomplete.
 
 ## External editors and terminal state

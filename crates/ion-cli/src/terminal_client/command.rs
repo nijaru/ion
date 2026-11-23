@@ -616,9 +616,17 @@ pub(super) fn handle_builtin(
                 lines.join("\n")
             });
         }
-        Builtin::Tools if args.is_empty() => ui.open_tool_picker(),
+        Builtin::Tools if args.is_empty() => ui.open_tool_picker(None),
+        Builtin::Tools if args.starts_with("output ") => {
+            let query = args["output ".len()..].trim();
+            anyhow::ensure!(!query.is_empty(), "use /tools output TEXT");
+            ui.open_tool_picker(Some(query));
+        }
         Builtin::Tools => {
-            anyhow::ensure!(args == "unavailable", "use /tools [unavailable]");
+            anyhow::ensure!(
+                args == "unavailable",
+                "use /tools [output TEXT|unavailable]"
+            );
             let catalog = runtime.agent().tool_catalog();
             let mut notices = catalog.unavailable().peekable();
             if notices.peek().is_none() {

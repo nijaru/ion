@@ -1335,9 +1335,16 @@ impl Frontend {
         Action::None
     }
 
-    fn open_tool_picker(&mut self) {
+    fn open_tool_picker(&mut self, output_query: Option<&str>) {
         let mut items: Vec<_> = tools(self.conversation.items())
             .enumerate()
+            .filter(|(_, activity)| {
+                output_query.is_none_or(|query| {
+                    activity.result.as_ref().is_some_and(|result| {
+                        crate::transcript_detail::result_contains(&result.value, query)
+                    })
+                })
+            })
             .map(|(index, activity)| {
                 let mut label = format!(
                     "{} · {} · {}",
@@ -1357,12 +1364,21 @@ impl Frontend {
             })
             .collect();
         if items.is_empty() {
-            self.status = "No tools in this session".into();
+            self.status = if output_query.is_some() {
+                "No matching recorded tool output (raw captures not searched)"
+            } else {
+                "No tools in this session"
+            }
+            .into();
             return;
         }
         items.reverse();
         self.pickers.open(Picker {
-            title: "Recorded tools",
+            title: if output_query.is_some() {
+                "Recorded tool output"
+            } else {
+                "Recorded tools"
+            },
             query: String::new(),
             selected: 0,
             items,
