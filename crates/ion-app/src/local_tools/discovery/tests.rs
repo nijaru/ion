@@ -458,6 +458,33 @@ fn grep_distinguishes_regex_literal_case_utf8_and_glob_filters() {
 }
 
 #[test]
+fn grep_context_keeps_neighbors_in_order_without_counting_them_as_matches() {
+    let root = root("grep-context");
+    let prefix = "\u{feff}header\r\n  ";
+    let source = format!("{prefix}needle\r\nneedle\r\n{}", "é".repeat(1024));
+    fs::write(root.join("context.txt"), source).unwrap();
+    let value = run(grep, &root, json!({"pattern": "needle", "context": 1}));
+    let items = grep_matches(&value);
+    assert_eq!(items.len(), 2, "{value}");
+    assert_eq!(items[0]["byte_offset"], prefix.len());
+    assert_eq!(
+        items[0]["context"],
+        json!([
+            {"line": 1, "text": "header", "truncated": false},
+            {"line": 3, "text": "needle", "truncated": false}
+        ])
+    );
+    assert_eq!(items[1]["context"][0]["text"], "  needle");
+    let tail = &items[1]["context"][1];
+    assert_eq!(tail["line"], 4);
+    assert_eq!(tail["truncated"], true);
+    assert!(tail["text"].as_str().unwrap().len() <= 1024);
+    let value = run(grep, &root, json!({"pattern": "needle", "context": 0}));
+    assert!(grep_matches(&value)[0].get("context").is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn grep_long_lines_return_a_bounded_snippet_and_exact_byte_location() {
     let root = root("grep-long");
     let prefix = "x".repeat(5000);

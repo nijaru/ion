@@ -1342,7 +1342,10 @@ fn recorded_discovery_and_external_output_is_visible_including_nested_calls() {
         (
             ToolActivityKind::Search,
             json!({"matches":[
-            {"path":"src/a.rs", "line":7, "text":"FIRST_MATCH", "truncated":false},
+            {"path":"src/a.rs", "line":7, "text":"FIRST_MATCH", "truncated":false, "context":[
+                {"line":6, "text":"BEFORE_MATCH", "truncated":false},
+                {"line":8, "text":"AFTER_MATCH", "truncated":false}
+            ]},
             {"path":"src/b.rs", "line":8, "text":"SECOND_MATCH", "truncated":false},
             {"path":"src/c.rs", "line":9, "text":"THIRD_MATCH", "truncated":false},
             {"path":"src/d.rs", "line":10, "text":"LAST_MATCH", "truncated":true}
@@ -1431,6 +1434,12 @@ fn recorded_discovery_and_external_output_is_visible_including_nested_calls() {
                     show_first,
                     "{kind:?}, nested={nested}, {mode:?}: {rendered}"
                 );
+                if first == "FIRST_MATCH" && show_first {
+                    let before = rendered.find("src/a.rs-6- BEFORE_MATCH").unwrap();
+                    let matched = rendered.find("src/a.rs:7: FIRST_MATCH").unwrap();
+                    let after = rendered.find("src/a.rs-8- AFTER_MATCH").unwrap();
+                    assert!(before < matched && matched < after, "{rendered}");
+                }
                 if discovery && mode == OutputDetail::Compact {
                     assert!(
                         ["4 entries", "4 files", "4 matches"]
@@ -1498,7 +1507,7 @@ fn folded_discovery_keeps_capture_limitations_outside_the_body_preview() {
         "LIMITED_SCAN",
         "PERMISSION_DENIED",
         "incomplete observation",
-        "recorded match text is truncated",
+        "recorded search text is truncated",
     ] {
         assert_eq!(rendered.matches(text).count(), 2, "{rendered}");
     }

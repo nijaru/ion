@@ -87,7 +87,24 @@ pub(super) fn render(
         let mut shortened = false;
         for (index, item) in items.iter().enumerate().take(limit) {
             if let Some(line) = collection_item(collection, item, index) {
-                shortened |= push_line(rows, line, prefix, width, detail, true);
+                if let Collection::Matches = collection
+                    && let Some(context) = item["context"].as_array()
+                {
+                    let split = context.partition_point(|neighbor| {
+                        neighbor["line"].as_u64() < item["line"].as_u64()
+                    });
+                    let neighbors = |range: std::ops::Range<usize>| {
+                        range.filter_map(|i| match_line(item, &context[i], index, Some(i)))
+                    };
+                    for row in neighbors(0..split)
+                        .chain([line])
+                        .chain(neighbors(split..context.len()))
+                    {
+                        shortened |= push_line(rows, row, prefix, width, detail, true);
+                    }
+                } else {
+                    shortened |= push_line(rows, line, prefix, width, detail, true);
+                }
             } else {
                 // A presentation kind is not a payload schema for custom tools.
                 note(
@@ -136,13 +153,43 @@ fn collection_item(collection: Collection, value: &Value, index: usize) -> Optio
             }
             Some(line)
         }
-        Collection::Matches => {
-            let mut line = literal(value["path"].as_str()?, Field::Path);
-            line.append(&decoration(format!(":{}: ", value["line"].as_u64()?)));
-            line.append(&literal(value["text"].as_str()?, Field::Content));
-            Some(line)
-        }
+        Collection::Matches => match_line(value, value, index, None),
     }
+}
+
+fn match_line(
+    item: &Value,
+    row: &Value,
+    index: usize,
+    context: Option<usize>,
+) -> Option<MappedLine> {
+    let number = row["line"].as_u64()?;
+    let separator = if context.is_some() { '-' } else { ':' };
+    let mut line = if context.is_some() {
+        MappedLine::generated(Line::from(item["path"].as_str()?.to_owned()), index)
+    } else {
+        MappedLine::component(
+            Line::from(item["path"].as_str()?.to_owned()),
+            Component::Item {
+                index,
+                field: Field::Path,
+            },
+            0,
+        )
+    };
+    line.append(&MappedLine::generated(
+        Line::from(format!("{separator}{number}{separator} ")),
+        index,
+    ));
+    line.append(&MappedLine::component(
+        Line::from(row["text"].as_str()?.to_owned()),
+        Component::Item {
+            index,
+            field: context.map_or(Field::Content, Field::Context),
+        },
+        0,
+    ));
+    Some(line)
 }
 
 fn push_line(
@@ -356,14 +403,19 @@ pub(super) fn notices(
         }
     }
     if value["matches"].as_array().is_some_and(|items| {
-        items
-            .iter()
-            .any(|item| item["truncated"].as_bool() == Some(true))
+        items.iter().any(|item| {
+            item["truncated"].as_bool() == Some(true)
+                || item["context"].as_array().is_some_and(|context| {
+                    context
+                        .iter()
+                        .any(|line| line["truncated"].as_bool() == Some(true))
+                })
+        })
     }) {
         note(
             rows,
             prefix,
-            "… recorded match text is truncated; expansion cannot recover omitted text",
+            "… recorded search text is truncated; expansion cannot recover omitted text",
             width,
             detail.theme,
         );

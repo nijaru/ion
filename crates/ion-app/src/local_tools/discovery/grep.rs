@@ -1,5 +1,5 @@
 //! Bounded recursive content search with line-oriented snippets.
-use std::{io::Read, path::Path};
+use std::{collections::VecDeque, io::Read, path::Path};
 
 use ion_core::ToolOutput;
 use regex::{Regex, RegexBuilder};
@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::super::{error, success};
 use super::{
-    DEFAULT_GREP_LIMIT, GrepInput, Limits, MAX_GREP_LIMIT,
+    DEFAULT_GREP_LIMIT, GrepInput, Limits, MAX_GREP_CONTEXT, MAX_GREP_LIMIT,
     glob::GlobFilter,
     output::{OutputBudget, preview},
     parse, pattern,
@@ -40,6 +40,12 @@ pub(super) fn run(
         Ok(limit) => limit,
         Err(message) => return error(message),
     };
+    let context = input.context.unwrap_or(0);
+    if context > MAX_GREP_CONTEXT {
+        return error(format!(
+            "grep context must be between 0 and {MAX_GREP_CONTEXT}"
+        ));
+    }
     let raw_path = input.path.as_deref().unwrap_or(".");
     let root = match Root::resolve(cwd, raw_path, RootKind::FileOrDirectory, stop) {
         Ok(root) => root,
@@ -87,7 +93,7 @@ pub(super) fn run(
             }
         };
         if !relative.is_empty() && glob.as_ref().is_none_or(|glob| glob.matches(&relative)) {
-            match search.scan_file(&root.path, &relative) {
+            match search.scan_file(&root.path, &relative, context) {
                 Ok(()) => {}
                 Err(GrepStop::Cancelled) => return error("cancelled during repository discovery"),
                 Err(GrepStop::Io) => {}
@@ -159,7 +165,7 @@ pub(super) fn run(
                 search.total_byte_limited = true;
                 break;
             }
-            match search.scan_file(entry.path(), &relative) {
+            match search.scan_file(entry.path(), &relative, context) {
                 Ok(()) => {}
                 Err(GrepStop::Cancelled) => return error("cancelled during repository discovery"),
                 Err(GrepStop::Io) => continue,
@@ -226,7 +232,7 @@ impl<'a> Search<'a> {
         }
     }
 
-    fn scan_file(&mut self, path: &Path, relative: &str) -> Result<(), GrepStop> {
+    fn scan_file(&mut self, path: &Path, relative: &str, context: usize) -> Result<(), GrepStop> {
         check_stop(self.stop).map_err(|_| GrepStop::Cancelled)?;
         let file = crate::file_io::open_regular(path).map_err(|failure| {
             self.scan.skips.filesystem_errors += 1;
@@ -281,32 +287,59 @@ impl<'a> Search<'a> {
         // relative to the original bytes so a subsequent read can use them.
         let source = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut line_start = text.len() - source.len();
-        for segment in source.split_inclusive('\n') {
+        let mut segments = source.split_inclusive('\n');
+        let mut before = VecDeque::with_capacity(context);
+        while let Some(segment) = segments.next() {
             if self.stop.is_cancelled() {
                 return Err(GrepStop::Cancelled);
             }
             line_number += 1;
             let raw_len = segment.len();
-            let line = segment.strip_suffix('\n').unwrap_or(segment);
-            let line = line.strip_suffix('\r').unwrap_or(line);
+            let line = line_text(segment);
             if let Some(found_match) = self.regex.find(line) {
                 if self.found >= self.limit {
                     self.result_limited = true;
                     return Ok(());
                 }
                 let (text, truncated) = snippet(line, found_match.start(), found_match.end());
-                let item = json!({
+                let mut item = json!({
                     "path": relative,
                     "line": line_number,
                     "byte_offset": line_start.saturating_add(found_match.start()),
                     "text": text,
                     "truncated": truncated,
                 });
+                if context > 0 {
+                    let first = line_number - before.len() as u64;
+                    let neighbors: Vec<_> = before
+                        .iter()
+                        .copied()
+                        .zip(first..line_number)
+                        .chain(
+                            segments
+                                .clone()
+                                .take(context)
+                                .map(line_text)
+                                .zip(line_number + 1..),
+                        )
+                        .map(|(line, number)| {
+                            let (text, truncated) = snippet(line, 0, 0);
+                            json!({"line": number, "text": text, "truncated": truncated})
+                        })
+                        .collect();
+                    item["context"] = Value::Array(neighbors);
+                }
                 self.found += 1;
                 if !self.output.push(item) {
                     self.output_limited = true;
                     return Ok(());
                 }
+            }
+            if context > 0 {
+                if before.len() == context {
+                    before.pop_front();
+                }
+                before.push_back(line);
             }
             line_start = line_start.saturating_add(raw_len);
         }
@@ -445,6 +478,11 @@ fn read_file<R: Read>(
         bytes.extend_from_slice(&buffer[..count]);
     }
     Ok(bytes)
+}
+
+fn line_text(segment: &str) -> &str {
+    let line = segment.strip_suffix('\n').unwrap_or(segment);
+    line.strip_suffix('\r').unwrap_or(line)
 }
 
 /// Visible, UTF-8-safe line context of at most 1024 bytes around the first match.

@@ -233,13 +233,16 @@ class Handler(BaseHTTPRequestHandler):
             last = body["messages"][-1]
             assert last["role"] == "tool" and last["tool_call_id"] == "discovery-find", last
             assert "data.txt" in last["content"] and "nested/note.txt" in last["content"], last
-            calls = [("discovery-grep", "grep", {"path": ".", "pattern": "needle"})]
+            grep = next(tool["function"] for tool in body["tools"] if tool["function"]["name"] == "grep")
+            assert "context" in grep["parameters"]["properties"], grep
+            calls = [("discovery-grep", "grep", {"path": ".", "pattern": "needle", "context": 1})]
         elif step == 3:
             last = body["messages"][-1]
             assert last["role"] == "tool" and last["tool_call_id"] == "discovery-grep", last
             assert "nested/note.txt" in last["content"] and "needle here" in last["content"], last
             result = json.loads(last["content"])["result"]
             match = result["matches"][0]
+            assert match["context"] == [{"line": 1, "text": "note without", "truncated": False}], match
             path = Path(result["root"])
             if result["root_kind"] == "directory":
                 path /= match["path"]

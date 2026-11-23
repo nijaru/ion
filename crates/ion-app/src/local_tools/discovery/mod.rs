@@ -22,6 +22,7 @@ const DEFAULT_FIND_LIMIT: usize = 1000;
 const MAX_FIND_LIMIT: usize = 1000;
 const DEFAULT_GREP_LIMIT: usize = 100;
 const MAX_GREP_LIMIT: usize = 1000;
+pub(super) const MAX_GREP_CONTEXT: usize = 10;
 
 /// Per-call bounds. Production uses `Default`; tests lower individual bounds to
 /// exercise truncation without creating tens of thousands of files.
@@ -78,6 +79,8 @@ struct GrepInput {
     ignore_case: Option<bool>,
     #[serde(default, deserialize_with = "present_input")]
     literal: Option<bool>,
+    #[serde(default, deserialize_with = "present_input")]
+    context: Option<usize>,
     #[serde(default, deserialize_with = "present_input")]
     limit: Option<usize>,
 }
