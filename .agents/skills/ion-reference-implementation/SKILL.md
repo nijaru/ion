@@ -5,16 +5,14 @@ description: Use when changing or reviewing a runtime, Session, tool, or termina
 
 # Ion behavior changes
 
-- Before choosing a user-facing design, compare the actual Ion and Pi workflow.
-  Follow Pi unless a concrete user need, correctness constraint, or measured
-  cost makes another approach better. Prefer fx for terminal appearance; use
-  Codex, Pi Durable, fx, and other strong references wherever they help. Inspect
-  the relevant source and behavior, not just feature lists.
-- Start with the proven interaction. Explain material departures before
-  building them: what breaks if Ion follows the reference, and what evidence
-  supports the alternative? Different internals, a constructed edge case, or
-  passing tests alone do not justify a new user-facing workflow. Simplify
-  existing departures that lack a reason instead of adding controls to them.
+- Start from a real Ion workflow or correctness problem, not a parity gap.
+  Keep familiar Pi interactions where they reduce friction. Choose behavior and
+  implementation that fit Ion's Rust architecture, durable guarantees, and
+  actual use; no reference implementation is a spec.
+- Treat Pi Durable as a strong reference, especially for runtime and recovery
+  semantics. Draw on Pi, fx, Codex, and others where their actual source and
+  behavior inform the choice. Prefer fx's terminal presentation where it fits.
+  Explain the trade-off when a change affects an established workflow.
 - Trace the affected clients to the owner of the fact or effect. A queued
   input is not a durable acceptance, provisional output is not history, and a
   stop request is not joined completion. Preserve these distinctions through

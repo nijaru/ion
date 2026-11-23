@@ -5,9 +5,8 @@
   replay.
 - This is unreleased v0. Replace obsolete APIs with their callers rather than
   adding compatibility shims.
-- Ion should replace Pi in daily use. Follow Pi's workflows by default and
-  prefer fx's terminal presentation. Use the
-  [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md)
+- Build the Rust agent that makes daily coding work well, not a Pi clone.
+  Use the [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md)
   before changing or reviewing behavior.
 
 ## Checks
