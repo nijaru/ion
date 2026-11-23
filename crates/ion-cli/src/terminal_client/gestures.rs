@@ -4,12 +4,13 @@ use ion_terminal::KeyEvent;
 use tokio::time::{Duration, Instant};
 
 const WINDOW: Duration = Duration::from_secs(3);
-const EXIT_WINDOW: Duration = Duration::from_millis(500);
+const QUICK_TAP_WINDOW: Duration = Duration::from_millis(500);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Target {
     Stop(StopTarget),
     Clear(u64),
+    Tree(u64),
     Exit,
     Clipboard(tokio::task::Id),
     Question(QuestionRequestId),
@@ -88,7 +89,9 @@ impl Gestures {
             .pending
             .as_ref()
             .is_some_and(|pending| match pending.target {
-                Target::Clear(expected) => !composer || expected != baseline,
+                Target::Clear(expected) | Target::Tree(expected) => {
+                    !composer || expected != baseline
+                }
                 Target::Exit => !composer,
                 Target::Question(expected) => Some(expected) != question,
                 Target::Clipboard(expected) => Some(expected) != clipboard,
@@ -102,7 +105,7 @@ impl Gestures {
     pub(super) fn prompt(&self) -> Option<&str> {
         self.pending
             .as_ref()
-            .filter(|pending| !pending.consumed)
+            .filter(|pending| !pending.consumed && !pending.prompt.is_empty())
             .map(|pending| pending.prompt.as_str())
     }
 
@@ -138,6 +141,10 @@ impl Gestures {
                 return false;
             }
             let confirmed = pending.target == target;
+            if confirmed && matches!(target, Target::Tree(_)) {
+                self.reset();
+                return true;
+            }
             // Suppress follow-on taps, but don't let those taps extend suppression.
             pending.consumed = true;
             pending.deadline = now + WINDOW;
@@ -148,17 +155,22 @@ impl Gestures {
             Target::Stop(_) => "Stop work?",
             Target::Clear(_) => "Clear draft?",
             Target::Exit => "Exit Ion?",
+            Target::Tree(_) => "",
             Target::Clipboard(_) => "Cancel paste?",
             Target::Question(_) => "Cancel question?",
         };
-        let window = if target == Target::Exit {
-            EXIT_WINDOW
+        let window = if matches!(target, Target::Exit | Target::Tree(_)) {
+            QUICK_TAP_WINDOW
         } else {
             WINDOW
         };
         self.pending = Some(Pending {
             target,
-            prompt: format!("{action} {key} again"),
+            prompt: if action.is_empty() {
+                String::new()
+            } else {
+                format!("{action} {key} again")
+            },
             key,
             deadline: now + window,
             consumed: false,
@@ -311,6 +323,17 @@ mod tests {
             assert!(gestures.prompt().is_some());
             assert!(gestures.confirm(Target::Exit, press, now + WINDOW));
         }
+    }
+
+    #[test]
+    fn tree_taps_expire_and_cannot_cross_draft_baselines() {
+        let now = Instant::now();
+        let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+        let mut gestures = Gestures::default();
+        assert!(!gestures.confirm(Target::Tree(0), escape, now));
+        assert!(!gestures.confirm(Target::Tree(0), escape, now + QUICK_TAP_WINDOW));
+        gestures.reconcile_local(1, true, None, None);
+        assert!(!gestures.confirm(Target::Tree(1), escape, now + QUICK_TAP_WINDOW));
     }
 
     #[test]

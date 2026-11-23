@@ -220,6 +220,28 @@ fn idle_escape_clears_only_an_unsent_shell_command() {
     assert!(ui.editor.draft.is_empty());
 }
 
+#[test]
+fn idle_double_escape_dispatches_tree_but_repeats_and_attachments_do_not() {
+    let mut ui = Frontend::default();
+    let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    let repeat = KeyEvent {
+        repeat: true,
+        ..escape
+    };
+    assert!(matches!(ui.key(escape, None, None), Action::None));
+    assert!(ui.gestures.prompt().is_none());
+    assert!(matches!(ui.key(repeat, None, None), Action::None));
+    assert!(matches!(
+        ui.key(escape, None, None),
+        Action::Command(CommandInput::Shortcut(Builtin::Tree))
+    ));
+    ui.attach(AttachmentSource::ImageFile("unsent.png".into()));
+    for _ in 0..2 {
+        assert!(matches!(ui.key(escape, None, None), Action::None));
+    }
+    assert_eq!(ui.editor.attachments.len(), 1);
+}
+
 #[tokio::test]
 async fn escape_dismisses_local_surfaces_before_stopping_work() {
     let mut fixture = tests::Fixture::new();

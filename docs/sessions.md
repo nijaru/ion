@@ -41,7 +41,7 @@ Accepted messages save prepared text/image snapshots, so reopening does not rere
 
 ## Explore context without copying
 
-`/tree` shows recorded message boundaries, including alternative paths. Its initial **Current context · keep selection** choice closes the browser without changing context, rebinding the runtime or writing a navigation fact.
+Press Esc twice on an empty, idle composer or enter `/tree` to see recorded message boundaries, including alternative paths. Its initial **Current context · keep selection** choice closes the browser without changing context, rebinding the runtime or writing a navigation fact.
 
 Search readable message text or metadata such as `entry 17`. `[path]` marks messages on the selected ancestry; `[alternative]` marks messages outside it. Selecting a message changes model context in the **same Session**:
 

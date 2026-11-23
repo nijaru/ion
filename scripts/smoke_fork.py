@@ -409,7 +409,8 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                         if b"\x1b[6n" in data:
                             os.write(master, b"\x1b[2;1R")
                     if stage == "startup" and b"\xe2\x80\xba" in output and program_ready(output):
-                        os.write(master, b"/tree\r")
+                        # Two distinct Escape reports, not the ambiguous bare ESC ESC byte pair.
+                        os.write(master, b"\x1b[27u\x1b[27u")
                         output.clear()
                         stage = "tree"
                     elif stage == "tree" and b"Explore context" in output and program_ready(output):

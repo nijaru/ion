@@ -49,7 +49,7 @@ actions! {
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";
     Confirm, "tui.select.confirm", COMPLETION | PICKER | CHOICE, ["enter"], "Accept the visible selected item";
-    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss local UI, stop work or clear an unsent shell command; press twice to cancel a question";
+    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss local UI or stop work; press twice on an empty composer to open the Session tree";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     SelectPageUp, "tui.select.pageUp", PICKER, ["pageup"], "Move up one visible picker page";
@@ -90,6 +90,7 @@ impl KeyAction {
         matches!(
             self,
             Self::Confirm
+                | Self::Cancel
                 | Self::Submit
                 | Self::FollowUp
                 | Self::External

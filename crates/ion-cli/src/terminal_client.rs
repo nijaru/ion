@@ -1195,6 +1195,19 @@ impl Frontend {
                 }
                 Action::None
             }
+            Some(KeyAction::Cancel)
+                if self.editor.draft.trim().is_empty() && self.editor.attachments.is_empty() =>
+            {
+                if self.gestures.confirm(
+                    gestures::Target::Tree(self.editor.baseline),
+                    key,
+                    tokio::time::Instant::now(),
+                ) {
+                    Action::Command(CommandInput::Shortcut(Builtin::Tree))
+                } else {
+                    Action::None
+                }
+            }
             Some(KeyAction::Exit)
                 if !key.repeat
                     && self.editor.draft.is_empty()
