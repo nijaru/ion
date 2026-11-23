@@ -5,9 +5,16 @@ description: Use when changing or reviewing a runtime, Session, tool, or termina
 
 # Ion behavior changes
 
-- Name the workflow and the behavior that must change. If an upstream
-  comparison informs the decision, inspect the relevant callers and cite the
-  revision. Choose sources for the question; do not chase parity.
+- Before choosing a user-facing design, compare the actual Ion and Pi workflow.
+  Follow Pi unless a concrete user need, correctness constraint, or measured
+  cost makes another approach better. Prefer fx for terminal appearance; use
+  Codex, Pi Durable, fx, and other strong references wherever they help. Inspect
+  the relevant source and behavior, not just feature lists.
+- Start with the proven interaction. Explain material departures before
+  building them: what breaks if Ion follows the reference, and what evidence
+  supports the alternative? Different internals, a constructed edge case, or
+  passing tests alone do not justify a new user-facing workflow. Simplify
+  existing departures that lack a reason instead of adding controls to them.
 - Trace the affected clients to the owner of the fact or effect. A queued
   input is not a durable acceptance, provisional output is not history, and a
   stop request is not joined completion. Preserve these distinctions through

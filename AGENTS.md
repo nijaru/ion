@@ -5,8 +5,10 @@
   replay.
 - This is unreleased v0. Replace obsolete APIs with their callers rather than
   adding compatibility shims.
-- Use the [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md)
-  for changes to shared runtime, Session, tool, or terminal contracts.
+- Ion should replace Pi in daily use. Follow Pi's workflows by default and
+  prefer fx's terminal presentation. Use the
+  [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md)
+  before changing or reviewing behavior.
 
 ## Checks
 
