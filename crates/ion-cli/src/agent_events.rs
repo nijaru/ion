@@ -44,6 +44,15 @@ pub(super) fn event_record(event: &AgentEvent) -> Value {
         } => {
             json!({"type":"provider_retry","attempt":attempt,"max_retries":max_retries,"delay_ms":delay_ms})
         }
+        AgentEvent::ToolOutputProgress {
+            occurrence,
+            preview,
+        } => json!({
+            "type": "tool_output_progress",
+            "occurrence": occurrence,
+            "stdout": String::from_utf8_lossy(preview.bytes(ion_core::OutputStream::Stdout)),
+            "stderr": String::from_utf8_lossy(preview.bytes(ion_core::OutputStream::Stderr)),
+        }),
         AgentEvent::ToolStarted {
             call_id,
             name,
@@ -182,6 +191,7 @@ pub(super) fn diagnostic(event: &AgentEvent) -> Option<String> {
         | AgentEvent::ModelOutputObserved
         | AgentEvent::TextDelta { .. }
         | AgentEvent::ThinkingDelta { .. }
+        | AgentEvent::ToolOutputProgress { .. }
         | AgentEvent::AssistantCommitted { .. }
         | AgentEvent::SteeringCommitted { .. }
         | AgentEvent::ChildToolStarted { .. }

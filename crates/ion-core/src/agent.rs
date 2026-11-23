@@ -680,6 +680,11 @@ pub enum AgentEvent {
         arguments: Value,
         activity: ToolActivity,
     },
+    /// Bounded live output; never part of Session or model context.
+    ToolOutputProgress {
+        occurrence: crate::ToolOccurrence,
+        preview: crate::ToolOutputPreview,
+    },
     /// Published after the typed settlement is durable, including operation closure.
     ToolFinished {
         call_id: String,

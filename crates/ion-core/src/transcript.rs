@@ -772,6 +772,7 @@ impl LiveTranscript {
                 assert_eq!(activity.state, ActivityState::Queued);
                 activity.state = ActivityState::Running;
             }
+            AgentEvent::ToolOutputProgress { .. } => {}
             AgentEvent::ToolFinished {
                 call_id, outcome, ..
             } => {

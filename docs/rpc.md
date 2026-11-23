@@ -27,6 +27,8 @@ Paths are literal and relative to the Session directory; RPC does not expand `~`
 
 JSONL `text_delta` and `thinking_delta` events carry a zero-based `block` index. Text and thinking have independent block numbering within each response. Append deltas by channel and block, not to one shared string; updates can interleave. `assistant_committed` replaces provisional content, including text not streamed earlier. `response_restarted` discards provisional content. Block indices are not durable Session coordinates.
 
+A `tool_output_progress` event contains bounded, lossy UTF-8 stdout and stderr previews for a direct tool call, not deltas or a settled result. Replace the previous preview for the same occurrence rather than appending it.
+
 The event projection is defined in [`agent_events.rs`](../crates/ion-cli/src/agent_events.rs). Progress is not a durable acceptance receipt or proof that a tool effect succeeded. Read committed outcomes and reconcile interruptions before retrying work.
 
 ## Backpressure and shutdown

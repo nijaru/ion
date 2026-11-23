@@ -89,41 +89,29 @@ impl ActiveOperation {
     }
 }
 
-#[derive(Default)]
-pub(super) struct ShellPreview {
-    stdout: Vec<u8>,
-    stderr: Vec<u8>,
-}
-
-impl ShellPreview {
-    fn append(&mut self, stream: ion_app::ShellStream, chunk: &[u8]) {
-        const PREVIEW_BYTES: usize = 4096;
-        let bytes = match stream {
-            ion_app::ShellStream::Stdout => &mut self.stdout,
-            ion_app::ShellStream::Stderr => &mut self.stderr,
-        };
-        let chunk = &chunk[chunk.len().saturating_sub(PREVIEW_BYTES)..];
-        let excess = (bytes.len() + chunk.len()).saturating_sub(PREVIEW_BYTES);
-        bytes.drain(..excess);
-        bytes.extend_from_slice(chunk);
-    }
-
-    pub(super) fn rows(&self, width: usize, budget: usize) -> Vec<String> {
-        let mut rows = Vec::new();
-        for (stream, bytes) in [("stdout", &self.stdout), ("stderr", &self.stderr)] {
-            if !bytes.is_empty() {
-                let text = String::from_utf8_lossy(bytes);
-                // Layout sanitizes terminal controls; captured bytes remain untouched.
-                crate::display_text::push_wrapped(
-                    &mut rows,
-                    &format!("{stream} · {}", text.trim_end_matches('\n')),
-                    width,
-                );
-            }
+pub(super) fn preview_rows(
+    preview: &ion_core::ToolOutputPreview,
+    width: usize,
+    budget: usize,
+) -> Vec<String> {
+    let mut rows = Vec::new();
+    for stream in [
+        ion_core::OutputStream::Stdout,
+        ion_core::OutputStream::Stderr,
+    ] {
+        let bytes = preview.bytes(stream);
+        if !bytes.is_empty() {
+            let text = String::from_utf8_lossy(bytes);
+            // Layout sanitizes terminal controls; captured bytes remain untouched.
+            crate::display_text::push_wrapped(
+                &mut rows,
+                &format!("{} · {}", stream.label(), text.trim_end_matches('\n')),
+                width,
+            );
         }
-        rows.drain(..rows.len().saturating_sub(budget));
-        rows
     }
+    rows.drain(..rows.len().saturating_sub(budget));
+    rows
 }
 
 pub(super) struct RetryProgress {
@@ -201,6 +189,18 @@ pub(super) fn apply(
             ui.status.clear();
         }
         ControlUpdate::Activity(Observation::Event { operation, event }) => {
+            match event.as_ref() {
+                AgentEvent::ToolOutputProgress { preview, .. } => {
+                    if control.current_operation() == Some(operation) {
+                        ui.command_preview = preview.clone();
+                    }
+                    return Ok(None);
+                }
+                AgentEvent::ToolFinished { .. } => {
+                    ui.command_preview = ion_core::ToolOutputPreview::default()
+                }
+                _ => {}
+            }
             if let AgentEvent::ProviderRetry {
                 attempt,
                 max_retries,
@@ -261,12 +261,12 @@ pub(super) fn apply(
             bytes,
         }) => {
             if control.current_operation() == Some(operation) {
-                ui.shell_preview.append(stream, &bytes);
+                ui.command_preview.append(stream, &bytes);
             }
         }
         ControlUpdate::Activity(Observation::Gap { .. }) => {
             ui.retry_progress = None;
-            ui.shell_preview = ShellPreview::default();
+            ui.command_preview = ion_core::ToolOutputPreview::default();
             // Drop the whole partial projection. Host may resume observations
             // at a committed boundary, but LiveTranscript's tool/child indexes
             // require an uninterrupted Turn. Stay on committed facts until the
@@ -335,7 +335,7 @@ pub(super) fn apply(
             ui.note(format!("Input source quarantined as recovery {id}; inspect with /recovery {id}. Not restored or replayed."));
         }
         ControlUpdate::Settled(mut settlement) => {
-            ui.shell_preview = ShellPreview::default();
+            ui.command_preview = ion_core::ToolOutputPreview::default();
             ui.retry_progress = None;
             let observed_success = matches!(&settlement.outcome, OperationOutcome::Turn(Ok(_)))
                 && ui.conversation.live_for(settlement.operation);

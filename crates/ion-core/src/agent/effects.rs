@@ -78,7 +78,9 @@ impl OrderedBatch {
                 None,
                 self.plan.reasoning(),
             );
+            let (progress, preview) = tokio::sync::watch::channel(Default::default());
             let invocation = invocation
+                .with_output_progress(progress)
                 .with_model_messages(&self.plan.request().messages)
                 .with_artifact_sink(session.artifact_sink());
             let tool = Box::pin(async {
@@ -122,7 +124,9 @@ impl OrderedBatch {
                     )
                     .await
                     .map(ToolExecution::output),
-                    ToolDispatch::Execution(execution) => Ok(execution.await),
+                    ToolDispatch::Execution(execution) => {
+                        Ok(observe_execution(execution, preview, occurrence, observe).await)
+                    }
                     ToolDispatch::Rejected(reason) => Ok(ToolExecution::NotDispatched { reason }),
                 }
             });
@@ -170,5 +174,37 @@ impl OrderedBatch {
             });
         }
         Ok(())
+    }
+}
+
+// Deliver the first preview promptly and coalesce subsequent updates. Always
+// continue polling execution while throttled, and prefer the final result.
+async fn observe_execution(
+    execution: impl Future<Output = ToolExecution>,
+    mut progress: tokio::sync::watch::Receiver<crate::ToolOutputPreview>,
+    occurrence: crate::ToolOccurrence,
+    observe: &mut (impl FnMut(AgentEvent) + Send),
+) -> ToolExecution {
+    tokio::pin!(execution);
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut execution => return result,
+            change = progress.changed() => {
+                if change.is_err() {
+                    return execution.await;
+                }
+            }
+        }
+        let preview = progress.borrow_and_update().clone();
+        observe(AgentEvent::ToolOutputProgress {
+            occurrence,
+            preview,
+        });
+        tokio::select! {
+            biased;
+            result = &mut execution => return result,
+            () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+        }
     }
 }

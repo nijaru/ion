@@ -47,6 +47,60 @@ impl ToolOrigin {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum OutputStream {
+    Stdout,
+    Stderr,
+}
+
+impl OutputStream {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+/// Self-contained, bounded tails. Skipping a publication never splices bytes
+/// from different points in a stream together.
+#[derive(Clone, Debug, Default)]
+pub struct ToolOutputPreview {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl ToolOutputPreview {
+    pub fn bytes(&self, stream: OutputStream) -> &[u8] {
+        match stream {
+            OutputStream::Stdout => &self.stdout,
+            OutputStream::Stderr => &self.stderr,
+        }
+    }
+
+    pub fn append(&mut self, stream: OutputStream, chunk: &[u8]) {
+        const PREVIEW_BYTES: usize = 4096;
+        let bytes = match stream {
+            OutputStream::Stdout => &mut self.stdout,
+            OutputStream::Stderr => &mut self.stderr,
+        };
+        let chunk = &chunk[chunk.len().saturating_sub(PREVIEW_BYTES)..];
+        let excess = (bytes.len() + chunk.len()).saturating_sub(PREVIEW_BYTES);
+        bytes.drain(..excess);
+        bytes.extend_from_slice(chunk);
+    }
+}
+
+/// Best-effort presentation only. This never records or changes a result.
+#[derive(Clone)]
+pub struct ToolOutputProgress(tokio::sync::watch::Sender<ToolOutputPreview>);
+
+impl ToolOutputProgress {
+    pub fn append(&self, stream: OutputStream, bytes: &[u8]) {
+        self.0.send_modify(|preview| preview.append(stream, bytes));
+    }
+}
+
 /// One frozen route receives its original call, cancellation and optional Core
 /// provenance together. Only Core can associate admitted provenance with a call.
 /// Core does not pass this value to the Code Mode guest or add its provenance
@@ -74,6 +128,7 @@ pub struct ToolInvocation<'a> {
     delegation: Option<crate::delegation::AdmissionPort>,
     model_messages: &'a [Message],
     artifacts: Option<crate::ArtifactSink>,
+    progress: Option<ToolOutputProgress>,
 }
 
 impl<'a> ToolInvocation<'a> {
@@ -89,6 +144,7 @@ impl<'a> ToolInvocation<'a> {
             delegation: None,
             model_messages: &[],
             artifacts: None,
+            progress: None,
         }
     }
 
@@ -126,6 +182,18 @@ impl<'a> ToolInvocation<'a> {
             None => sink,
         });
         self
+    }
+
+    pub(crate) fn with_output_progress(
+        mut self,
+        sender: tokio::sync::watch::Sender<ToolOutputPreview>,
+    ) -> Self {
+        self.progress = Some(ToolOutputProgress(sender));
+        self
+    }
+
+    pub fn output_progress(&self) -> Option<ToolOutputProgress> {
+        self.progress.clone()
     }
 
     pub fn call(&self) -> &'a ToolCall {
@@ -198,6 +266,7 @@ impl<'a> ToolInvocation<'a> {
                 reasoning: Some(reasoning),
                 model_messages: &[],
                 artifacts: None,
+                progress: None,
                 origin: Some(ToolOrigin {
                     session,
                     turn,

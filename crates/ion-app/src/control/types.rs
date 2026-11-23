@@ -341,7 +341,7 @@ pub enum Observation {
     /// Provisional direct-shell bytes; independent of model Turn deltas.
     ShellOutput {
         operation: OperationId,
-        stream: crate::ShellStream,
+        stream: ion_core::OutputStream,
         bytes: Arc<[u8]>,
     },
     Gap {

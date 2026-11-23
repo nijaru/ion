@@ -373,11 +373,16 @@ impl Dock {
             rule.clone()
         };
         let body_rows = spare_rows - usize::from(top.is_some()) - usize::from(rule.is_some());
-        let preview = operation
-            .filter(|op| matches!(op.kind, super::activity::OperationKind::Shell))
-            .map_or_else(Vec::new, |_| {
-                ui.shell_preview.rows(width, body_rows.min(20))
-            });
+        let preview = if operation.is_some_and(|op| {
+            matches!(
+                op.kind,
+                super::activity::OperationKind::Shell | super::activity::OperationKind::Coding
+            )
+        }) {
+            super::activity::preview_rows(&ui.command_preview, width, body_rows.min(20))
+        } else {
+            Vec::new()
+        };
         let body_rows = body_rows - preview.len();
         let mut rows: Vec<_> = preview
             .into_iter()

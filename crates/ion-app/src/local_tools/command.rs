@@ -12,7 +12,8 @@ use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 use super::{ToolOutput, error};
-use crate::{ShellOutputObserver, ShellStream};
+use crate::ShellOutputObserver;
+use ion_core::OutputStream;
 
 /// Raw bytes retained per stream in the bounded preview.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -77,13 +78,13 @@ pub(super) async fn run(
     let stdout = OutputCapture::start(
         child.stdout.take().expect("piped"),
         artifacts.clone(),
-        ShellStream::Stdout,
+        OutputStream::Stdout,
         progress.clone(),
     );
     let stderr = OutputCapture::start(
         child.stderr.take().expect("piped"),
         artifacts,
-        ShellStream::Stderr,
+        OutputStream::Stderr,
         progress,
     );
     let mut cancelled = false;
@@ -373,7 +374,7 @@ impl OutputCapture {
     fn start(
         mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
         sink: Option<ion_core::ArtifactSink>,
-        stream: ShellStream,
+        stream: OutputStream,
         progress: Option<ShellOutputObserver>,
     ) -> Self {
         let label = stream.label();
@@ -710,7 +711,7 @@ mod tests {
                         eof: Some(eof_tx),
                     },
                     Some(owner.sink()),
-                    ShellStream::Stdout,
+                    OutputStream::Stdout,
                     None,
                 );
                 let stop = CancellationToken::new();
@@ -805,7 +806,7 @@ mod tests {
                     tail: std::io::Cursor::new(tail.to_vec()),
                 },
                 Some(owner.sink()),
-                ShellStream::Stdout,
+                OutputStream::Stdout,
                 None,
             )
             .finish(&CancellationToken::new(), false)
@@ -1070,7 +1071,7 @@ mod tests {
         };
         let output = tokio::time::timeout(
             Duration::from_secs(3),
-            OutputCapture::start(reader, None, ShellStream::Stdout, None)
+            OutputCapture::start(reader, None, OutputStream::Stdout, None)
                 .finish(&CancellationToken::new(), false),
         )
         .await
@@ -1110,7 +1111,7 @@ mod tests {
         };
         let output = tokio::time::timeout(
             Duration::from_secs(2),
-            OutputCapture::start(reader, None, ShellStream::Stdout, None).finish(&stop, false),
+            OutputCapture::start(reader, None, OutputStream::Stdout, None).finish(&stop, false),
         )
         .await
         .expect("post-exit capture ignored cancellation");
@@ -1135,7 +1136,7 @@ mod tests {
         stop.cancel();
         let output = tokio::time::timeout(
             Duration::from_millis(500),
-            OutputCapture::start(reader, None, ShellStream::Stdout, None).finish(&stop, true),
+            OutputCapture::start(reader, None, OutputStream::Stdout, None).finish(&stop, true),
         )
         .await;
         writer_task.abort();
@@ -1148,7 +1149,7 @@ mod tests {
     async fn stopped_capture_bounds_continuously_ready_output() {
         let captured = tokio::time::timeout(
             Duration::from_secs(2),
-            OutputCapture::start(tokio::io::repeat(b'x'), None, ShellStream::Stdout, None)
+            OutputCapture::start(tokio::io::repeat(b'x'), None, OutputStream::Stdout, None)
                 .finish(&CancellationToken::new(), true),
         )
         .await

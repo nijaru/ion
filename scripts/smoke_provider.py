@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
                 if count == 0:
                     calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; kill -TERM $$"})]
                     calls.extend(("write", {"path": f"mutation-{index}.txt", "content": "observed mutation\\n"}) for index in range(14))
-                    calls.append(("exec", {"command": "touch active.ready; exec sleep 5"}))
+                    calls.append(("exec", {"command": "touch active.ready; printf '%s%s\\n' LIVE_ TEST_PROGRESS; i=0; while ! test -e active.release && test \"$i\" -lt 100; do sleep 0.05; i=$((i+1)); done"}))
                     calls.extend(("read", {"path": f"mutation-{index}.txt"}) for index in range(2))
                     delta = {"tool_calls": [{"index": index, "id": f"salience-{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}} for index, (name, arguments) in enumerate(calls)]}
                     finish = "tool_calls"

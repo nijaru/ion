@@ -144,7 +144,7 @@ struct Frontend {
     spinner_frame: usize,
     spinner_visible: bool,
     retry_progress: Option<activity::RetryProgress>,
-    shell_preview: activity::ShellPreview,
+    command_preview: ion_core::ToolOutputPreview,
     theme_io: theme_io::ThemeIo,
     theme_preview_name: Option<String>,
     theme_picker: Option<theme_selection::ThemePicker>,

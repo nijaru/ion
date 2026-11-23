@@ -187,13 +187,18 @@ impl ToolExecutor for LocalExecutor {
                 return error("cancelled before tool start");
             }
             if matches!(self.operation, LocalOperation::Exec) {
+                let progress = invocation.output_progress().map(|report| {
+                    let observe: crate::ShellOutputObserver =
+                        Arc::new(move |stream, bytes| report.append(stream, bytes));
+                    observe
+                });
                 return command::run(
                     &self.tools.environment,
                     &self.tools.cwd,
                     &call.arguments,
                     stop,
                     invocation.artifact_sink().cloned(),
-                    None,
+                    progress,
                 )
                 .await;
             }

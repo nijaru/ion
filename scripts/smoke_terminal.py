@@ -838,6 +838,8 @@ def exercise_active_band():
                     for fact in [b"1 failed", b"1 running", b"2 queued", b"14 write", b"FAILURE_MARKER", b"Terminated by signal 15", b"Current activity", b"Running touch active.ready"]:
                         assert fact in output, ("active normal band hid known work", fact, output)
                     assert b"SALIENCE_DONE" not in output and b"\x1b[?1049h" not in output
+                    assert b"LIVE_TEST_PROGRESS" in output, "running command output did not reach the terminal"
+                    (work / "active.release").touch()
                     checked = True
                 if checked and b"SALIENCE_DONE" in output and not quit_sent:
                     # Provisional text can arrive before Core completion. Quit

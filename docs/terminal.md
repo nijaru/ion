@@ -48,7 +48,7 @@ Unsaved recovery sources and receipt fences are lost when the process exits. Sav
 
 ## Inspect tool output
 
-Manual `!` and `!!` commands show recent output while they run. When the command finishes, the saved result replaces the live preview.
+Manual `!` and `!!` commands and direct agent-run commands show recent output while they run. When the command finishes, the saved result replaces the live preview.
 
 Ctrl-O expands or collapses tool output without switching between inline and fullscreen. In a dedicated pane it also redraws earlier tool output in scrollback. In a shared shell pane it changes live and future output only. Folded tool rows point to `/tools`, and folded `!` shell output points to `/tool all`, so you can inspect earlier results without rewriting the terminal's scrollback.
 
