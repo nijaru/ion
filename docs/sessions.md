@@ -4,6 +4,8 @@ Ion saves conversations in SQLite. Reopening a Session restores history; it does
 
 ## Find and reopen
 
+When you leave a nonempty chat normally, Ion prints the command to reopen that exact Session, even from another directory.
+
 From a terminal:
 
 ```sh

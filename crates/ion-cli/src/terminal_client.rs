@@ -5,7 +5,11 @@ use ion_ai::{Message, Role};
 use ion_terminal::{KeyCode, Modifiers};
 #[cfg(test)]
 use std::fs;
-use std::{collections::HashSet, path::PathBuf};
+use std::{
+    collections::HashSet,
+    io::IsTerminal,
+    path::{Path, PathBuf},
+};
 
 use crate::display_text::{fit_line, push_wrapped};
 use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, KeyAction, KeyBindings};
@@ -545,7 +549,27 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             activity::combine_error(&mut outcome, error.into());
         }
     }
+    if outcome.is_ok()
+        && std::io::stdout().is_terminal()
+        && ui.conversation.items().next().is_some()
+        && let Some(command) = resume_command(runtime.session().path())
+    {
+        crate::print_stdout(format_args!("To resume: {command}"))?;
+    }
     outcome
+}
+
+fn resume_command(path: &Path) -> Option<String> {
+    // The absolute database path also identifies custom saves and can reopen
+    // from another directory. Never print misleading or control-bearing paths.
+    let path = path.to_str()?;
+    if path.chars().any(char::is_control) {
+        return None;
+    }
+    Some(format!(
+        "ion --session {} chat",
+        shlex::try_quote(path).ok()?
+    ))
 }
 
 // Shorten display labels only; selectors and current-Session matching use full IDs.

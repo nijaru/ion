@@ -621,6 +621,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 with sqlite3.connect(path) as connection:
                     return json.loads(connection.execute("SELECT header FROM session WHERE id=1").fetchone()[0])["id"]
             saved = next(path for path in (work / "ion").rglob("*.sqlite") if logical_id(path) == session_id)
+            resume = re.findall(rb"To resume: ([^\r\n]+)", plain_output)
+            assert len(resume) == 1, plain_output[-1000:]
+            assert shlex.split(resume[0].decode()) == ["ion", "--session", str(saved.resolve()), "chat"]
             renamed = saved.with_name("01234567890🦀.sqlite")
             saved.rename(renamed)
             unicode_listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
