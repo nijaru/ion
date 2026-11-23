@@ -278,6 +278,9 @@ fn modified(path: &Path) -> Result<SystemTime> {
     let database = fs::metadata(path)?.modified()?;
     let wal = path.with_extension("sqlite-wal");
     match fs::metadata(wal) {
+        // A passive open can create an empty WAL without writing any Session
+        // data. Its timestamp must not make old work appear recent.
+        Ok(metadata) if metadata.len() == 0 => Ok(database),
         Ok(metadata) => Ok(database.max(metadata.modified()?)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(database),
         Err(error) => Err(error).context("cannot inspect session activity"),
@@ -378,6 +381,32 @@ mod tests {
         fs::write(first.with_file_name("damaged.sqlite"), b"partial database").unwrap();
         assert_eq!(catalog.list().unwrap().len(), 1);
         assert_eq!(catalog.latest().unwrap(), listed[0].path);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_empty_wal_does_not_change_session_recency() {
+        use std::{fs::FileTimes, time::Duration};
+
+        let (root, catalog) = fixture();
+        let path = catalog.new_path().unwrap();
+        let database = fs::File::create(&path).unwrap();
+        database
+            .set_times(
+                FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1)),
+            )
+            .unwrap();
+        let database_time = database.metadata().unwrap().modified().unwrap();
+        let wal = path.with_extension("sqlite-wal");
+        fs::write(&wal, []).unwrap();
+        assert!(fs::metadata(&wal).unwrap().modified().unwrap() > database_time);
+        assert_eq!(modified(&path).unwrap(), database_time);
+
+        fs::write(&wal, b"nonempty WAL").unwrap();
+        assert_eq!(
+            modified(&path).unwrap(),
+            fs::metadata(&wal).unwrap().modified().unwrap()
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
