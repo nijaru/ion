@@ -5,9 +5,10 @@
   replay.
 - This is unreleased v0. Replace obsolete APIs with their callers rather than
   adding compatibility shims.
-- Use Pi as the default reference for Ion, not a parity target.
-  Use the [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md)
-  before changing or reviewing behavior.
+- Pi is the default reference, not a parity target. Judge each design choice
+  on what it does for Ion and how it fits Rust.
+- For changes to runtime, Session, tool, or terminal contracts, see the
+  [Ion implementation skill](.agents/skills/ion-reference-implementation/SKILL.md).
 
 ## Checks
 
