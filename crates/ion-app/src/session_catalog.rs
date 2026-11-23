@@ -457,7 +457,9 @@ mod tests {
                     excluded,
                     CancellationToken::new(),
                     move |command, stop, artifacts| async move {
-                        tools.run_user_shell(&command, stop, Some(artifacts)).await
+                        tools
+                            .run_user_shell(&command, stop, Some(artifacts), None)
+                            .await
                     },
                 )
                 .await

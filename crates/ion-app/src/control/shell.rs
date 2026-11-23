@@ -145,11 +145,24 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         })();
         match prepared {
             Ok((command, exclude_from_context, prepared)) => {
+                let output = self.shell_output.then(|| {
+                    let observations = self.observations.clone();
+                    let publish: crate::ShellOutputObserver = Arc::new(move |stream, bytes| {
+                        // The ring is lossy and bounded even for custom executors.
+                        let tail = &bytes[bytes.len().saturating_sub(8192)..];
+                        let _ = observations.send(Observation::ShellOutput {
+                            operation,
+                            stream,
+                            bytes: Arc::from(tail),
+                        });
+                    });
+                    publish
+                });
                 let work = self.setup.session.run_user_shell(
                     command,
                     exclude_from_context,
                     stop,
-                    move |_, stop, artifacts| prepared(stop, artifacts),
+                    move |_, stop, artifacts| prepared(stop, artifacts, output),
                 );
                 // Do not rearm or clear a stop requested during preparation.
                 self.active = Some(Active {

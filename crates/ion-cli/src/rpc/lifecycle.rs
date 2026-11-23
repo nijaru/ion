@@ -288,6 +288,7 @@ impl Control {
                     return Err(error);
                 }
             }
+            ControlUpdate::Activity(Observation::ShellOutput { .. }) => {}
             ControlUpdate::Activity(Observation::Gap { skipped }) => self.mark_gap(skipped),
             ControlUpdate::Activity(Observation::Event { event, .. }) => {
                 if self.suppress_activity {

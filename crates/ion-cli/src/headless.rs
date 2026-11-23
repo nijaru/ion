@@ -218,6 +218,7 @@ async fn foreground(
                         request_shutdown();
                     }
                 }
+                ControlUpdate::Activity(Observation::ShellOutput { .. }) => {},
                 ControlUpdate::Activity(Observation::Gap { skipped }) => {
                     omitted = omitted.saturating_add(skipped);
                     suppress_progress = true;

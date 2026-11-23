@@ -64,6 +64,7 @@ impl LocalTools {
         command: &str,
         stop: CancellationToken,
         artifacts: Option<ion_core::ArtifactSink>,
+        progress: Option<crate::ShellOutputObserver>,
     ) -> ToolOutput {
         command::run(
             &self.environment,
@@ -71,6 +72,7 @@ impl LocalTools {
             &json!({"command": command}),
             stop,
             artifacts,
+            progress,
         )
         .await
     }
@@ -80,8 +82,12 @@ impl crate::UserShell for LocalTools {
     fn prepare(&self, command: &str) -> anyhow::Result<crate::PreparedShell> {
         let tools = Self::with_environment(&self.cwd, self.environment.clone())?;
         let command = command.to_owned();
-        Ok(Box::new(move |stop, artifacts| {
-            Box::pin(async move { tools.run_user_shell(&command, stop, Some(artifacts)).await })
+        Ok(Box::new(move |stop, artifacts, progress| {
+            Box::pin(async move {
+                tools
+                    .run_user_shell(&command, stop, Some(artifacts), progress)
+                    .await
+            })
         }))
     }
 }
@@ -187,6 +193,7 @@ impl ToolExecutor for LocalExecutor {
                     &call.arguments,
                     stop,
                     invocation.artifact_sink().cloned(),
+                    None,
                 )
                 .await;
             }

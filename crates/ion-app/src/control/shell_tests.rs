@@ -51,7 +51,7 @@ impl crate::UserShell for NativeShell {
         assert!(!self.panic, "injected cold native preflight panic");
         let session = self.session.clone();
         let marker = self.marker.clone();
-        Ok(Box::new(move |_, _| {
+        Ok(Box::new(move |_, _, _| {
             Box::pin(async move {
                 let view = session.reader().unwrap().view().await.unwrap();
                 assert!(view.entries.iter().any(|entry| matches!(entry,

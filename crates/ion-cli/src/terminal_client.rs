@@ -144,6 +144,7 @@ struct Frontend {
     spinner_frame: usize,
     spinner_visible: bool,
     retry_progress: Option<activity::RetryProgress>,
+    shell_preview: activity::ShellPreview,
     theme_io: theme_io::ThemeIo,
     theme_preview_name: Option<String>,
     theme_picker: Option<theme_selection::ThemePicker>,
@@ -189,7 +190,7 @@ pub struct ChatInit {
 
 pub async fn chat(init: ChatInit) -> Result<()> {
     let footer = orientation::Footer::load(init.services.config_root())?;
-    let mut runtime = init.setup.into_control::<EditorDraft>();
+    let mut runtime = init.setup.into_control::<EditorDraft>().with_shell_output();
     let questions = runtime
         .attach_question_responder()
         .context("attach the terminal question consumer")?;

@@ -56,8 +56,31 @@ pub trait UserShell: Send + Sync {
     fn prepare(&self, command: &str) -> Result<PreparedShell>;
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ShellStream {
+    Stdout,
+    Stderr,
+}
+
+impl ShellStream {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Stdout => "stdout",
+            Self::Stderr => "stderr",
+        }
+    }
+}
+
+/// A nonblocking, provisional observation of bytes read from a direct shell.
+pub type ShellOutputObserver = Arc<dyn Fn(ShellStream, &[u8]) + Send + Sync>;
+
 pub type PreparedShell = Box<
-    dyn FnOnce(CancellationToken, ion_core::ArtifactSink) -> BoxFuture<'static, ToolOutput> + Send,
+    dyn FnOnce(
+            CancellationToken,
+            ion_core::ArtifactSink,
+            Option<ShellOutputObserver>,
+        ) -> BoxFuture<'static, ToolOutput>
+        + Send,
 >;
 
 #[derive(Clone)]

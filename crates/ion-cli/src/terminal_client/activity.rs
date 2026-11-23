@@ -89,6 +89,43 @@ impl ActiveOperation {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ShellPreview {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+impl ShellPreview {
+    fn append(&mut self, stream: ion_app::ShellStream, chunk: &[u8]) {
+        const PREVIEW_BYTES: usize = 4096;
+        let bytes = match stream {
+            ion_app::ShellStream::Stdout => &mut self.stdout,
+            ion_app::ShellStream::Stderr => &mut self.stderr,
+        };
+        let chunk = &chunk[chunk.len().saturating_sub(PREVIEW_BYTES)..];
+        let excess = (bytes.len() + chunk.len()).saturating_sub(PREVIEW_BYTES);
+        bytes.drain(..excess);
+        bytes.extend_from_slice(chunk);
+    }
+
+    pub(super) fn rows(&self, width: usize, budget: usize) -> Vec<String> {
+        let mut rows = Vec::new();
+        for (stream, bytes) in [("stdout", &self.stdout), ("stderr", &self.stderr)] {
+            if !bytes.is_empty() {
+                let text = String::from_utf8_lossy(bytes);
+                // Layout sanitizes terminal controls; captured bytes remain untouched.
+                crate::display_text::push_wrapped(
+                    &mut rows,
+                    &format!("{stream} · {}", text.trim_end_matches('\n')),
+                    width,
+                );
+            }
+        }
+        rows.drain(..rows.len().saturating_sub(budget));
+        rows
+    }
+}
+
 pub(super) struct RetryProgress {
     attempt: usize,
     max_retries: usize,
@@ -218,8 +255,18 @@ pub(super) fn apply(
                 ui.session_io.request_refresh();
             }
         }
+        ControlUpdate::Activity(Observation::ShellOutput {
+            operation,
+            stream,
+            bytes,
+        }) => {
+            if control.current_operation() == Some(operation) {
+                ui.shell_preview.append(stream, &bytes);
+            }
+        }
         ControlUpdate::Activity(Observation::Gap { .. }) => {
             ui.retry_progress = None;
+            ui.shell_preview = ShellPreview::default();
             // Drop the whole partial projection. Host may resume observations
             // at a committed boundary, but LiveTranscript's tool/child indexes
             // require an uninterrupted Turn. Stay on committed facts until the
@@ -288,6 +335,7 @@ pub(super) fn apply(
             ui.note(format!("Input source quarantined as recovery {id}; inspect with /recovery {id}. Not restored or replayed."));
         }
         ControlUpdate::Settled(mut settlement) => {
+            ui.shell_preview = ShellPreview::default();
             ui.retry_progress = None;
             let observed_success = matches!(&settlement.outcome, OperationOutcome::Turn(Ok(_)))
                 && ui.conversation.live_for(settlement.operation);

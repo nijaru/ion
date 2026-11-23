@@ -373,7 +373,16 @@ impl Dock {
             rule.clone()
         };
         let body_rows = spare_rows - usize::from(top.is_some()) - usize::from(rule.is_some());
-        let mut rows = Vec::new();
+        let preview = operation
+            .filter(|op| matches!(op.kind, super::activity::OperationKind::Shell))
+            .map_or_else(Vec::new, |_| {
+                ui.shell_preview.rows(width, body_rows.min(20))
+            });
+        let body_rows = body_rows - preview.len();
+        let mut rows: Vec<_> = preview
+            .into_iter()
+            .map(|text| Line::styled(text, ui.themes.theme().style(Role::Text)))
+            .collect();
         for text in status {
             rows.push(Line::styled(text, ui.themes.theme().style(Role::Secondary)));
         }

@@ -12,6 +12,7 @@ use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
 use super::{ToolOutput, error};
+use crate::{ShellOutputObserver, ShellStream};
 
 /// Raw bytes retained per stream in the bounded preview.
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
@@ -35,6 +36,7 @@ pub(super) async fn run(
     args: &Value,
     stop: CancellationToken,
     artifacts: Option<ion_core::ArtifactSink>,
+    progress: Option<ShellOutputObserver>,
 ) -> ToolOutput {
     let input: ExecInput = match serde_json::from_value(args.clone()) {
         Ok(value) => value,
@@ -75,9 +77,15 @@ pub(super) async fn run(
     let stdout = OutputCapture::start(
         child.stdout.take().expect("piped"),
         artifacts.clone(),
-        "stdout",
+        ShellStream::Stdout,
+        progress.clone(),
     );
-    let stderr = OutputCapture::start(child.stderr.take().expect("piped"), artifacts, "stderr");
+    let stderr = OutputCapture::start(
+        child.stderr.take().expect("piped"),
+        artifacts,
+        ShellStream::Stderr,
+        progress,
+    );
     let mut cancelled = false;
     let mut timed_out = false;
     let deadline = async {
@@ -365,8 +373,10 @@ impl OutputCapture {
     fn start(
         mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static,
         sink: Option<ion_core::ArtifactSink>,
-        label: &'static str,
+        stream: ShellStream,
+        progress: Option<ShellOutputObserver>,
     ) -> Self {
+        let label = stream.label();
         let exited = CancellationToken::new();
         let capture_exited = exited.clone();
         let stop_acquisition = CancellationToken::new();
@@ -404,6 +414,9 @@ impl OutputCapture {
                         break;
                     }
                     Ok(n) => {
+                        if let Some(observe) = &progress {
+                            observe(stream, &chunk[..n]);
+                        }
                         let prefix = (state.head.is_empty()
                             && state.total.saturating_add(n as u64) > MAX_OUTPUT_BYTES as u64)
                             .then(|| state.bytes.iter().copied().collect::<Vec<_>>());
@@ -697,7 +710,8 @@ mod tests {
                         eof: Some(eof_tx),
                     },
                     Some(owner.sink()),
-                    "stdout",
+                    ShellStream::Stdout,
+                    None,
                 );
                 let stop = CancellationToken::new();
                 let trigger = stop.clone();
@@ -791,7 +805,8 @@ mod tests {
                     tail: std::io::Cursor::new(tail.to_vec()),
                 },
                 Some(owner.sink()),
-                "stdout",
+                ShellStream::Stdout,
+                None,
             )
             .finish(&CancellationToken::new(), false)
             .await;
@@ -1055,7 +1070,8 @@ mod tests {
         };
         let output = tokio::time::timeout(
             Duration::from_secs(3),
-            OutputCapture::start(reader, None, "stdout").finish(&CancellationToken::new(), false),
+            OutputCapture::start(reader, None, ShellStream::Stdout, None)
+                .finish(&CancellationToken::new(), false),
         )
         .await
         .expect("active output failed to settle");
@@ -1094,7 +1110,7 @@ mod tests {
         };
         let output = tokio::time::timeout(
             Duration::from_secs(2),
-            OutputCapture::start(reader, None, "stdout").finish(&stop, false),
+            OutputCapture::start(reader, None, ShellStream::Stdout, None).finish(&stop, false),
         )
         .await
         .expect("post-exit capture ignored cancellation");
@@ -1119,7 +1135,7 @@ mod tests {
         stop.cancel();
         let output = tokio::time::timeout(
             Duration::from_millis(500),
-            OutputCapture::start(reader, None, "stdout").finish(&stop, true),
+            OutputCapture::start(reader, None, ShellStream::Stdout, None).finish(&stop, true),
         )
         .await;
         writer_task.abort();
@@ -1132,7 +1148,7 @@ mod tests {
     async fn stopped_capture_bounds_continuously_ready_output() {
         let captured = tokio::time::timeout(
             Duration::from_secs(2),
-            OutputCapture::start(tokio::io::repeat(b'x'), None, "stdout")
+            OutputCapture::start(tokio::io::repeat(b'x'), None, ShellStream::Stdout, None)
                 .finish(&CancellationToken::new(), true),
         )
         .await

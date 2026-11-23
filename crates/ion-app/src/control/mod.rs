@@ -154,6 +154,7 @@ pub struct SessionControl<M = ()> {
     mcp_reconnect: Option<mcp::Reconnect<M>>,
     observations: broadcast::Sender<Observation>,
     observer: ControlObserver,
+    shell_output: bool,
     stop_requested: bool,
     closed: bool,
     cleanup_errors: Vec<SessionError>,
@@ -198,6 +199,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             starting: None,
             mcp_reconnect: None,
             observations,
+            shell_output: false,
             observer: ControlObserver {
                 receiver,
                 suppress: false,
@@ -212,6 +214,12 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             snapshot_sequence: 0,
             shutdown_complete: false,
         }
+    }
+
+    /// Include provisional direct-shell bytes in activity for a local UI.
+    pub fn with_shell_output(mut self) -> Self {
+        self.shell_output = true;
+        self
     }
 
     pub fn observe(&self) -> ControlObserver {

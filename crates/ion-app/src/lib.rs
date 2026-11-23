@@ -63,7 +63,8 @@ use anyhow::{Context, Result, ensure};
 use ion_core::{Agent, AgentLimits, PromptCacheWarmingPolicy, ToolSet};
 
 pub use application::{
-    Application, ApplicationOwner, ApplicationRuntime, CodingApplication, PreparedShell, UserShell,
+    Application, ApplicationOwner, ApplicationRuntime, CodingApplication, PreparedShell,
+    ShellOutputObserver, ShellStream, UserShell,
 };
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::{

@@ -258,9 +258,14 @@ for mode in ("inline", "fullscreen"):
                     step = "expanded"
                 if step == "expanded" and b"Tool output: expanded" in segment:
                     segment_start = len(output)
-                    os.write(master, b"!printf '%s%s\\n' VISIBLE_ OUTPUT\r")
+                    os.write(master, b"!printf '%s%s\\n' VISIBLE_ OUTPUT; while ! test -e release; do sleep 0.05; done\r")
+                    step = "running"
+                if step == "running" and b"VISIBLE_OUTPUT" in segment and b"Running shell" in segment:
+                    assert b"exit 0" not in segment, "output was not visible until settlement"
+                    (workspace / "release").touch()
+                    segment_start = len(output)
                     step = 2
-                if step == 2 and b"VISIBLE_OUTPUT" in segment and b"exit 0" in segment:
+                if step == 2 and b"exit 0" in segment:
                     segment_start = len(output)
                     os.write(master, b"!printf '%s%s\\n' FAILED_ STDERR >&2; exit 7\r")
                     step = 3

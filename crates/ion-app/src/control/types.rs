@@ -328,14 +328,21 @@ pub struct McpReconnectFinished<M> {
     pub(super) reservation: Option<InputReservation>,
 }
 
-/// Progress can have gaps. After a gap, deltas are suppressed until a complete
-/// committed boundary or explicit response restart. Reconcile against Session
-/// inspection at Gap and Settlement; never append a surviving delta to a lost prefix.
+/// Progress can have gaps. After a gap, model deltas are suppressed until a
+/// committed boundary or explicit response restart. Discard previous shell
+/// preview bytes at a gap; subsequent shell output is a new observed suffix.
+/// Reconcile committed facts at Gap and Settlement.
 #[derive(Clone, Debug)]
 pub enum Observation {
     Event {
         operation: OperationId,
         event: Arc<AgentEvent>,
+    },
+    /// Provisional direct-shell bytes; independent of model Turn deltas.
+    ShellOutput {
+        operation: OperationId,
+        stream: crate::ShellStream,
+        bytes: Arc<[u8]>,
     },
     Gap {
         /// Zero denotes initial subscription: inspect committed Session state.
