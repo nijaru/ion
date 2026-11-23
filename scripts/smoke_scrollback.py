@@ -207,6 +207,9 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert time.monotonic() < deadline, f"closing evidence lost the output search:\n{pane}"
             time.sleep(0.02)
         tmux("send-keys", "-t", "ion", "Escape")
+        while "Recorded tool output" in (pane := tmux("capture-pane", "-p", "-t", "ion")) or not composer_ready(pane):
+            assert time.monotonic() < deadline, f"output picker did not return to the composer:\n{pane}"
+            time.sleep(0.02)
         assert len(requests) == 2, "searching saved results made a model request"
         check_history()
 

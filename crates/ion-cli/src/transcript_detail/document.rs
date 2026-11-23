@@ -73,6 +73,7 @@ struct Section {
 pub(super) struct Document {
     sections: Vec<Section>,
     pub len: usize,
+    pub captures: Vec<super::CaptureChoice>,
     previous: Option<EntryKey>,
     theme: Theme,
 }
@@ -230,13 +231,9 @@ impl Document {
                                 width,
                             );
                             self.json(key, JsonField::Result, &output.value, width);
-                            self.artifacts(key, &output.artifacts, width);
-                            self.artifact_help(
-                                key,
-                                &format!("shell:{}", shell.source.entry),
-                                &output.artifacts,
-                                width,
-                            );
+                            let selector = format!("shell:{}", shell.source.entry);
+                            self.artifacts(key, &selector, &output.artifacts, width);
+                            self.artifact_help(key, &selector, &output.artifacts, width);
                             for (index, image) in output.images.iter().enumerate() {
                                 self.generated(
                                     key,
@@ -331,7 +328,7 @@ impl Document {
             } else {
                 self.json(key, JsonField::Result, &result.value, width);
             }
-            self.artifacts(key, &result.artifacts, width);
+            self.artifacts(key, number, &result.artifacts, width);
             for (index, mime) in result.image_mime_types.iter().enumerate() {
                 self.generated(key, Field::Image(index), &format!("[image: {mime}]"), width);
             }
@@ -456,8 +453,28 @@ impl Document {
         );
     }
 
-    fn artifacts(&mut self, key: EntryKey, artifacts: &[ion_core::ArtifactRef], width: usize) {
-        for (index, metadata) in crate::tool_output::artifact_metadata(artifacts).enumerate() {
+    fn artifacts(
+        &mut self,
+        key: EntryKey,
+        selector: &str,
+        artifacts: &[ion_core::ArtifactRef],
+        width: usize,
+    ) {
+        for (index, (artifact, metadata)) in artifacts
+            .iter()
+            .zip(crate::tool_output::artifact_metadata(artifacts))
+            .enumerate()
+        {
+            self.captures.push(super::CaptureChoice {
+                row: self.len,
+                label: format!(
+                    "{selector} · {index}: {} · {} bytes{}",
+                    artifact.label,
+                    artifact.bytes,
+                    if artifact.complete { "" } else { " · partial" },
+                ),
+                artifact: artifact.clone(),
+            });
             self.generated(key, Field::Artifact(index), &metadata, width);
         }
     }

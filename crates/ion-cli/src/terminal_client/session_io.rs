@@ -743,6 +743,7 @@ impl Frontend {
                 self.editor.completion.clear();
                 self.pickers.close();
                 self.details = None;
+                self.capture_save = None;
             }
             self.view.follow_end();
         }

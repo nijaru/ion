@@ -4,7 +4,6 @@ import fcntl
 import json
 import os
 import pty
-import re
 import select
 import signal
 import sqlite3
@@ -272,19 +271,20 @@ for mode in ("inline", "fullscreen"):
                     segment_start = len(output)
                     os.write(master, b"/tool all\r")
                     step = 5
-                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment:
-                    match = re.search(rb"/tool (shell:[0-9]+) save INDEX PATH", segment)
-                    if match:
-                        shell_selector = match.group(1)
-                        segment_start = len(output)
-                        os.write(master, b"\x0f")
-                        step = 6
-                if step == 6 and b"Details closed" in segment:
+                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"save capture" in segment:
                     segment_start = len(output)
-                    os.write(master, b"/tool " + shell_selector + b" save 0 private.bin\r")
+                    os.write(master, b"s")
+                    step = "save_prompt"
+                if step == "save_prompt" and b"Save capture 1/1" in segment:
+                    segment_start = len(output)
+                    os.write(master, b"private.bin\r")
                     step = "saving"
                 if step == "saving" and b"Artifact saved to" in segment:
                     assert (workspace / "private.bin").read_bytes() == b"PRIVATE_OUTPUT\n\xff"
+                    segment_start = len(output)
+                    os.write(master, b"\x0f")
+                    step = 6
+                if step == 6 and b"Details closed" in segment:
                     os.write(master, b"/export session.txt\r")
                     step = 7
                 if step == 7 and b"Transcript saved to" in output:

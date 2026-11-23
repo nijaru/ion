@@ -11,7 +11,86 @@ use ion_core::{
     ArtifactRef, Session, SessionError, TranscriptActivity, TranscriptItem, UserShellOutcome,
 };
 
-use super::{EditorDraft, Frontend, command::file_path, session_io::ReadOutput, tools};
+use super::{
+    Action, EditorDraft, Frontend, command::file_path, editing, session_io::ReadOutput, tools,
+};
+use crate::{
+    keybindings::{self, KeyAction, KeyBindings},
+    transcript_detail::CaptureChoice,
+};
+
+pub(super) struct SavePrompt {
+    choices: Vec<CaptureChoice>,
+    selected: usize,
+    path: String,
+    cursor: usize,
+}
+
+impl SavePrompt {
+    pub fn new(choices: &[CaptureChoice], selected: usize) -> Self {
+        Self {
+            choices: choices.to_vec(),
+            selected,
+            path: String::new(),
+            cursor: 0,
+        }
+    }
+
+    pub fn insert(&mut self, value: &str) {
+        // A destination is one line; don't silently turn multiline paste into a path.
+        if !value.chars().any(char::is_control) && self.path.len() + value.len() <= 16 * 1024 {
+            self.path.insert_str(self.cursor, value);
+            self.cursor += value.len();
+        }
+    }
+
+    pub fn key(&mut self, key: ion_terminal::KeyEvent, keys: &KeyBindings) -> Action {
+        match keys.action(keybindings::TEXT, key) {
+            Some(KeyAction::Submit) if !self.path.trim().is_empty() => Action::SaveCapture {
+                artifact: self.choices[self.selected].artifact.clone(),
+                path: self.path.clone(),
+            },
+            Some(KeyAction::SelectUp) => {
+                self.selected = self.selected.saturating_sub(1);
+                Action::None
+            }
+            Some(KeyAction::SelectDown) => {
+                self.selected = (self.selected + 1).min(self.choices.len() - 1);
+                Action::None
+            }
+            Some(action) => {
+                match editing::apply(&self.path, self.cursor, action) {
+                    Some(editing::Edit::Move(cursor)) => self.cursor = cursor,
+                    Some(editing::Edit::Delete { range, .. }) => {
+                        self.cursor = range.start;
+                        self.path.replace_range(range, "");
+                    }
+                    None => {}
+                }
+                Action::None
+            }
+            None => {
+                if let Some(ch) = keybindings::printable(key) {
+                    self.insert(ch.encode_utf8(&mut [0; 4]));
+                }
+                Action::None
+            }
+        }
+    }
+
+    pub fn title(&self) -> String {
+        format!(
+            "Save capture {}/{} · {}",
+            self.selected + 1,
+            self.choices.len(),
+            self.choices[self.selected].label
+        )
+    }
+
+    pub fn input(&self, width: usize) -> crate::terminal_input::InputWindow {
+        crate::terminal_input::input_window(&self.path, self.cursor, width, 1)
+    }
+}
 
 pub(super) fn save_tail(args: &str) -> Option<(&str, &str)> {
     let (number, rest) = args.split_once(char::is_whitespace)?;
@@ -72,10 +151,6 @@ pub(super) fn start_save(
     number: &str,
     tail: &str,
 ) -> Result<()> {
-    anyhow::ensure!(
-        !ui.session_io.blocks_input(),
-        "Wait for Session history to refresh before saving an artifact"
-    );
     let (index, path) = tail
         .split_once(char::is_whitespace)
         .context("use /tool N save INDEX PATH or /tool shell:ENTRY save INDEX PATH")?;
@@ -87,8 +162,21 @@ pub(super) fn start_save(
         artifact_at(tools(items), number, index)?
     }
     .clone();
+    start_export(runtime, ui, artifact, path.trim_start())
+}
+
+pub(super) fn start_export(
+    runtime: &SessionControl<EditorDraft>,
+    ui: &mut Frontend,
+    artifact: ArtifactRef,
+    path: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        !ui.session_io.blocks_input(),
+        "Wait for Session history to refresh before saving an artifact"
+    );
     let home = std::env::var_os("HOME").map(PathBuf::from);
-    let path = file_path(path.trim_start(), &ui.cwd, home.as_deref())?;
+    let path = file_path(path, &ui.cwd, home.as_deref())?;
     let io = runtime.session().io()?;
     ui.session_io
         .start_file_write(runtime.session(), async move {

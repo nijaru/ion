@@ -35,6 +35,13 @@ struct Boundary {
 
 type ToolSelection = (NonZeroUsize, TranscriptActivityIdentity);
 
+#[derive(Clone)]
+pub(crate) struct CaptureChoice {
+    row: usize,
+    pub label: String,
+    pub artifact: ion_core::ArtifactRef,
+}
+
 #[derive(Default)]
 pub struct DetailView {
     tool: Option<ToolSelection>,
@@ -418,6 +425,21 @@ impl DetailView {
         Some((number, self.page.as_ref()?.evidence.as_deref()?))
     }
 
+    pub(crate) fn captures(&self) -> Option<(&[CaptureChoice], usize)> {
+        let page = self.page.as_ref()?;
+        let captures = &page.document.captures;
+        let selected = if self.tool.is_some() {
+            (!captures.is_empty()).then_some(0)?
+        } else {
+            let end = self.top(page, self.viewport) + self.viewport;
+            captures
+                .partition_point(|capture| capture.row < end)
+                .saturating_sub(1)
+                .min(captures.len().checked_sub(1)?)
+        };
+        Some((captures, selected))
+    }
+
     pub(crate) fn controls(&self, keys: &crate::keybindings::KeyBindings) -> String {
         let title = self.tool.map_or_else(
             || {
@@ -436,8 +458,12 @@ impl DetailView {
                 )
             },
         );
+        let save = self
+            .captures()
+            .and_then(|_| keys.bound_hint(KeyAction::SaveCapture));
+        let save = save.map_or_else(String::new, |key| format!(" · {key} save capture"));
         format!(
-            "{title} · {} / {} scroll · {} or {} closes",
+            "{title}{save} · {} / {} scroll · {} or {} closes",
             keys.hint(KeyAction::DetailUp),
             keys.hint(KeyAction::DetailDown),
             keys.hint(KeyAction::Cancel),
