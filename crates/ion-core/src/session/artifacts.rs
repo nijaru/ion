@@ -90,9 +90,8 @@ impl Session {
         Ok(reference.clone())
     }
 
-    /// Operator-level streaming read of a known capture receipt. Use a separate
-    /// snapshot so a slow destination never holds the Session writer mutex.
-    pub fn stream_artifact(
+    // Read through a separate snapshot, without holding the writer mutex.
+    fn stream_artifact(
         &self,
         reference: &ArtifactRef,
         output: impl Write,
@@ -318,6 +317,30 @@ impl ArtifactWriter {
             .storage
             .run(&owner, super::storage::Access::ReadWrite, move || {
                 self.finish_storage(complete).map_err(SessionError::from)
+            })
+            .await
+            .map_err(io::Error::other)
+    }
+
+    /// Seal the durable capture before optionally making a convenience copy.
+    /// A copy failure does not invalidate the receipt or change its coverage.
+    pub async fn finish_with_copy_async(
+        self,
+        complete: bool,
+        mut output: impl Write + Send + 'static,
+    ) -> io::Result<(ArtifactRef, io::Result<()>)> {
+        let owner = self.io.clone();
+        let session = self.sink.0.clone();
+        let reader = session.clone();
+        session
+            .storage
+            .run(&owner, super::storage::Access::ReadWrite, move || {
+                let reference = self.finish_storage(complete)?;
+                let copied = reader
+                    .stream_artifact(&reference, &mut output)
+                    .map_err(io_error)
+                    .and_then(|()| output.flush());
+                Ok::<_, SessionError>((reference, copied))
             })
             .await
             .map_err(io::Error::other)

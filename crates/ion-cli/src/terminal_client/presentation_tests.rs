@@ -368,47 +368,6 @@ fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
 }
 
 #[test]
-fn inspector_capture_prompt_keeps_the_composer_draft_and_selects_exact_receipt() {
-    let first = crate::tool_output::tests::artifact("stdout", true);
-    let second = crate::tool_output::tests::artifact("stderr", false);
-    let result = ActivityResult {
-        projection: None,
-        value: serde_json::Value::Null,
-        image_mime_types: vec![],
-        artifacts: vec![first, second.clone()],
-        is_error: false,
-    };
-    let mut ui = Frontend {
-        conversation: conversation::fixtures::document(history_with_tools(vec![tool(
-            "exec",
-            Some(result),
-        )])),
-        editor: Editor {
-            draft: "unsent".into(),
-            cursor: 2,
-            ..Editor::default()
-        },
-        ..Frontend::default()
-    };
-    ui.open_details(Some(1));
-    let (rows, _) = modal_rows(&mut ui, None, 100, 26);
-    assert!(
-        rows.iter()
-            .any(|row| row.to_string().contains("save capture"))
-    );
-    let key = |ui: &mut Frontend, code| ui.key(KeyEvent::new(code, Modifiers::NONE), None, None);
-    key(&mut ui, KeyCode::Char('s'));
-    key(&mut ui, KeyCode::Down);
-    ui.capture_save.as_mut().unwrap().insert("result.bin");
-    assert!(
-        matches!(key(&mut ui, KeyCode::Enter), Action::SaveCapture {artifact, path} if artifact == second && path == "result.bin")
-    );
-    key(&mut ui, KeyCode::Esc);
-    assert!(ui.capture_save.is_none() && ui.details.is_some());
-    assert_eq!((&*ui.editor.draft, ui.editor.cursor), ("unsent", 2));
-}
-
-#[test]
 fn selected_tool_without_a_result_copies_its_recorded_absence() {
     let mut ui = Frontend {
         conversation: conversation::fixtures::document(history_with_tools(vec![tool(

@@ -80,7 +80,6 @@ actions! {
     PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview/review down";
     DetailUp, "app.details.up", DETAILS, ["up"], "Scroll details up one row";
     DetailDown, "app.details.down", DETAILS, ["down"], "Scroll details down one row";
-    SaveCapture, "app.details.saveCapture", DETAILS, ["s"], "Save exact bytes from a retained capture";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";
     Later, "app.details.nextPage", DETAILS, ["right"], "Show later detail page";
 }

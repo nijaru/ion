@@ -58,9 +58,7 @@ Command rows distinguish nonzero exits from signal termination. Recorded wait fa
 
 Use `/tools output TEXT` to find a top-level operation by a case-sensitive snippet from its recorded result, such as a test diagnostic. It searches text in the saved result, not the contents of raw captures. Open a match to inspect it without rerunning the command.
 
-In the inspector, press `s` when **save capture** is shown. Use Up or Down to choose a capture, enter a destination, and press Enter. Esc returns without saving or changing your draft.
-
-You can also save from the composer using the tool number and capture index shown in the inspector: `/tool 3 save 0 build.log` (or `/tool 3.1 save 0 build.log` for a child call). This writes the exact retained bytes without rerunning the tool or overwriting a file. Ion reports when the capture is incomplete. For a manual `!` or `!!` command, open `/tool all` and use the shell selector shown next to its captures: `/tool shell:ENTRY save INDEX PATH`.
+When command output spills, **Full output** points to a temporary file for the stream. **Partial output** means the stream did not reach EOF. Open the file directly or copy it somewhere permanent. If it has expired, use [Session artifact export](sessions.md#read-an-artifact) to recover the retained bytes without rerunning the command.
 
 ## External editors and terminal state
 

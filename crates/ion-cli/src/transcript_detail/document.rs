@@ -46,7 +46,6 @@ pub(super) enum Field {
     DiffLabel,
     Diff,
     Artifact(usize),
-    ArtifactHelp,
     Image(usize),
     ChildLabel,
     Readiness,
@@ -73,7 +72,6 @@ struct Section {
 pub(super) struct Document {
     sections: Vec<Section>,
     pub len: usize,
-    pub captures: Vec<super::CaptureChoice>,
     previous: Option<EntryKey>,
     theme: Theme,
 }
@@ -98,7 +96,6 @@ impl Document {
             Field::CallId
             | Field::Subject
             | Field::Artifact(_)
-            | Field::ArtifactHelp
             | Field::Image(_)
             | Field::ChildLabel => Some(Role::Secondary),
             _ => None,
@@ -231,9 +228,7 @@ impl Document {
                                 width,
                             );
                             self.json(key, JsonField::Result, &output.value, width);
-                            let selector = format!("shell:{}", shell.source.entry);
-                            self.artifacts(key, &selector, &output.artifacts, width);
-                            self.artifact_help(key, &selector, &output.artifacts, width);
+                            self.artifacts(key, &output.artifacts, width);
                             for (index, image) in output.images.iter().enumerate() {
                                 self.generated(
                                     key,
@@ -275,9 +270,6 @@ impl Document {
         );
         if let Some(subject) = &activity.activity.subject {
             self.raw(key, Field::Subject, "Subject: ", subject, width);
-        }
-        if let Some(result) = &activity.result {
-            self.artifact_help(key, number, &result.artifacts, width);
         }
         let patch = crate::edit_diff::recorded(activity);
         let command = activity.result.as_ref().and_then(|result| {
@@ -328,7 +320,7 @@ impl Document {
             } else {
                 self.json(key, JsonField::Result, &result.value, width);
             }
-            self.artifacts(key, number, &result.artifacts, width);
+            self.artifacts(key, &result.artifacts, width);
             for (index, mime) in result.image_mime_types.iter().enumerate() {
                 self.generated(key, Field::Image(index), &format!("[image: {mime}]"), width);
             }
@@ -429,52 +421,8 @@ impl Document {
         );
     }
 
-    fn artifact_help(
-        &mut self,
-        key: EntryKey,
-        selector: &str,
-        artifacts: &[ion_core::ArtifactRef],
-        width: usize,
-    ) {
-        if artifacts.is_empty() {
-            return;
-        }
-        let captures = artifacts
-            .iter()
-            .enumerate()
-            .map(|(index, capture)| format!("{index}: {}", capture.label))
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.generated(
-            key,
-            Field::ArtifactHelp,
-            &format!("Captures {captures} · /tool {selector} save INDEX PATH"),
-            width,
-        );
-    }
-
-    fn artifacts(
-        &mut self,
-        key: EntryKey,
-        selector: &str,
-        artifacts: &[ion_core::ArtifactRef],
-        width: usize,
-    ) {
-        for (index, (artifact, metadata)) in artifacts
-            .iter()
-            .zip(crate::tool_output::artifact_metadata(artifacts))
-            .enumerate()
-        {
-            self.captures.push(super::CaptureChoice {
-                row: self.len,
-                label: format!(
-                    "{selector} · {index}: {} · {} bytes{}",
-                    artifact.label,
-                    artifact.bytes,
-                    if artifact.complete { "" } else { " · partial" },
-                ),
-                artifact: artifact.clone(),
-            });
+    fn artifacts(&mut self, key: EntryKey, artifacts: &[ion_core::ArtifactRef], width: usize) {
+        for (index, metadata) in crate::tool_output::artifact_metadata(artifacts).enumerate() {
             self.generated(key, Field::Artifact(index), &metadata, width);
         }
     }

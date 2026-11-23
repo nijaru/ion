@@ -328,8 +328,7 @@ pub(super) async fn dispatch_command(
                             | Builtin::Model
                             | Builtin::Login
                             | Builtin::Logout
-                    ) || (builtin == Builtin::Tool && super::artifact::save_tail(args).is_some())
-                    {
+                    ) {
                         ui.session_io.retain_source(input.into_editor());
                     }
                 }
@@ -638,10 +637,6 @@ pub(super) fn handle_builtin(
             }
         }
         Builtin::Tool => {
-            if let Some((number, tail)) = super::artifact::save_tail(args) {
-                super::artifact::start_save(runtime, ui, number, tail)?;
-                return Ok(());
-            }
             if args == "all" {
                 ui.open_details(None);
                 return Ok(());

@@ -370,6 +370,30 @@ pub(crate) fn render_command(
             };
             note(rows, prefix, &notice, width, detail.theme);
         }
+        if let Some(path) = output[format!("{stream}_file")].as_str() {
+            let label = if output[format!("{stream}_complete")].as_bool() == Some(false) {
+                "Partial output"
+            } else {
+                "Full output"
+            };
+            note(
+                rows,
+                prefix,
+                &format!("{label} ({stream}):"),
+                width,
+                detail.theme,
+            );
+            note(rows, prefix, path, width, detail.theme);
+        }
+        if let Some(error) = output[format!("{stream}_file_error")].as_str() {
+            note(
+                rows,
+                prefix,
+                &format!("… {stream} output file unavailable: {error}"),
+                width,
+                detail.theme,
+            );
+        }
         if output[format!("{stream}_lossy")].as_bool() == Some(true) {
             note(
                 rows,

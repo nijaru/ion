@@ -27,7 +27,6 @@ use ratatui::text::Line;
 use tokio::time::Duration;
 use tokio_util::sync::CancellationToken;
 mod activity;
-mod artifact;
 mod attach;
 mod block_presenter;
 mod clipboard_input;
@@ -162,7 +161,6 @@ struct Frontend {
     session_io: session_io::SessionIo,
     pickers: Pickers,
     details: Option<DetailView>,
-    capture_save: Option<artifact::SavePrompt>,
     clipboard_job: Option<ClipboardJob>,
     termination: CancellationToken,
     question: Option<QuestionModal>,
@@ -431,12 +429,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         Action::CopyDetail => {
                             copy_detail_evidence(&mut ui, terminal).await?;
                         },
-                        Action::SaveCapture { artifact, path } => {
-                            match artifact::start_export(&runtime, &mut ui, artifact, &path) {
-                                Ok(()) => { ui.capture_save = None; ui.status = "Saving capture…".into(); }
-                                Err(error) => ui.status = format!("Capture not saved: {error:#}"),
-                            }
-                        },
                         Action::Command(command) => {
                             dispatch_command(
                                 &mut runtime,
@@ -465,8 +457,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .paste(&text);
                         apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen, &mut interrupt).await?;
                         poll_control = true;
-                    } else if let Some(save) = &mut ui.capture_save {
-                        save.insert(&text);
                     } else if ui.input_target() != interaction::InputTarget::Details {
                         ui.insert(&text);
                     }
@@ -923,10 +913,6 @@ enum Action {
     Recover,
     PasteClipboard,
     CopyDetail,
-    SaveCapture {
-        artifact: ion_core::ArtifactRef,
-        path: String,
-    },
     Command(CommandInput),
     Pick(PickerValue),
     Quit,
@@ -1320,27 +1306,7 @@ impl Frontend {
     }
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {
-        if let Some(save) = &mut self.capture_save {
-            if self.keys.matches(KeyAction::Cancel, key)
-                || self.keys.matches(KeyAction::ExpandTools, key)
-            {
-                self.capture_save = None;
-                self.status.clear();
-                return Action::None;
-            }
-            return save.key(key, &self.keys);
-        }
         match self.keys.action(DETAILS, key) {
-            Some(KeyAction::SaveCapture) => {
-                if let Some((choices, selected)) =
-                    self.details.as_ref().and_then(DetailView::captures)
-                {
-                    self.capture_save = Some(artifact::SavePrompt::new(choices, selected));
-                    self.status.clear();
-                } else {
-                    self.status = "No retained captures on this inspector page".into();
-                }
-            }
             Some(KeyAction::Cancel | KeyAction::ExpandTools) => {
                 self.details = None;
                 if self.pickers.active().is_none() {
@@ -1875,36 +1841,9 @@ fn modal_rows(
     } else {
         status
     };
-    let (footer, caret) = if let Some(save) = &ui.capture_save {
-        let input = save.input(width);
-        let mut footer = vec![
-            save.title(),
-            format!(
-                "Destination · {}/{} choose capture · {} save · {} cancel",
-                ui.keys.hint(KeyAction::SelectUp),
-                ui.keys.hint(KeyAction::SelectDown),
-                ui.keys.hint(KeyAction::Submit),
-                ui.keys.hint(KeyAction::Cancel),
-            ),
-        ];
-        if let Some(status) = status {
-            footer.push(status);
-        }
-        let row = footer.len();
-        footer.extend(input.lines);
-        (
-            footer,
-            Some((row + input.cursor_row, input.cursor_col as u16)),
-        )
-    } else {
-        (controls.into_iter().chain(status).collect(), None)
-    };
-    let footer_start = if caret.is_some() {
-        footer.len().saturating_sub(height)
-    } else {
-        0
-    };
-    let viewport = height.saturating_sub(footer.len() - footer_start);
+    let status_height =
+        (usize::from(controls.is_some()) + usize::from(status.is_some())).min(height);
+    let viewport = height.saturating_sub(status_height);
     let content = ui
         .details
         .as_mut()
@@ -1915,25 +1854,19 @@ fn modal_rows(
     rows.splice(..0, std::iter::repeat_n(Line::raw(""), padding));
     rows.resize_with(height, || Line::raw(""));
 
-    let cursor = caret.map(|(row, col)| (viewport + row - footer_start, col));
-    for (index, label) in footer
-        .iter()
-        .enumerate()
-        .skip(footer_start)
-        .take(height - viewport)
-    {
-        rows[viewport + index - footer_start] = if caret.is_some_and(|(row, _)| row == index) {
-            Line::raw(label.clone())
-        } else {
-            Line::styled(
+    let mut next_row = viewport;
+    for label in controls.iter().chain(status.iter()).take(status_height) {
+        if next_row < height {
+            rows[next_row] = Line::styled(
                 fit_line(label, width),
                 ui.themes
                     .theme()
                     .style(crate::presentation_style::Role::Secondary),
-            )
-        };
+            );
+            next_row += 1;
+        }
     }
-    (rows, cursor)
+    (rows, None)
 }
 
 #[cfg(test)]

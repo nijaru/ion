@@ -210,6 +210,7 @@ for mode in ("inline", "fullscreen"):
             **os.environ,
             "ION_HOME": str(work / "ion"), "XDG_CONFIG_HOME": str(work / "config"),
             "XDG_STATE_HOME": str(work / "state"),
+            "TMPDIR": str(work),
             "TERM": "xterm-256color",
             "VISUAL": str(editor),
         }
@@ -267,21 +268,11 @@ for mode in ("inline", "fullscreen"):
                     segment_start = len(output)
                     os.write(master, b"!!printf '%s%s\\n\\377' PRIVATE_ OUTPUT\r")
                     step = 4
-                if step == 4 and b"PRIVATE_OUTPUT" in segment and b"not shared with model" in segment:
+                if step == 4 and b"PRIVATE_OUTPUT" in segment and b"not shared with model" in segment and b"Full output (stdout):" in segment:
                     segment_start = len(output)
                     os.write(master, b"/tool all\r")
                     step = 5
-                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"save capture" in segment:
-                    segment_start = len(output)
-                    os.write(master, b"s")
-                    step = "save_prompt"
-                if step == "save_prompt" and b"Save capture 1/1" in segment:
-                    segment_start = len(output)
-                    os.write(master, b"private.bin\r")
-                    step = "saving"
-                if step == "saving" and b"Artifact saved to" in segment:
-                    assert (workspace / "private.bin").read_bytes() == b"PRIVATE_OUTPUT\n\xff"
-                    segment_start = len(output)
+                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"Session artifact 0" in segment:
                     os.write(master, b"\x0f")
                     step = 6
                 if step == 6 and b"Details closed" in segment:
@@ -303,6 +294,13 @@ for mode in ("inline", "fullscreen"):
             assert entries[0][1]["output"]["value"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0][0]["exclude_from_context"]
             assert entries[1][1]["output"]["value"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["value"]["exit_code"] == 7 and entries[1][1]["output"]["is_error"]
             assert entries[2][1]["output"]["value"]["stdout"] == "PRIVATE_OUTPUT\n\ufffd" and entries[2][0]["exclude_from_context"]
+            output_path = Path(entries[2][1]["output"]["value"]["stdout_file"])
+            assert output_path.parent == work and output_path.read_bytes() == b"PRIVATE_OUTPUT\n\xff"
+            assert output_path.stat().st_mode & 0o777 == 0o600
+            output_path.unlink()
+            settlement = max(index for index, entry in enumerate(json.loads(inspect)["entries"], 1) if entry["kind"] == "user_shell_settled")
+            fallback = subprocess.check_output([binary, "--cwd", workspace, "--session", session_id, "artifact", str(settlement), "0"], env=env)
+            assert fallback == b"PRIVATE_OUTPUT\n\xff"
             transcript = (workspace / "session.txt").read_text()
             assert "VISIBLE_OUTPUT" in transcript and "PRIVATE_OUTPUT" in transcript and "not shared with model" in transcript
             assert (workspace / "session.txt").stat().st_mode & 0o777 == 0o600

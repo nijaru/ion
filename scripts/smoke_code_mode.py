@@ -49,7 +49,7 @@ if len(sys.argv) > 1 and sys.argv[1] == "mcp":
 
 def program(prompt):
     if prompt == "RECOVER_FAIL":
-        producer = "import secrets; print(secrets.token_hex(24)); print('X'*100000)"
+        producer = "import secrets; print('X'*9999); print(secrets.token_hex(24)); print('X'*90000)"
         command = f"printf ONCE >> effects; {shlex.quote(sys.executable)} -c {shlex.quote(producer)}; exit 7"
         return "const r=await tools.exec(" + json.dumps({"command": command}) + "); if(r.artifacts.length!==1||r.child!==0)throw new Error('missing capture provenance'); let rejected=false; try {await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:r.artifacts[0].bytes+1});}catch(_){rejected=true;} if(!rejected)throw new Error('invalid range accepted'); const page=await inspectSaved({kind:'artifact',parent:r.parent,child:r.child,artifact:0,offset:0,limit:1024}); if(!page.complete||page.encoding!=='utf8'||page.offset!==0||page.data_bytes!==1024)throw new Error('current capture unavailable after recoverable range error'); throw new Error('after effect');"
     if prompt == "BINARY_CAPTURE":
@@ -89,7 +89,7 @@ class Provider(BaseHTTPRequestHandler):
             if prompt == "RECOVER_CAPTURE":
                 assert "assistant_entry" not in json.dumps(messages), "cut retained the original locator"
             discovery = "const refs=await inspectSaved({kind:'parents'}); let parent; for(const ref of refs.parents) { const cs=await inspectSaved({kind:'children',parent:ref.parent}); if(cs.children.some(c=>c.name==='exec')) { parent=ref.parent; break; } } if(!parent) throw new Error('saved exec not found'); "
-            code = discovery + "const meta=await inspectSaved({kind:'children',parent}); const saved=await inspectSaved({kind:'artifact',parent,child:0,artifact:0,offset:0,limit:1024}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {nonce:saved.data.split('\\n')[0],original_failed:exit.is_error,exit:JSON.parse(exit.json),states:meta.children.map(c=>c.state)};"
+            code = discovery + "const meta=await inspectSaved({kind:'children',parent}); const saved=await inspectSaved({kind:'artifact',parent,child:0,artifact:0,offset:10000,limit:1024}); const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {nonce:saved.data.split('\\n')[0],original_failed:exit.is_error,exit:JSON.parse(exit.json),states:meta.children.map(c=>c.state)};"
             if prompt == "INSPECT_RPC":
                 code = discovery + "const exit=await inspectSaved({kind:'output',parent,child:0,pointer:'/exit_code'}); return {exit:JSON.parse(exit.json), original_failed:exit.is_error};"
             delta = {"tool_calls": [{"index": 0, "id": "inspect", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": code})}}]}
@@ -223,8 +223,8 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         image_parts = [part for message in requests[-1]["messages"] if isinstance(message["content"], list) for part in message["content"] if part["type"] == "image_url"]
         assert len(image_parts) == 1 and image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,"), requests[-1]
 
-        # The nonce exists only at the start of a retained complete capture,
-        # not in the bounded native tail or any model-visible parent output.
+        # The nonce is inside the omitted middle of the command preview,
+        # not in any model-visible parent output.
         recovery_work = work / "recovery"
         recovery_work.mkdir()
         records = [json.loads(line) for line in run(env, recovery_work, "--code-mode", "--json", "run", "RECOVER_FAIL").stdout.splitlines()]
@@ -234,9 +234,11 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert isinstance(failed_parent["output"].get("parent"), dict), "failed guest has no stable evidence locator"
         reference=original["artifacts"][original["output"]["stdout_artifact"]]
         saved_bytes = artifact_bytes(work,reference)
+        spill = Path(original["output"]["stdout_file"])
+        assert spill.parent == transient and spill.read_bytes() == saved_bytes
         shutil.rmtree(transient)
         transient.mkdir()
-        nonce = saved_bytes.splitlines()[0].decode()
+        nonce = saved_bytes.splitlines()[1].decode()
         assert len(saved_bytes) == 100050 and len(nonce) == 48
         assert nonce not in original["output"]["stdout"]
         # The controlled summary omits locators. This tests the cut/reopen

@@ -179,7 +179,7 @@ pub(super) async fn run(
     });
     let (stdout_text, stdout_lossy) = stdout.preview();
     let (stderr_text, stderr_lossy) = stderr.preview();
-    let result = json!({
+    let mut result = json!({
         "exit_code": exit_code, "signal": signal, "wait_error": wait_error,
         "stdout_lossy": stdout_lossy,
         "stderr_lossy": stderr_lossy,
@@ -192,6 +192,13 @@ pub(super) async fn run(
         "stdout_artifact_error": stdout.full_error, "stderr_artifact_error": stderr.full_error,
         "cancelled": cancelled, "timed_out": timed_out,
     });
+    for (stream, capture) in [("stdout", &stdout), ("stderr", &stderr)] {
+        match &capture.spill {
+            Ok(Some(path)) => result[format!("{stream}_file")] = json!(path),
+            Err(error) => result[format!("{stream}_file_error")] = json!(error.to_string()),
+            Ok(None) => {}
+        }
+    }
     ToolOutput {
         artifacts,
         value: result,
@@ -257,6 +264,7 @@ pub(crate) async fn kill_child(
 }
 
 struct Captured {
+    spill: std::io::Result<Option<String>>,
     bytes: Vec<u8>,
     has_gap: bool,
     complete: bool,
@@ -282,7 +290,37 @@ impl Captured {
     }
 }
 
+// A convenience copy is offered only after the durable capture is sealed.
+// Remove its temporary name if writing or verifying the copy fails.
+struct SpillFile(Option<String>);
+
+impl Drop for SpillFile {
+    fn drop(&mut self) {
+        if let Some(path) = &self.0 {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+impl SpillFile {
+    async fn open(label: &str) -> std::io::Result<(Self, std::fs::File)> {
+        let path = std::env::temp_dir().join(format!("ion-{label}-{}.log", uuid::Uuid::new_v4()));
+        let path = path
+            .into_os_string()
+            .into_string()
+            .map_err(|_| std::io::Error::other("temporary output directory is not valid UTF-8"))?;
+        let file = tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)
+            .await?;
+        Ok((Self(Some(path)), file.into_std().await))
+    }
+}
+
 struct CaptureState {
+    spill: std::io::Result<Option<String>>,
     head: Vec<u8>,
     bytes: VecDeque<u8>,
     total: u64,
@@ -335,6 +373,7 @@ impl OutputCapture {
         let capture_stop = stop_acquisition.clone();
         let task = tokio::spawn(async move {
             let mut state = CaptureState {
+                spill: Ok(None),
                 head: Vec::new(),
                 bytes: VecDeque::with_capacity(MAX_OUTPUT_BYTES),
                 total: 0,
@@ -344,7 +383,6 @@ impl OutputCapture {
             };
             let mut chunk = [0u8; 8192];
             let mut writer: Option<ion_core::ArtifactWriter> = None;
-            let mut writer_failed = false;
             let mut post_exit = false;
             loop {
                 // Idle means a pending pipe read, never a writer write/flush.
@@ -366,8 +404,7 @@ impl OutputCapture {
                         break;
                     }
                     Ok(n) => {
-                        let prefix = (!writer_failed
-                            && writer.is_none()
+                        let prefix = (state.head.is_empty()
                             && state.total.saturating_add(n as u64) > MAX_OUTPUT_BYTES as u64)
                             .then(|| state.bytes.iter().copied().collect::<Vec<_>>());
                         state.total = state.total.saturating_add(n as u64);
@@ -394,15 +431,11 @@ impl OutputCapture {
                             .await
                             {
                                 Ok(capture) => writer = Some(capture),
-                                Err(error) => {
-                                    writer_failed = true;
-                                    state.record_error(error.to_string());
-                                }
+                                Err(error) => state.record_error(error.to_string()),
                             }
                         } else if let Some(capture) = &mut writer
                             && let Err(error) = capture.write_bytes(&chunk[..n]).await
                         {
-                            writer_failed = true;
                             writer = None;
                             state.record_error(error.to_string());
                         }
@@ -424,8 +457,7 @@ impl OutputCapture {
             // Session capture. Do this only after acquisition, so a UTF-8 sequence
             // split across pipe reads is not mistaken for invalid output.
             if state.complete
-                && writer.is_none()
-                && !writer_failed
+                && state.head.is_empty()
                 && std::str::from_utf8(state.bytes.make_contiguous()).is_err()
             {
                 match async {
@@ -442,7 +474,20 @@ impl OutputCapture {
             // Acquisition has stopped, but every started storage operation
             // must settle. EOF remains true even if the artifact cannot finish.
             if let Some(writer) = writer {
-                match writer.finish_async(state.complete).await {
+                let result = match SpillFile::open(label).await {
+                    Ok((mut path, file)) => writer
+                        .finish_with_copy_async(state.complete, file)
+                        .await
+                        .map(|(receipt, copy)| {
+                            state.spill = copy.map(|()| path.0.take());
+                            receipt
+                        }),
+                    Err(error) => {
+                        state.spill = Err(error);
+                        writer.finish_async(state.complete).await
+                    }
+                };
+                match result {
                     Ok(artifact) => state.artifact = Some(artifact),
                     Err(error) => state.record_error(error.to_string()),
                 }
@@ -478,6 +523,7 @@ impl OutputCapture {
             }
         };
         let state = result.unwrap_or_else(|error| CaptureState {
+            spill: Ok(None),
             head: Vec::new(),
             bytes: VecDeque::new(),
             total: 0,
@@ -496,6 +542,7 @@ impl OutputCapture {
         let complete = state.complete;
         let omitted_bytes = complete.then(|| state.total.saturating_sub(bytes.len() as u64));
         Captured {
+            spill: state.spill,
             bytes,
             has_gap,
             complete,
@@ -902,6 +949,10 @@ mod tests {
                 .zip(captures)
         {
             assert_eq!(capture, expected);
+            let path = output.value[format!("{stream}_file")].as_str().unwrap();
+            let spilled = std::fs::read(path).unwrap();
+            std::fs::remove_file(path).unwrap();
+            assert_eq!(spilled, expected);
             assert_eq!(output.value[format!("{stream}_truncated")], true);
             assert_eq!(output.value[format!("{stream}_lossy")], true);
             assert_eq!(output.value[format!("{stream}_complete")], true);
