@@ -220,7 +220,7 @@ fn stale_clear_and_different_bound_shortcuts_never_confirm_each_other() {
 }
 
 #[tokio::test]
-async fn completion_dismissal_is_separate_from_both_stop_confirmation_presses() {
+async fn escape_dismisses_local_surfaces_before_stopping_work() {
     let mut fixture = tests::Fixture::new();
     fixture
         .control
@@ -237,12 +237,19 @@ async fn completion_dismissal_is_separate_from_both_stop_confirmation_presses() 
             .is_empty()
     );
     let escape = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+    assert_eq!(ui.stop_hint(), "Ctrl-C");
     assert_eq!(ui.stop_key(escape, target.clone()), None);
     ui.key(escape, None, None);
     assert!(!ui.editor.completion.active());
     assert!(ui.gestures.prompt().is_none());
-    assert_eq!(ui.stop_key(escape, target.clone()), Some(false));
+    ui.open_details(None);
+    assert_eq!(ui.stop_hint(), "Ctrl-C");
+    assert_eq!(ui.stop_key(escape, target.clone()), None);
+    ui.key(escape, None, None);
+    assert!(ui.details.is_none());
+    assert_eq!(ui.stop_hint(), "Esc");
     assert_eq!(ui.stop_key(escape, target), Some(true));
+    assert!(ui.gestures.prompt().is_none());
     assert_eq!(ui.editor.draft, "/he");
     fixture.control.shutdown().await;
 }
@@ -280,11 +287,18 @@ fn exit_is_guarded_but_forward_delete_and_confirmation_dismissal_are_not() {
 
 #[tokio::test]
 async fn fresh_interrupt_stops_once_without_a_confirmation_or_clear_exit_cascade() {
-    for (keys, character) in [
-        (KeyBindings::default(), 'c'),
+    for (keys, interrupt) in [
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Esc, Modifiers::NONE),
+        ),
+        (
+            KeyBindings::default(),
+            KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL),
+        ),
         (
             KeyBindings::parse(br#"{"app.interrupt":"ctrl+q"}"#).unwrap(),
-            'q',
+            KeyEvent::new(KeyCode::Char('q'), Modifiers::CONTROL),
         ),
     ] {
         for (literal, cursor) in [("unsent 🦀", "unsent ".len()), ("", 0)] {
@@ -294,7 +308,6 @@ async fn fresh_interrupt_stops_once_without_a_confirmation_or_clear_exit_cascade
                 .compact(None, EditorDraft::at_end(String::new()))
                 .unwrap();
             let target = fixture.control.stop_target().unwrap();
-            let interrupt = KeyEvent::new(KeyCode::Char(character), Modifiers::CONTROL);
             let repeat = KeyEvent {
                 repeat: true,
                 ..interrupt
@@ -323,60 +336,6 @@ async fn fresh_interrupt_stops_once_without_a_confirmation_or_clear_exit_cascade
             fixture.control.shutdown().await;
         }
     }
-}
-
-#[tokio::test]
-async fn escape_stop_confirmation_is_scoped_to_work_and_extra_taps_cannot_clear_or_exit() {
-    let mut fixture = tests::Fixture::new();
-    fixture
-        .control
-        .compact(None, EditorDraft::at_end(String::new()))
-        .unwrap();
-    let target = fixture.control.stop_target().unwrap();
-    let interrupt = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
-    let mut ui = Frontend::default();
-    ui.insert("unsent 🦀");
-    assert_eq!(ui.stop_key(interrupt, Some(target.clone())), Some(false));
-    assert!(!fixture.control.state().stop_requested);
-    // An additional queued input changes the cancellation domain even though
-    // the current operation is unchanged.
-    assert!(
-        fixture
-            .control
-            .submit(
-                Delivery::FollowUp,
-                ion_app::UserInput::Prompt {
-                    text: "queued".into(),
-                    attachments: vec![],
-                },
-                EditorDraft::at_end("queued".into())
-            )
-            .is_ok()
-    );
-    let changed = fixture.control.stop_target().unwrap();
-    assert_ne!(target, changed);
-    assert_eq!(ui.stop_key(interrupt, Some(changed.clone())), Some(false));
-    assert!(ui.gestures.prompt().is_none());
-    ui.begin_key(KeyEvent::new(KeyCode::Left, Modifiers::NONE));
-    assert_eq!(ui.stop_key(interrupt, Some(changed.clone())), Some(false));
-    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
-        ui.mode = mode;
-        let dock = Dock::prepare(&mut ui, None, None, &[], 24, 2);
-        assert!(
-            dock.rows
-                .iter()
-                .any(|row| row.to_string().contains("Stop work? Esc again"))
-        );
-        assert!(dock.cursor.is_some());
-    }
-    assert_eq!(ui.stop_key(interrupt, Some(changed)), Some(true));
-    fixture.control.request_stop();
-    assert_eq!(ui.stop_key(interrupt, None), None);
-    for _ in 0..3 {
-        assert!(matches!(ui.key(interrupt, None, None), Action::None));
-    }
-    assert_eq!(ui.editor.draft, "unsent 🦀");
-    fixture.control.shutdown().await;
 }
 
 #[test]
@@ -442,7 +401,7 @@ async fn short_busy_dock_prefers_activity_to_stale_notices_but_not_current_feedb
                         if has_current_feedback {
                             "diagnostic"
                         } else {
-                            "Working (Ctrl-C)"
+                            "Working (Esc)"
                         }
                     )));
                     assert!(dock.rows.len() + dock.body_rows <= height);

@@ -52,11 +52,12 @@ impl ActiveOperation {
         self.stop_requested
     }
 
-    pub(super) fn controls(self, keys: &crate::keybindings::KeyBindings) -> String {
+    pub(super) fn controls(self, ui: &Frontend) -> String {
         use crate::keybindings::KeyAction;
+        let keys = &ui.keys;
         let submit = keys.hint(KeyAction::Submit);
         let follow_up = keys.hint(KeyAction::FollowUp);
-        let cancel = keys.hint(KeyAction::Interrupt);
+        let cancel = ui.stop_hint();
         match self.kind {
             OperationKind::Coding => {
                 format!("{cancel} stops · {submit} steers · {follow_up} queues")
@@ -394,7 +395,9 @@ pub(super) fn apply(
                     .map_err(Into::into),
                 OperationOutcome::Shell(result) => result
                     .map(|output| {
-                        if output.is_error {
+                        if output.value["cancelled"] == true {
+                            "Shell stopped".into()
+                        } else if output.is_error {
                             "Shell finished with an error".into()
                         } else {
                             "Shell finished".into()
@@ -699,11 +702,7 @@ mod tests {
                     "Reconnecting MCP"
                 }
             );
-            assert!(
-                !active
-                    .controls(&Frontend::default().keys)
-                    .contains("steers")
-            );
+            assert!(!active.controls(&Frontend::default()).contains("steers"));
         }
         fixture.control.shutdown().await;
     }

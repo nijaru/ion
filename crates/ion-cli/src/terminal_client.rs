@@ -1656,13 +1656,10 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
                 format!("{label} · {status}")
             }
         } else if status.is_empty() {
-            let controls = operation.controls(&ui.keys);
+            let controls = operation.controls(ui);
             format!("{controls} · {label}")
         } else {
-            format!(
-                "{} stops · {label} · {status}",
-                ui.keys.hint(KeyAction::Interrupt)
-            )
+            format!("{} stops · {label} · {status}", ui.stop_hint())
         });
     }
     (!status.is_empty()).then_some(status)

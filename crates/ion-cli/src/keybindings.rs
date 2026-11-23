@@ -49,7 +49,7 @@ actions! {
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";
     Confirm, "tui.select.confirm", COMPLETION | PICKER | CHOICE, ["enter"], "Accept the visible selected item";
-    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss once; press twice to stop work, clear draft or cancel question";
+    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss local UI, or stop work from the composer; press twice to clear an idle draft or cancel a question";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     SelectPageUp, "tui.select.pageUp", PICKER, ["pageup"], "Move up one visible picker page";

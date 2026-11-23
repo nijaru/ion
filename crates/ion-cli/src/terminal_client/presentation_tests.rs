@@ -1468,7 +1468,7 @@ fn composer_keeps_activity_separate_from_feedback_and_falls_back_to_spinner() {
         stop_requested: false,
     };
     for (width, label) in [
-        (80, "Working (Ctrl-C to interrupt)"),
+        (80, "Working (Esc to interrupt)"),
         (20, "Working"),
         (11, ""),
     ] {

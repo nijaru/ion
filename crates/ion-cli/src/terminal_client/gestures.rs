@@ -183,15 +183,29 @@ impl super::Frontend {
         );
     }
 
+    fn cancel_stops_work(&self) -> bool {
+        self.input_target() == super::interaction::InputTarget::Composer
+            && !self.editor.completion.active()
+            && !self.editor.completion.wants_files()
+    }
+
+    pub(super) fn stop_hint(&self) -> String {
+        use crate::keybindings::KeyAction;
+        if self.cancel_stops_work()
+            && let Some(cancel) = self.keys.bound_hint(KeyAction::Cancel)
+        {
+            return cancel;
+        }
+        self.keys.hint(KeyAction::Interrupt)
+    }
+
     pub(super) fn stop_key(&mut self, key: KeyEvent, target: Option<StopTarget>) -> Option<bool> {
         self.gestures.reconcile_stop(target.as_ref());
         let target = target?;
-        let cancel_composer = self
-            .keys
-            .matches(crate::keybindings::KeyAction::Cancel, key)
-            && self.input_target() == super::interaction::InputTarget::Composer
-            && !self.editor.completion.active()
-            && !self.editor.completion.wants_files();
+        let cancel_composer = self.cancel_stops_work()
+            && self
+                .keys
+                .matches(crate::keybindings::KeyAction::Cancel, key);
         let interrupt = self
             .keys
             .matches(crate::keybindings::KeyAction::Interrupt, key);
@@ -199,13 +213,10 @@ impl super::Frontend {
             return None;
         }
         self.editor.break_edit_focus();
-        Some(if interrupt {
+        Some(
             self.gestures
-                .activate(Target::Stop(target), key, Instant::now())
-        } else {
-            self.gestures
-                .confirm(Target::Stop(target), key, Instant::now())
-        })
+                .activate(Target::Stop(target), key, Instant::now()),
+        )
     }
 
     pub(super) fn question_key(&mut self, key: KeyEvent) -> super::QuestionAction {

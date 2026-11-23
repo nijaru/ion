@@ -26,9 +26,9 @@ Each confirmed withdrawal returns its original draft, caret and attachments sepa
 
 ## Cancellation and local controls
 
-Ctrl-C immediately requests cancellation of foreground work, including unanswered questions, without confirmation. It does not promise immediate termination: Ion still joins started work and cleanup, and effects are not undone. Transferred background work has a [separate lifetime](delegation.md#lifetime-and-recovery). While [attached to a program](processes.md#attach-and-detach), Ctrl-C is forwarded to that program instead. External editors handle their own Ctrl-C.
+Press Esc once to stop foreground work from the composer. If a picker or completion menu is open, Esc dismisses it first. Ctrl-C also requests a stop, including when a question is unanswered. A stop request does not promise immediate termination: Ion still joins started work and cleanup, and effects are not undone. Transferred background work has a [separate lifetime](delegation.md#lifetime-and-recovery). While [attached to a program](processes.md#attach-and-detach), Ctrl-C is forwarded to that program instead. External editors handle their own Ctrl-C.
 
-A pending clipboard read in the composer is cancelled first. Esc dismisses local UI. Stopping work via Esc, clearing a draft, and cancelling a question with Esc require a second press of the same key.
+A pending clipboard read in the composer is cancelled first. Clearing an idle draft or cancelling a question with Esc still requires a second press of the same key.
 
 To leave chat, enter `/quit`. With an empty composer and no attachments, press Ctrl-D twice (or Ctrl-C twice while idle). The first press shows the confirmation; it does not close the Session.
 

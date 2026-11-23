@@ -268,9 +268,10 @@ def exercise_file_discovery():
                         os.write(master, b"\x1b\x1b[Cdraft")
                         wait(lambda: b"Read @data.txt draft" in output)
                         output.clear()
-                        os.write(master, b"\x03\x03")
-                        # Shell cancellation/settlement cannot await discovery.
-                        wait(lambda: b"Shell finished" in output)
+                        os.write(master, b"\x1b")
+                        # One composer Esc must stop the shell without waiting
+                        # for the already dismissed discovery worker.
+                        wait(lambda: b"Shell stopped" in output)
                         output.clear()
                         os.close(writer)
                         writer = None
@@ -432,7 +433,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     closed_active = True
                 if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
                     rows = painted_text(output[active_start:]).splitlines()
-                    if (any(line.startswith("── ") and "Working (Ctrl-C to interrupt)" in line for line in rows)
+                    if (any(line.startswith("── ") and "Working (Esc to interrupt)" in line for line in rows)
                             and any(line == "Details closed" for line in rows)):
                         os.write(master, b"Also check that the updated file has two lines.\r")
                         sent_steering = True

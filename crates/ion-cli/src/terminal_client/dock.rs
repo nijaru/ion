@@ -25,7 +25,7 @@ fn activity_border(ui: &Frontend, operation: ActiveOperation, width: usize) -> L
     let label = retry.as_deref().unwrap_or_else(|| operation.label());
     let mut variants = Vec::new();
     if ui.gestures.prompt().is_none() && ui.clipboard_cancel_target().is_none() {
-        let stop = ui.keys.hint(crate::keybindings::KeyAction::Interrupt);
+        let stop = ui.stop_hint();
         variants.push(format!("{label} ({stop} to interrupt)"));
         variants.push(format!("{label} ({stop})"));
     }

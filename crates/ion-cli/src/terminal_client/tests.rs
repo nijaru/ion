@@ -1625,7 +1625,7 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
             }),
         )
         .unwrap();
-        assert!(status.starts_with("Ctrl-C stops"));
+        assert!(status.starts_with("Esc stops"));
         assert!(status.contains(label) && status.contains("Details closed"));
     }
     let status = visible_status(
@@ -1636,7 +1636,7 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
         }),
     )
     .unwrap();
-    assert!(status.starts_with("Cancelling turn…") && !status.contains("Ctrl-C stops"));
+    assert!(status.starts_with("Cancelling turn…") && !status.contains("Esc stops"));
 }
 
 #[test]
