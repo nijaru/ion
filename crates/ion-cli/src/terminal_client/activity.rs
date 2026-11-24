@@ -110,11 +110,14 @@ pub(super) fn preview_rows(
     width: usize,
     budget: usize,
 ) -> Vec<String> {
-    let mut rows = Vec::new();
-    for stream in [
+    let mut streams = [Vec::new(), Vec::new()];
+    for (stream, rows) in [
         ion_core::OutputStream::Stdout,
         ion_core::OutputStream::Stderr,
-    ] {
+    ]
+    .into_iter()
+    .zip(&mut streams)
+    {
         let bytes = preview.bytes(stream);
         if !bytes.is_empty() {
             // Parse into plain text only. Never execute control sequences or
@@ -132,15 +135,43 @@ pub(super) fn preview_rows(
                     .unwrap_or_default()
             });
             let text = lines.collect::<Vec<_>>().join("\n");
-            crate::display_text::push_wrapped(
-                &mut rows,
-                &format!("{} · {text}", stream.label()),
-                width,
-            );
+            // Budget the label on every wrapped row so the first visible row
+            // can carry it even when earlier rows have scrolled out.
+            let label = format!("{} · ", stream.label());
+            let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
+            let content_width = if label_width < width {
+                width - label_width
+            } else {
+                width
+            };
+            crate::display_text::push_wrapped(rows, &text, content_width);
         }
     }
-    rows.drain(..rows.len().saturating_sub(budget));
-    rows
+    let [stdout, stderr] = streams;
+    let stderr_rows = stderr
+        .len()
+        .min(budget.div_ceil(2).max(budget.saturating_sub(stdout.len())));
+    let stdout_rows = stdout.len().min(budget - stderr_rows);
+    [
+        ("stdout", stdout, stdout_rows),
+        ("stderr", stderr, stderr_rows),
+    ]
+    .into_iter()
+    .flat_map(|(label, rows, keep)| {
+        let skip = rows.len() - keep;
+        let prefix = format!("{label} · ");
+        rows.into_iter()
+            .skip(skip)
+            .enumerate()
+            .map(move |(index, row)| {
+                if index == 0 && unicode_width::UnicodeWidthStr::width(prefix.as_str()) < width {
+                    format!("{prefix}{row}")
+                } else {
+                    row
+                }
+            })
+    })
+    .collect()
 }
 
 pub(super) struct RetryProgress {
@@ -515,6 +546,20 @@ mod tests {
             ["stdout · start", "20%", "40%", "stderr · warning"]
         );
         assert_eq!(preview.bytes(OutputStream::Stdout), stdout);
+    }
+
+    #[test]
+    fn noisy_stderr_keeps_stdout_visible_and_both_streams_labeled() {
+        use ion_core::OutputStream;
+        let mut preview = ion_core::ToolOutputPreview::default();
+        preview.append(OutputStream::Stdout, b"ready\n");
+        preview.append(OutputStream::Stderr, b"one\ntwo\nthree\nfour\n");
+        assert_eq!(
+            preview_rows(&preview, 80, 3),
+            ["stdout · ready", "stderr · three", "four"]
+        );
+        assert_eq!(preview_rows(&preview, 80, 1), ["stderr · four"]);
+        assert!(preview_rows(&preview, 80, 0).is_empty());
     }
 
     #[tokio::test]
