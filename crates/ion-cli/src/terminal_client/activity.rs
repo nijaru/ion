@@ -103,10 +103,18 @@ pub(super) fn preview_rows(
         let bytes = preview.bytes(stream);
         if !bytes.is_empty() {
             let text = String::from_utf8_lossy(bytes);
-            // Layout sanitizes terminal controls; captured bytes remain untouched.
+            // Display the latest update on each progress line, not a VT
+            // replay. Layout still sanitizes all remaining terminal controls.
+            let lines = text.trim_end_matches('\n').split('\n').map(|line| {
+                line.trim_end_matches('\r')
+                    .rsplit('\r')
+                    .next()
+                    .unwrap_or_default()
+            });
+            let text = lines.collect::<Vec<_>>().join("\n");
             crate::display_text::push_wrapped(
                 &mut rows,
-                &format!("{} · {}", stream.label(), text.trim_end_matches('\n')),
+                &format!("{} · {text}", stream.label()),
                 width,
             );
         }
@@ -474,6 +482,20 @@ pub(super) fn combine_error(outcome: &mut Result<()>, error: anyhow::Error) {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn live_preview_replaces_progress_updates_without_altering_captured_bytes() {
+        use ion_core::OutputStream;
+        let mut preview = ion_core::ToolOutputPreview::default();
+        let stdout = b"start\r\n10%\r20%\r\n30%\r40%\r";
+        preview.append(OutputStream::Stdout, stdout);
+        preview.append(OutputStream::Stderr, b"warning\r\n");
+        assert_eq!(
+            preview_rows(&preview, 80, 5),
+            ["stdout · start", "20%", "40%", "stderr · warning"]
+        );
+        assert_eq!(preview.bytes(OutputStream::Stdout), stdout);
+    }
 
     #[tokio::test]
     async fn sdk_only_admission_updates_are_invariants_followed_by_owned_shutdown() {
