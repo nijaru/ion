@@ -5,11 +5,14 @@ use std::{
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::PathBuf,
     process::Stdio,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+
+const EDITOR_STOP_GRACE: Duration = Duration::from_secs(1);
 
 pub async fn edit(
     content: &str,
@@ -75,8 +78,10 @@ async fn edit_with_command(
             let sent = child.id().map(|pid| i32::try_from(pid).expect("Unix child PID fits pid_t")).and_then(rustix::process::Pid::from_raw)
                 .map(|pid| rustix::process::kill_process(pid, rustix::process::Signal::TERM))
                 .transpose();
-            let joined = child.wait().await.context("join terminated editor");
-            joined?;
+            match tokio::time::timeout(EDITOR_STOP_GRACE, child.wait()).await {
+                Ok(status) => { status.context("join terminated editor")?; }
+                Err(_) => child.kill().await.context("kill and join unresponsive editor")?,
+            }
             if let Err(error) = sent {
                 ensure!(error == rustix::io::Errno::SRCH, "cannot terminate editor: {error}");
             }
@@ -182,6 +187,52 @@ mod tests {
                 .contains("termination request")
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn termination_escalates_when_editor_ignores_term() {
+        let root =
+            std::env::temp_dir().join(format!("ion-editor-ignore-term-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let _guard = DraftDir(root.clone());
+        let marker = root.join("started");
+        let target = shlex::try_quote(marker.to_str().unwrap()).unwrap();
+        let script = format!(
+            "trap '' TERM; printf '%s\\n%s\\n' $$ \"$0\" > {target}.tmp; mv {target}.tmp {target}; exec sleep 15"
+        );
+        let command = format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap());
+        let termination = CancellationToken::new();
+        let editor = edit_with_command(&command, "original", 64, Stdio::null(), &termination);
+        let observer = async {
+            let marker = tokio::time::timeout(Duration::from_secs(3), async {
+                while !marker.exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                fs::read_to_string(marker).unwrap()
+            })
+            .await;
+            let stopped_at = tokio::time::Instant::now();
+            termination.cancel();
+            (marker.unwrap(), stopped_at)
+        };
+        let (result, (observed, stopped_at)) = tokio::join!(editor, observer);
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("termination request")
+        );
+        assert!(
+            stopped_at.elapsed() < Duration::from_secs(8),
+            "editor exited on its own instead of being stopped"
+        );
+        let mut lines = observed.lines();
+        let pid = rustix::process::Pid::from_raw(lines.next().unwrap().parse().unwrap()).unwrap();
+        assert_eq!(
+            rustix::process::test_kill_process(pid),
+            Err(rustix::io::Errno::SRCH)
+        );
+        assert!(!std::path::Path::new(lines.next().unwrap()).exists());
     }
 
     #[tokio::test]
