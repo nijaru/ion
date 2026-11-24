@@ -28,7 +28,7 @@ def until(predicate, description, timeout=10):
 
 def facts(path):
     with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
-        return [json.loads(row[0]) for row in db.execute("SELECT body FROM entries ORDER BY seq")]
+        return [dict(json.loads(body), entry=seq) for seq, body in db.execute("SELECT seq, body FROM entries ORDER BY seq")]
 
 
 def dead(pid):
@@ -316,7 +316,7 @@ def smoke():
             assert sum(bool(entry.get("completion")) for entry in starts) == (policy == "wake")
             assert sum(entry["kind"] == "completion" for entry in entries) == (policy != "wake")
             if case == "WATCH_COMPACT":
-                coordinate = next(index + 1 for index, entry in enumerate(entries) if entry["kind"] == "completion")
+                coordinate = next(entry["entry"] for entry in entries if entry["kind"] == "completion")
                 cuts = [entry["data"] for entry in entries if entry["kind"] == "compacted"]
                 assert len(cuts) == 1 and cuts[0]["through_entry"] >= coordinate, cuts
                 assert coordinate in cuts[0]["retained_inputs"], "readiness retention was not durable"

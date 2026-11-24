@@ -21,7 +21,7 @@ GUIDE = '/literal follow-up "guidance" 🦀'
 def facts(path):
     with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as db:
         header = json.loads(db.execute("SELECT header FROM session").fetchone()[0])
-        entries = [json.loads(row[0]) for row in db.execute("SELECT body FROM entries ORDER BY seq")]
+        entries = [dict(json.loads(body), entry=seq) for seq, body in db.execute("SELECT seq, body FROM entries ORDER BY seq")]
     return header, entries
 
 

@@ -270,7 +270,7 @@ try {
         assert (budget["minimum"], budget["maximum"], budget["default"]) == (1, 7200000, 1800000)
         parent = next(path for path in Path(env["ION_HOME"]).rglob("*.sqlite") if path.parent.name != "children")
         with closing(sqlite3.connect(f"file:{parent}?mode=ro", uri=True)) as db:
-            entries = [json.loads(row[0]) for row in db.execute("SELECT body FROM entries ORDER BY seq")]
+            entries = [dict(json.loads(body), entry=seq) for seq, body in db.execute("SELECT seq, body FROM entries ORDER BY seq")]
         inspected = json.loads(run('--session', str(parent), 'inspect').stdout)
         assert inspected['entries'] == entries, 'CLI inspection dropped deadline facts'
         admissions = [entry["data"]["record"] for entry in entries if entry["kind"] == "delegation_admitted"]

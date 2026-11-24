@@ -129,7 +129,7 @@ def available(pipe):
 
 def entries(database):
     with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
-        return [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
+        return [dict(json.loads(body), entry=seq) for seq, body in connection.execute("SELECT seq, body FROM entries ORDER BY seq")]
 
 
 def pressured_run(command, env, json_output):

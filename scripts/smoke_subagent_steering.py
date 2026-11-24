@@ -168,7 +168,7 @@ try {
         assert [sum(task == n for task, _ in requests) for n in ("PARENT", "WORKER", "CANCEL", "DEADLINE")] == [2, 3, 1, 1]
         parent = next(p for p in Path(env["ION_HOME"]).rglob("*.sqlite") if p.parent.name != "children")
         with closing(sqlite3.connect(f"file:{parent}?mode=ro", uri=True)) as db:
-            entries = [json.loads(r[0]) for r in db.execute("SELECT body FROM entries ORDER BY seq")]
+            entries = [dict(json.loads(body), entry=seq) for seq, body in db.execute("SELECT seq, body FROM entries ORDER BY seq")]
         request_count = len(requests)
         assert json.loads(run("--session", str(parent), "inspect").stdout)["entries"] == entries
         assert len(requests) == request_count, "inspection replayed model work"
