@@ -26,6 +26,24 @@ The shared [Core compiler](../crates/ion-core/src/json_schema.rs) performs no HT
 
 Native filesystem tools (`read`, `ls`, `find`, `grep`, `edit`, `write`) accept `~` and `~/…` using the bound Host's captured `HOME`, independently of `ION_HOME`. A missing or non-absolute `HOME` is an error for these paths. Use `./~/…` for a literal tilde directory; other shell expansion is not performed.
 
+## Native grep context
+
+Pass `context` to include neighboring lines from the same file:
+
+```json
+{"path": "crates", "glob": "ion-app/**/*.rs", "pattern": "MAX_GREP_CONTEXT", "context": 2}
+```
+
+`context` accepts 0–10 lines on each side and defaults to 0. With a nonzero
+value, each match includes a `context` array of neighboring line numbers and
+text, in file order. Neighbors don't count toward the match limit. The matching
+line keeps its own line number and byte offset. Context counts toward the
+output byte budget; check `omissions` if the search is incomplete.
+
+Globs containing `/` are relative to the search root (`crates` in this example).
+If `searched_files` is 0, no text files were searched. Check the root and glob
+before treating an empty result as evidence that the pattern is absent.
+
 ## Code Mode recovery
 
 `--code-mode` enables bounded JavaScript composition alongside direct tools. When a script fails after admitting child calls, its error result includes `recovery.query`. Inside a later Code Mode call, pass that query to the global `inspectSaved` helper to inspect saved child outcomes before retrying. A script failure does not undo effects or require rerunning tools to recover output. See [Session captures](sessions.md#retained-evidence-and-captures) for artifact paging and access limits.

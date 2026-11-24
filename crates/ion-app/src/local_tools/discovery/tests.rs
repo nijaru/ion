@@ -423,6 +423,7 @@ fn grep_distinguishes_regex_literal_case_utf8_and_glob_filters() {
     assert_eq!(grep_matches(&value).len(), 3, "{value}");
     assert_eq!(value["exhaustive"], true, "{value}");
     assert_eq!(value["skipped"]["binary"], 2, "{value}");
+    assert_eq!(value["searched_files"], 3, "{value}");
     assert_eq!(value["omissions"], json!([]), "{value}");
     let value = run(grep, &root, json!({"pattern":"needle", "path":"nul.txt"}));
     assert_eq!(value["exhaustive"], false, "{value}");
@@ -454,6 +455,25 @@ fn grep_distinguishes_regex_literal_case_utf8_and_glob_filters() {
     assert_eq!(grep_matches(&value)[0]["text"], "café");
     let value = run(grep, &root, json!({"pattern": "café", "ignore_case": true}));
     assert_eq!(grep_matches(&value).len(), 2, "{value}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn grep_distinguishes_no_selected_files_from_no_matching_lines() {
+    let root = root("grep-empty-scope");
+    fs::create_dir_all(root.join("docs")).unwrap();
+    fs::write(root.join("docs/guide.md"), "").unwrap();
+    for (glob, searched) in [("docs/**/*.md", 0), ("**/*.md", 1)] {
+        let value = run(
+            grep,
+            &root,
+            json!({"path": "docs", "glob": glob, "pattern": "needle"}),
+        );
+        assert!(grep_matches(&value).is_empty(), "{value}");
+        assert_eq!(value["searched_files"], searched, "{value}");
+        assert_eq!(value["inspected_bytes"], 0, "{value}");
+        assert_eq!(value["exhaustive"], true, "{value}");
+    }
     fs::remove_dir_all(root).unwrap();
 }
 

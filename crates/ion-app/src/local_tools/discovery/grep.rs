@@ -76,6 +76,7 @@ pub(super) fn run(
         "work_budget": limits.work,
         "max_depth": limits.max_depth,
         "inspected_bytes": 0,
+        "searched_files": 0,
         "byte_budget": limits.grep_total_bytes,
         "skipped": {},
         "omissions": [],
@@ -202,6 +203,7 @@ struct Search<'a> {
     scan: Scan,
     found: usize,
     inspected: usize,
+    searched_files: usize,
     binary: usize,
     result_limited: bool,
     output_limited: bool,
@@ -225,6 +227,7 @@ impl<'a> Search<'a> {
             scan: Scan::new(limits),
             found: 0,
             inspected: 0,
+            searched_files: 0,
             binary: 0,
             result_limited: false,
             output_limited: false,
@@ -282,6 +285,7 @@ impl<'a> Search<'a> {
                 return Ok(());
             }
         };
+        self.searched_files += 1;
         let mut line_number = 0u64;
         // Search source text without its UTF-8 signature, but keep offsets
         // relative to the original bytes so a subsequent read can use them.
@@ -354,6 +358,7 @@ impl<'a> Search<'a> {
             output,
             scan,
             inspected,
+            searched_files,
             binary,
             result_limited,
             output_limited,
@@ -418,6 +423,7 @@ impl<'a> Search<'a> {
                 "work_budget": work_limit,
                 "max_depth": max_depth,
                 "inspected_bytes": inspected,
+                "searched_files": searched_files,
                 "byte_budget": limits.grep_total_bytes,
                 "skipped": skipped,
                 "omissions": omissions,

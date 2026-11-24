@@ -402,6 +402,9 @@ pub(super) fn notices(
             }
         }
     }
+    if value["matches"].is_array() && value["searched_files"].as_u64() == Some(0) {
+        note(rows, prefix, "No text files searched", width, detail.theme);
+    }
     if value["matches"].as_array().is_some_and(|items| {
         items.iter().any(|item| {
             item["truncated"].as_bool() == Some(true)
