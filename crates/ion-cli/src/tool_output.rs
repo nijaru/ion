@@ -95,6 +95,7 @@ impl RecordedExit {
 enum Preview {
     Head(usize),
     Tail(usize),
+    Bookends(usize),
 }
 
 pub(crate) fn render_activity(
@@ -318,7 +319,13 @@ pub(crate) fn render_command(
     compact_lines: usize,
     successful: bool,
 ) {
-    for field in [Field::Stdout, Field::Stderr] {
+    let failures_first = !successful && detail.detail == OutputDetail::Compact;
+    let fields = if failures_first {
+        [Field::Stderr, Field::Stdout]
+    } else {
+        [Field::Stdout, Field::Stderr]
+    };
+    for field in fields {
         let stream = field.label();
         if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
             let line_count = text.lines().count();
@@ -348,7 +355,11 @@ pub(crate) fn render_command(
                     field,
                     width,
                     detail,
-                    Preview::Tail(compact_lines),
+                    if failures_first && field == Field::Stderr {
+                        Preview::Bookends(compact_lines)
+                    } else {
+                        Preview::Tail(compact_lines)
+                    },
                 );
             }
         }
@@ -486,24 +497,33 @@ fn render_text(
     preview: Preview,
 ) {
     let label = field.label();
-    let (compact_lines, tail) = match preview {
-        Preview::Head(limit) => (limit, false),
-        Preview::Tail(limit) => (limit, true),
-    };
     let count = text.lines().count();
-    if count == 0 {
-        return;
-    }
     let expanded = detail.detail == OutputDetail::Expanded;
-    let skip = if !expanded && tail {
-        count.saturating_sub(compact_lines)
-    } else {
-        0
+    let (head, tail, omission) = match preview {
+        Preview::Head(limit) => (limit, 0, "more"),
+        Preview::Tail(limit) => (0, limit, "earlier"),
+        Preview::Bookends(limit) => (1.min(limit), limit.saturating_sub(1), "middle"),
     };
-    let limit = if expanded { usize::MAX } else { compact_lines };
+    let omitted = if expanded {
+        0
+    } else {
+        count.saturating_sub(head + tail)
+    };
+    let omission_note = || {
+        format!(
+            "… {omitted} {omission} {label} lines · {}",
+            detail.details_hint()
+        )
+    };
     let continuation = format!("{prefix}  ");
     let mut clipped = false;
-    for (byte, text) in source_lines(text).skip(skip).take(limit) {
+    for (index, (byte, text)) in source_lines(text).enumerate() {
+        if omitted > 0 && (head..head + omitted).contains(&index) {
+            if index == head && head != 0 && tail != 0 {
+                note(rows, prefix, &omission_note(), width, detail.theme);
+            }
+            continue;
+        }
         let source = MappedLine::component(
             Line::from(Span::raw(text.to_owned())),
             Component::Field(field),
@@ -529,17 +549,10 @@ fn render_text(
             Wrapping::Literal,
         ));
     }
-    if !expanded && (count > compact_lines || clipped) {
-        let omitted = count.saturating_sub(compact_lines);
-        let notice = if omitted > 0 {
-            format!(
-                "… {omitted} {} {label} lines · {}",
-                if tail { "earlier" } else { "more" },
-                detail.details_hint()
-            )
-        } else {
-            format!("… long line shortened · {}", detail.details_hint())
-        };
+    if omitted > 0 && (head == 0 || tail == 0) {
+        note(rows, prefix, &omission_note(), width, detail.theme);
+    } else if clipped && omitted == 0 {
+        let notice = format!("… long line shortened · {}", detail.details_hint());
         note(rows, prefix, &notice, width, detail.theme);
     }
 }

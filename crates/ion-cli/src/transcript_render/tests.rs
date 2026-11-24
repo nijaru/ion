@@ -1823,7 +1823,9 @@ fn failed_command_surfaces_recorded_exit_and_stderr() {
     ] {
         let mut value = exit;
         value["stdout"] = serde_json::json!("partial check output");
-        value["stderr"] = serde_json::json!("compile failed");
+        value["stderr"] = serde_json::json!(
+            "compile failed\nprogress one\nprogress two\nprogress three\ncompiler exited"
+        );
         let projection = TranscriptProjection {
             items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
                 thinking: Vec::new(),
@@ -1861,8 +1863,18 @@ fn failed_command_surfaces_recorded_exit_and_stderr() {
                 rendered.contains(&format!("• {label} cargo test")),
                 "{rendered}"
             );
-            assert!(rendered.contains("stderr") && rendered.contains("compile failed"));
-            assert!(rendered.contains("partial check output"));
+            let first_diagnostic = rendered.find("compile failed").expect(&rendered);
+            let final_diagnostic = rendered.find("compiler exited").expect(&rendered);
+            let stdout = rendered.find("partial check output").expect(&rendered);
+            assert!(first_diagnostic < final_diagnostic, "{rendered}");
+            if mode == OutputDetail::Compact {
+                assert!(final_diagnostic < stdout, "{rendered}");
+                assert!(rendered.contains("2 middle stderr lines"), "{rendered}");
+                assert!(!rendered.contains("progress one"), "{rendered}");
+            } else {
+                assert!(stdout < first_diagnostic, "{rendered}");
+                assert!(rendered.contains("progress one"), "{rendered}");
+            }
             if let Some(cause) = cause {
                 assert!(
                     rendered.contains(cause) && rendered.contains("status unavailable"),
