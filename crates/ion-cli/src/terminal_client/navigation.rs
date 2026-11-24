@@ -350,14 +350,21 @@ fn session_detail(session: &SessionSummary, current: bool, now: SystemTime) -> S
             fit_line(&identity, MAX_MODEL_METADATA_WIDTH)
         },
     );
-    format!(
+    let mut detail = format!(
         "id {}{} · {} turn(s)\nmodel {} · {}",
         plain(&session.id),
         if current { " · current Session" } else { "" },
         session.turns,
         model,
         activity_label(session.updated, now)
-    )
+    );
+    if let Some(prompt) = session.latest_prompt.as_deref()
+        && Some(prompt) != session.preview.as_deref()
+    {
+        detail.push_str("\nlatest prompt: ");
+        detail.push_str(&plain(prompt));
+    }
+    detail
 }
 
 fn activity_label(updated: SystemTime, now: SystemTime) -> String {
@@ -470,6 +477,7 @@ mod tests {
             cwd: Some("/workspace".into()),
             name: Some(name.into()),
             preview: Some("first prompt\nsecond line".into()),
+            latest_prompt: None,
             model,
             turns: 3,
             updated,

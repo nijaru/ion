@@ -7,6 +7,7 @@ pub(super) struct SessionSearch {
     cwd: String,
     id: String,
     preview: String,
+    latest_prompt: String,
 }
 
 impl SessionSearch {
@@ -21,6 +22,11 @@ impl SessionSearch {
             id: session.id.to_lowercase(),
             preview: session
                 .preview
+                .as_deref()
+                .unwrap_or_default()
+                .to_lowercase(),
+            latest_prompt: session
+                .latest_prompt
                 .as_deref()
                 .unwrap_or_default()
                 .to_lowercase(),
@@ -102,7 +108,13 @@ impl SessionQuery {
     }
 
     pub fn matches(&self, session: &SessionSearch) -> bool {
-        let fields = [&session.name, &session.cwd, &session.id, &session.preview];
+        let fields = [
+            &session.name,
+            &session.cwd,
+            &session.id,
+            &session.preview,
+            &session.latest_prompt,
+        ];
         self.0.iter().all(|token| match token {
             Token::Word(word) => {
                 fields.iter().any(|field| field.contains(word))

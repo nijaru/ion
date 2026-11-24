@@ -27,6 +27,7 @@ pub struct SessionSummary {
     pub cwd: Option<PathBuf>,
     pub name: Option<String>,
     pub preview: Option<String>,
+    pub latest_prompt: Option<String>,
     pub model: Option<ModelRef>,
     pub turns: usize,
     pub updated: SystemTime,
@@ -248,17 +249,18 @@ fn summary(path: PathBuf) -> Option<SessionSummary> {
     // its real error.
     let view = Session::inspect_metadata(&path).ok()?;
     let updated = modified(&path).ok()?;
-    let preview = view.first_input.map(|input| {
-        let label = match input {
-            SessionInputPreview::Prompt { text } => text.unwrap_or_else(|| "[image]".into()),
-            SessionInputPreview::Shell { command, excluded } => {
-                format!("{}{command}", if excluded { "!!" } else { "!" })
-            }
-        };
-        label
-            .chars()
+    let plain = |text: &str| {
+        text.chars()
             .map(|ch| if ch.is_control() { ' ' } else { ch })
-            .collect()
+            .collect::<String>()
+    };
+    let preview = view.first_input.map(|input| match input {
+        SessionInputPreview::Prompt { text } => {
+            text.as_deref().map_or_else(|| "[image]".into(), plain)
+        }
+        SessionInputPreview::Shell { command, excluded } => {
+            format!("{}{}", if excluded { "!!" } else { "!" }, plain(&command))
+        }
     });
     preview.as_ref()?;
     let id = view.id.to_string();
@@ -267,6 +269,7 @@ fn summary(path: PathBuf) -> Option<SessionSummary> {
         path,
         cwd: view.cwd,
         name: view.name,
+        latest_prompt: view.latest_prompt.as_deref().map(plain),
         preview,
         model: view.last_model,
         turns: view.turns,

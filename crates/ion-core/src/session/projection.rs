@@ -238,6 +238,7 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     let mut binding_runs = BTreeSet::new();
     let mut created_children = BTreeSet::new();
     let mut first_input = None;
+    let mut latest_prompt = None;
     for entry in entries {
         let entry = entry?;
         let entry = entry.borrow();
@@ -276,8 +277,16 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         if matches!(entry, SessionEntry::TurnStarted { .. }) {
             turns = turns.checked_add(1).ok_or(SessionError::InvalidHistory)?;
         }
-        if first_input.is_none() {
-            first_input = input_preview(entry);
+        if matches!(mode, ProjectionMode::Metadata)
+            && (first_input.is_none() || matches!(entry, SessionEntry::TurnStarted { .. }))
+        {
+            let preview = input_preview(entry);
+            if let Some(SessionInputPreview::Prompt { text: Some(text) }) = &preview {
+                latest_prompt = Some(text.clone());
+            }
+            if first_input.is_none() {
+                first_input = preview;
+            }
         }
     }
     let (settled, messages, context_changes) = if matches!(mode, ProjectionMode::Metadata) {
@@ -289,6 +298,7 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     Ok(HistoryProjection {
         turns,
         first_input,
+        latest_prompt,
         state,
         settled,
         messages,

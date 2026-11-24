@@ -495,6 +495,7 @@ fn prompt_metadata_uses_the_first_nonblank_line_bounded_by_unicode_characters() 
                 text: Some(expected)
             })
         );
+        assert_eq!(metadata.latest_prompt.as_deref(), Some("latest prompt"));
         assert_eq!(session.view().unwrap().entries, before);
         drop(session);
         let reopened = Session::open(&path).unwrap();

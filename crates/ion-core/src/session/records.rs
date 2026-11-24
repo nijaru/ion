@@ -247,6 +247,8 @@ pub struct SessionMetadata {
     pub last_model: Option<ModelRef>,
     pub turns: usize,
     pub first_input: Option<SessionInputPreview>,
+    /// Bounded preview of the most recent Turn input with text in the journal.
+    pub latest_prompt: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

@@ -1008,6 +1008,7 @@ mod tests {
             cwd: Some("/workspace".into()),
             name: Some("saved task".into()),
             preview: Some("saved prompt".into()),
+            latest_prompt: None,
             model: None,
             turns: 2,
             updated: UNIX_EPOCH,
@@ -1503,27 +1504,31 @@ mod tests {
                 Some("Beta Fix"),
                 "/work/AlphaProject",
                 "needle haystack",
+                Some("Normalize slug case"),
             ),
             (
                 "11111111-1111-4111-8111-abcdef012345",
                 None,
                 "/work/Other",
                 "B e t a",
+                None,
             ),
             (
                 "22222222-2222-4222-8222-987654321abc",
                 Some("École4 API2"),
                 "/work/café",
                 "tab\tline\nend",
+                None,
             ),
         ]
         .into_iter()
-        .map(|(id, name, cwd, preview)| SessionSummary {
+        .map(|(id, name, cwd, preview, latest_prompt)| SessionSummary {
             id: id.into(),
             path: id.into(),
             name: name.map(str::to_owned),
             cwd: Some(cwd.into()),
             preview: Some(preview.into()),
+            latest_prompt: latest_prompt.map(str::to_owned),
             model: None,
             turns: 1,
             updated: UNIX_EPOCH,
@@ -1547,6 +1552,7 @@ mod tests {
             ("\"beta fix\" needle", vec![0]),
             ("\"beta needle\"", vec![]),
             ("\"needle    haystack\"", vec![0]),
+            ("needle \"slug case\"", vec![0]),
             ("beta", vec![0]), // Preview characters do not acquire fuzzy matching.
             ("[current]", vec![]),
             ("needle missing", vec![]),
@@ -1586,6 +1592,7 @@ mod tests {
             name: name.map(str::to_owned),
             // A preview mentioning names must not make an unnamed Session named.
             preview: Some("saved named prompt".into()),
+            latest_prompt: None,
             model: None,
             turns: 1,
             updated: UNIX_EPOCH,

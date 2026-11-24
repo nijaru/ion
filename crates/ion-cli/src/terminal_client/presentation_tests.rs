@@ -1585,6 +1585,7 @@ fn session_picker_detail_never_hides_the_selected_row() {
                     cwd: None,
                     name: Some("saved task".into()),
                     preview: Some("saved prompt".into()),
+                    latest_prompt: None,
                     model: Some(ion_ai::ModelRef {
                         provider: "smoke".into(),
                         model: "model".into(),

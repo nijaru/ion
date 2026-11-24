@@ -623,6 +623,7 @@ impl State {
 struct HistoryProjection {
     turns: usize,
     first_input: Option<SessionInputPreview>,
+    latest_prompt: Option<String>,
     state: State,
     settled: BTreeSet<u64>,
     messages: Vec<ProjectedMessage>,
@@ -845,6 +846,7 @@ impl Session {
             last_model: projection.state.last_model,
             turns: projection.turns,
             first_input: projection.first_input,
+            latest_prompt: projection.latest_prompt,
         })
     }
 

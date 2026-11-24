@@ -15,7 +15,7 @@ ion sessions         # list saved Sessions
 ion --session UUID   # reopen a particular Session
 ```
 
-In chat, `/name Fix parser tests` names the current Session. `/resume` opens the saved-Session browser; search by name, prompt preview, ID or directory. Quoted phrases and multiple search terms are supported. The browser marks the current Session and shows the full ID and recorded model in its details. Follow the displayed controls to filter named Sessions or cancel without switching.
+In chat, `/name Fix parser tests` names the current Session. `/resume` opens the saved-Session browser; search by name, opening or latest prompt preview, ID or directory. Quoted phrases and multiple search terms are supported. The browser marks the current Session and shows the full ID and recorded model in its details. Follow the displayed controls to filter named Sessions or cancel without switching.
 
 The live `/resume` browser stays in the current working directory. To choose a Session from another directory, start with `ion -r` and use its all-folders control. `/session` shows the current Session and context details; `/new` starts a new conversation.
 
