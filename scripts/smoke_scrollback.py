@@ -293,6 +293,22 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         resize_unsent_draft([(24, 7)])
         tmux("send-keys", "-t", "ion", "C-c", "C-c")
 
+        # A key can reach Ion after kernel resize but before the next paint.
+        # Up should move within the draft using the last painted wrapping.
+        tmux("set-buffer", "RESIZE_TOP\nRESIZE_BOTTOM")
+        tmux("paste-buffer", "-p", "-d", "-t", "ion")
+        while "RESIZE_BOTTOM" not in tmux("capture-pane", "-p", "-t", "ion"):
+            assert time.monotonic() < deadline, "multiline draft did not paint"
+            time.sleep(0.02)
+        tmux("resize-window", "-t", "ion", "-x", "56", "-y", "28", ";",
+             "send-keys", "-t", "ion", "Up", "!")
+        while "RESIZE_TOP!" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert "RESIZE_BOTTOM!" not in pane, f"resize swallowed Up:\n{pane}"
+            assert time.monotonic() < deadline, f"resize draft did not reconcile:\n{pane}"
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "C-c", "C-c")
+        tmux("resize-window", "-t", "ion", "-x", "100", "-y", "30")
+
         # tmux reflows immediately but throttles queued PTY sizes by 250 ms.
         # This must not turn transient geometry into cancellation of native work.
         command("!printf 'once\\n' >> resize-once; echo $$ > resize.pid; exec sleep 30", "Running shell")

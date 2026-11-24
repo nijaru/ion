@@ -99,11 +99,6 @@ impl Editor {
         self.editor_width = Some(width);
     }
 
-    pub(super) fn invalidate_geometry(&mut self) {
-        self.editor_width = None;
-        self.preferred_column = None;
-    }
-
     pub(super) fn move_vertical(&mut self, down: bool) {
         let Some(width) = self.editor_width else {
             return;

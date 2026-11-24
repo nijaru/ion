@@ -595,8 +595,9 @@ fn invalidate_resized_input(
         screen.primary_size()
     };
     if size != published {
+        // Stale paint cannot authorize a selection. Keyboard cursor motion
+        // still follows the last painted wrapping until a new frame lands.
         ui.invalidate_interaction_paint();
-        ui.editor.invalidate_geometry();
     }
     Ok(())
 }
