@@ -437,29 +437,6 @@ fn ambiguous_edit(source: &str, old: &str, index: usize, first: usize, second: u
     )
 }
 
-fn missing_edit_message(source: &str, old: &str, index: usize) -> String {
-    // Suggest the physical line that `read` would return, not a line in the
-    // normalized edit buffer (where lone CRs also count as line breaks).
-    let needle = old.trim();
-    if !old.contains('\n') && !needle.is_empty() {
-        let mut candidates = source
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.trim() == needle);
-        if let Some((line, _)) = candidates.next()
-            && candidates.next().is_none()
-        {
-            return format!(
-                "edits[{index}].old_text was not found; check line {} and copy its exact whitespace",
-                line + 1
-            );
-        }
-    }
-    format!(
-        "edits[{index}].old_text was not found; reread the target and copy the current text, including indentation and trailing spaces"
-    )
-}
-
 fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<String, String> {
     struct Matched<'a> {
         start: usize,
@@ -475,7 +452,9 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
             return Err(format!("edits[{index}].old_text must not be empty"));
         }
         let Some(start) = normalized.find(&old) else {
-            return Err(missing_edit_message(source, &old, index));
+            return Err(format!(
+                "edits[{index}].old_text was not found; reread the target and copy the current text, including indentation and trailing spaces"
+            ));
         };
         // Search after the first character, not after the whole match, so
         // overlapping occurrences are ambiguous too ("aa" in "aaa").
@@ -1108,30 +1087,6 @@ mod tests {
             fs::read_to_string(path).unwrap(),
             source.replacen("header\r\nααα", "updated", 1)
         );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
-    fn edit_whitespace_miss_points_to_unique_line_without_writing() {
-        let root = std::env::temp_dir().join(format!("ion-edit-hint-{}", uuid::Uuid::now_v7()));
-        fs::create_dir(&root).unwrap();
-        let path = root.join("file.txt");
-        let stop = CancellationToken::new();
-        let input =
-            json!({"path":"file.txt", "edits":[{"old_text":"\ttarget", "new_text":"updated"}]});
-        for (source, has_hint) in [
-            ("header\r\n  target  \r\nlast\r\n", true),
-            ("header\rsegment\n  target  \n", true),
-            ("header\n  target  \n target \n", false),
-        ] {
-            fs::write(&path, source).unwrap();
-            let rejected = edit(&root, &input, &stop, None);
-            assert!(rejected.is_error, "{:?}", rejected.value);
-            let error = rejected.value["error"].as_str().unwrap();
-            assert!(error.contains("old_text was not found"), "{error}");
-            assert_eq!(error.contains("check line 2"), has_hint, "{error}");
-            assert_eq!(fs::read_to_string(&path).unwrap(), source);
-        }
         fs::remove_dir_all(root).unwrap();
     }
 
