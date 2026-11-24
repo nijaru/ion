@@ -437,6 +437,57 @@ fn ambiguous_edit(source: &str, old: &str, index: usize, first: usize, second: u
     )
 }
 
+// Like Pi and Codex, try a less strict match only after an exact miss.
+// Use whole lines, as Codex does, so trimming cannot widen a substring edit.
+fn trailing_whitespace_view(text: &str) -> String {
+    let mut view = String::with_capacity(text.len() + 2);
+    view.push('\n');
+    for line in text.split_terminator('\n') {
+        view.push_str(line.trim_end_matches([' ', '\t']));
+        view.push('\n');
+    }
+    view
+}
+
+fn trailing_whitespace_match(
+    source: &str,
+    view: &str,
+    old: &str,
+) -> Result<Option<std::ops::Range<usize>>, ()> {
+    if old.trim().is_empty() {
+        return Ok(None);
+    }
+    let needle = trailing_whitespace_view(old);
+    let has_final_newline = old.ends_with('\n');
+    let next = |from| view[from..].find(&needle).map(|relative| from + relative);
+    // Start one byte later to detect overlapping candidates as well. Both
+    // needle boundaries are newlines; only the terminal sentinel can be fake.
+    let mut candidates = std::iter::successors(next(0), |start| next(start + 1)).filter(|start| {
+        !has_final_newline || source.ends_with('\n') || start + needle.len() != view.len()
+    });
+    let Some(start) = candidates.next() else {
+        return Ok(None);
+    };
+    if candidates.next().is_some() {
+        return Err(());
+    }
+
+    let first_line = view[..start].bytes().filter(|&byte| byte == b'\n').count();
+    let lines = old.split_terminator('\n').count();
+    // Translate back into the original LF view. Only the chosen span is
+    // replaced; whitespace outside it is never normalized on disk.
+    let mut offsets = std::iter::once(0)
+        .chain(source.match_indices('\n').map(|(index, _)| index + 1))
+        .chain(std::iter::once(source.len()))
+        .skip(first_line);
+    let start = offsets.next().expect("matched start line");
+    let mut end = offsets.nth(lines - 1).expect("matched end line");
+    if !has_final_newline && source[..end].ends_with('\n') {
+        end -= 1;
+    }
+    Ok(Some(start..end))
+}
+
 fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<String, String> {
     struct Matched<'a> {
         start: usize,
@@ -445,37 +496,45 @@ fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<St
         index: usize,
     }
     let normalized = normalize_newlines(source);
+    let mut whitespace_view = None;
     let mut matched = Vec::with_capacity(edits.len());
     for (index, edit) in edits.iter().enumerate() {
         let old = normalize_newlines(&edit.old_text);
         if old.is_empty() {
             return Err(format!("edits[{index}].old_text must not be empty"));
         }
-        let Some(start) = normalized.find(&old) else {
-            return Err(format!(
-                "edits[{index}].old_text was not found; reread the target and copy the current text, including indentation and trailing spaces"
-            ));
+        let span = if let Some(start) = normalized.find(&old) {
+            // Advance one character so overlapping occurrences are ambiguous too.
+            let next = start + old.chars().next().expect("nonempty match").len_utf8();
+            if let Some(relative) = normalized[next..].find(&old) {
+                return Err(ambiguous_edit(
+                    &normalized,
+                    &old,
+                    index,
+                    start,
+                    next + relative,
+                ));
+            }
+            start..start + old.len()
+        } else {
+            let view = whitespace_view.get_or_insert_with(|| trailing_whitespace_view(&normalized));
+            match trailing_whitespace_match(&normalized, view, &old) {
+                Ok(Some(span)) => span,
+                Ok(None) => {
+                    return Err(format!(
+                        "edits[{index}].old_text was not found; reread the target and copy the current text, including indentation and trailing spaces"
+                    ));
+                }
+                Err(()) => {
+                    return Err(format!(
+                        "edits[{index}].old_text is ambiguous after ignoring trailing whitespace; include more surrounding text"
+                    ));
+                }
+            }
         };
-        // Search after the first character, not after the whole match, so
-        // overlapping occurrences are ambiguous too ("aa" in "aaa").
-        let next = start
-            + normalized[start..]
-                .chars()
-                .next()
-                .expect("match is nonempty")
-                .len_utf8();
-        if let Some(relative) = normalized[next..].find(&old) {
-            return Err(ambiguous_edit(
-                &normalized,
-                &old,
-                index,
-                start,
-                next + relative,
-            ));
-        }
         matched.push(Matched {
-            start,
-            end: start + old.len(),
+            start: span.start,
+            end: span.end,
             replacement: &edit.new_text,
             index,
         });
@@ -1074,7 +1133,7 @@ mod tests {
             "edits[0].old_text is ambiguous: found at least 5 matches (first start lines: 2, 2, 3, 4); include more surrounding text"
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), source);
-        let missing = run("header \nααα");
+        let missing = run(" header\nααα");
         assert!(missing.is_error);
         assert_eq!(
             missing.value["error"],
@@ -1088,6 +1147,57 @@ mod tests {
             source.replacen("header\r\nααα", "updated", 1)
         );
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit_fallback_recovers_trailing_whitespace_and_preserves_other_bytes() {
+        let edit = |old: &str, new: &str| TextEdit {
+            old_text: old.into(),
+            new_text: new.into(),
+        };
+        assert_eq!(
+            replace_text_preserving_format(
+                "header \t\r\n  first \t\r\n  second\r\nfooter \t\n",
+                &[edit("  first\n  second", "  FIRST\n  SECOND")],
+            )
+            .unwrap(),
+            "header \t\r\n  FIRST\r\n  SECOND\r\nfooter \t\n"
+        );
+        assert_eq!(
+            replace_text_preserving_format("line\t\nline  ", &[edit("line  ", "updated")]).unwrap(),
+            "line\t\nupdated"
+        );
+        assert_eq!(
+            replace_text_preserving_format("header\nline", &[edit("line  ", "updated")]).unwrap(),
+            "header\nupdated"
+        );
+    }
+
+    #[test]
+    fn edit_fallback_rejects_ambiguity_overlap_and_non_line_matches() {
+        let edit = |old: &str| TextEdit {
+            old_text: old.into(),
+            new_text: "updated".into(),
+        };
+        for (source, edits, message) in [
+            (
+                "line\t\nline\t\nline\t\n",
+                vec![edit("line\nline\n")],
+                "ambiguous",
+            ),
+            (
+                "line \t\n  second\n",
+                vec![edit("line\n  second"), edit("second")],
+                "overlap",
+            ),
+            ("  line\t\n", vec![edit("line \n")], "not found"),
+            ("prefix line\t\n", vec![edit("line \n")], "not found"),
+            ("line\t", vec![edit("line\n")], "not found"),
+            ("\t\n", vec![edit(" \n")], "not found"),
+        ] {
+            let error = replace_text_preserving_format(source, &edits).unwrap_err();
+            assert!(error.contains(message), "{error}");
+        }
     }
 
     #[test]
