@@ -418,10 +418,7 @@ mod tests {
             "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
         })).unwrap();
         let text = format!("\t{}Z\nSECOND_LINE", "🦀é界".repeat(40));
-        let expected = format!(
-            " {}",
-            "🦀é界".repeat(40).chars().take(119).collect::<String>()
-        );
+        let expected = "🦀é界".repeat(40);
         for (content, preview) in [
             (vec![Content::Image(image.clone())], "[image]".to_owned()),
             (

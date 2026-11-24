@@ -463,9 +463,13 @@ fn passive_metadata_is_bounded_validated_and_does_not_recover_history() {
 }
 
 #[test]
-fn prompt_metadata_uses_only_the_first_line_bounded_by_unicode_characters() {
+fn prompt_metadata_uses_the_first_nonblank_line_bounded_by_unicode_characters() {
     for (prompt, expected) in [
         ("短🦀é\nSECOND_LINE".into(), "短🦀é".into()),
+        (
+            format!("\n\t \r\n{}短🦀é  \nSECOND_LINE", " ".repeat(150)),
+            "短🦀é".into(),
+        ),
         (
             format!("{}\nSECOND_LINE", "🦀é界".repeat(40)),
             "🦀é界".repeat(40),

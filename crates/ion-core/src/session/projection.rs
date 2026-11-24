@@ -301,7 +301,8 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
 pub(super) fn input_preview(entry: &SessionEntry) -> Option<SessionInputPreview> {
     let label = |text: &str| {
         text.lines()
-            .next()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
             .unwrap_or("")
             .chars()
             .take(120)
