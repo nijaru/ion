@@ -90,6 +90,21 @@ impl ActiveOperation {
     }
 }
 
+#[derive(Default)]
+struct PreviewText(String);
+
+impl vte::Perform for PreviewText {
+    fn print(&mut self, ch: char) {
+        self.0.push(ch);
+    }
+
+    fn execute(&mut self, byte: u8) {
+        if matches!(byte, b'\n' | b'\r' | b'\t') {
+            self.0.push(char::from(byte));
+        }
+    }
+}
+
 pub(super) fn preview_rows(
     preview: &ion_core::ToolOutputPreview,
     width: usize,
@@ -102,10 +117,15 @@ pub(super) fn preview_rows(
     ] {
         let bytes = preview.bytes(stream);
         if !bytes.is_empty() {
-            let text = String::from_utf8_lossy(bytes);
-            // Display the latest update on each progress line, not a VT
-            // replay. Layout still sanitizes all remaining terminal controls.
-            let lines = text.trim_end_matches('\n').split('\n').map(|line| {
+            // Parse into plain text only. Never execute control sequences or
+            // change the bytes used for the saved result and machine events.
+            let mut text = PreviewText::default();
+            vte::Parser::new().advance(&mut text, String::from_utf8_lossy(bytes).as_bytes());
+            if text.0.is_empty() {
+                continue;
+            }
+            // Display the latest update on each progress line, not a VT replay.
+            let lines = text.0.trim_end_matches('\n').split('\n').map(|line| {
                 line.trim_end_matches('\r')
                     .rsplit('\r')
                     .next()
@@ -487,9 +507,9 @@ mod tests {
     fn live_preview_replaces_progress_updates_without_altering_captured_bytes() {
         use ion_core::OutputStream;
         let mut preview = ion_core::ToolOutputPreview::default();
-        let stdout = b"start\r\n10%\r20%\r\n30%\r40%\r";
+        let stdout = b"start\r\n10%\r\x1b[32m20%\x1b[0m\r\n30%\r\x1b[2K40%\r\x1b[";
         preview.append(OutputStream::Stdout, stdout);
-        preview.append(OutputStream::Stderr, b"warning\r\n");
+        preview.append(OutputStream::Stderr, b"\x1b]0;ignored title\x07warning\r\n");
         assert_eq!(
             preview_rows(&preview, 80, 5),
             ["stdout · start", "20%", "40%", "stderr · warning"]

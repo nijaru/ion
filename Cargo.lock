@@ -1629,6 +1629,7 @@ dependencies = [
  "unicode-segmentation",
  "unicode-width",
  "uuid",
+ "vte",
 ]
 
 [[package]]
