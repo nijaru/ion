@@ -64,7 +64,7 @@ When command output spills, **Full output** points to a temporary file for the s
 
 ## External editors and terminal state
 
-`/editor` opens the draft in an external editor. Editors share Ion's controlling-terminal input, handle their own Ctrl-C and return the original draft when cancelled. Ion preserves the caller's terminal input settings across editor failures and leaves an editor's unclosed alternate screen when the terminal reports it. On terminals without screen-state reporting (DECRQM 1049), editors must restore their own screen.
+`/editor` opens the draft in an external editor. Draft and question editors start in the active Session's working directory and share Ion's controlling-terminal input, handle their own Ctrl-C and return the original draft when cancelled. Ion preserves the caller's terminal input settings across editor failures and leaves an editor's unclosed alternate screen when the terminal reports it. On terminals without screen-state reporting (DECRQM 1049), editors must restore their own screen.
 
 Chat temporarily enables grapheme clustering (mode 2027) when the terminal reports it as supported and currently off, then restores the prior setting when yielding the terminal. Without reported support, rendering stays best-effort; complex emoji alignment depends on the terminal and its Unicode width tables.
 

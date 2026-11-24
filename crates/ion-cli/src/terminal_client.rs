@@ -788,6 +788,7 @@ async fn edit_text_in_terminal(
     screen: &mut Screen,
     interrupt: &mut tokio::signal::unix::Signal,
     termination: &CancellationToken,
+    cwd: &Path,
     text: &str,
     max_bytes: usize,
 ) -> Result<Result<String>> {
@@ -797,7 +798,7 @@ async fn edit_text_in_terminal(
             .await
             .context("release chat surface for editor")?;
         let edited = terminal
-            .with_external(|| crate::external_editor::edit(text, max_bytes, termination))
+            .with_external(|| crate::external_editor::edit(cwd, text, max_bytes, termination))
             .await
             .context("external editor terminal handoff")?;
         *screen = reacquire_inline_screen(terminal, screen, termination)
@@ -1761,6 +1762,7 @@ async fn apply_question_action(
                 screen,
                 interrupt,
                 &ui.termination,
+                &ui.cwd,
                 &text,
                 ion_app::MAX_ANSWER_BYTES,
             )

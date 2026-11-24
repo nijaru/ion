@@ -276,6 +276,7 @@ pub(super) async fn dispatch_command(
                 screen,
                 interrupt,
                 &ui.termination,
+                &ui.cwd,
                 &ui.editor.draft,
                 super::MAX_DRAFT,
             )

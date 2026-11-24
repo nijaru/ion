@@ -3,7 +3,7 @@ use std::{
     fs::{self, DirBuilder, OpenOptions},
     io::Write,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
 };
@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 const EDITOR_STOP_GRACE: Duration = Duration::from_secs(1);
 
 pub async fn edit(
+    cwd: &Path,
     content: &str,
     max_bytes: usize,
     termination: &CancellationToken,
@@ -31,11 +32,12 @@ pub async fn edit(
     // Native input is bound to the controlling terminal, not possibly
     // redirected stdin. The editor must receive the same interactive source.
     let input = fs::File::open("/dev/tty").context("cannot open terminal input for editor")?;
-    edit_with_command(&command, content, max_bytes, input.into(), termination).await
+    edit_with_command(&command, cwd, content, max_bytes, input.into(), termination).await
 }
 
 async fn edit_with_command(
     command: &str,
+    cwd: &Path,
     content: &str,
     max_bytes: usize,
     input: Stdio,
@@ -50,7 +52,8 @@ async fn edit_with_command(
     let directory = std::env::temp_dir().join(format!("ion-editor-{}", uuid::Uuid::now_v7()));
     DirBuilder::new().mode(0o700).create(&directory)?;
     let _guard = DraftDir(directory.clone());
-    let path = directory.join("prompt.md");
+    // A relative TMPDIR still resolves in the parent, not the workspace.
+    let path = std::path::absolute(&directory)?.join("prompt.md");
     OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -61,14 +64,28 @@ async fn edit_with_command(
         !termination.is_cancelled(),
         "editor cancelled by termination request"
     );
-    let mut child = Command::new(program)
+    // Keep the existing meaning of an explicit path in VISUAL/EDITOR. Avoid
+    // resolving a relative editor executable inside the workspace instead.
+    let program = if program.contains('/') {
+        std::path::absolute(program)?
+    } else {
+        PathBuf::from(program)
+    };
+    let mut child = Command::new(&program)
+        .current_dir(cwd)
         .args(options)
         .arg(&path)
         .stdin(input)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
-        .with_context(|| format!("cannot launch editor {program}"))?;
+        .with_context(|| {
+            format!(
+                "cannot launch editor {} in {}",
+                program.display(),
+                cwd.display()
+            )
+        })?;
     let status = tokio::select! {
         biased;
         status = child.wait() => status.context("join editor")?,
@@ -137,7 +154,8 @@ mod tests {
         );
         let command = format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap());
         let termination = CancellationToken::new();
-        let editor = edit_with_command(&command, "original", 64, Stdio::null(), &termination);
+        let editor =
+            edit_with_command(&command, &root, "original", 64, Stdio::null(), &termination);
         let observer = async {
             let started = tokio::time::timeout(std::time::Duration::from_secs(5), async {
                 while !marker.exists() {
@@ -180,11 +198,18 @@ mod tests {
                 .exists()
         );
         assert!(
-            edit_with_command("/bin/false", "original", 64, Stdio::null(), &termination)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("termination request")
+            edit_with_command(
+                "/bin/false",
+                &root,
+                "original",
+                64,
+                Stdio::null(),
+                &termination
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("termination request")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -202,7 +227,8 @@ mod tests {
         );
         let command = format!("/bin/sh -c {}", shlex::try_quote(&script).unwrap());
         let termination = CancellationToken::new();
-        let editor = edit_with_command(&command, "original", 64, Stdio::null(), &termination);
+        let editor =
+            edit_with_command(&command, &root, "original", 64, Stdio::null(), &termination);
         let observer = async {
             let marker = tokio::time::timeout(Duration::from_secs(3), async {
                 while !marker.exists() {
@@ -238,8 +264,14 @@ mod tests {
     #[tokio::test]
     async fn editor_success_and_failure_keep_draft_contract() {
         let termination = CancellationToken::new();
+        let workspace =
+            std::env::temp_dir().join(format!("ion-editor-cwd-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&workspace).unwrap();
+        let _guard = DraftDir(workspace.clone());
+        fs::write(workspace.join("notes.txt"), "changed").unwrap();
         let edited = edit_with_command(
-            "/bin/sh -c 'printf changed > \"$0\"'",
+            "/bin/sh -c 'cat notes.txt > \"$0\"'",
+            &workspace,
             "original",
             64,
             Stdio::null(),
@@ -251,6 +283,7 @@ mod tests {
         assert_eq!(
             edit_with_command(
                 r#"/bin/sh -c 'printf "\357\273\277abcd\n" > "$0"'"#,
+                &workspace,
                 "original",
                 4,
                 Stdio::null(),
@@ -265,15 +298,23 @@ mod tests {
             r#"/bin/sh -c 'printf "\357\273\277abcd\r" > "$0"'"#,
         ] {
             assert_eq!(
-                edit_with_command(command, "original", 4, Stdio::null(), &termination)
-                    .await
-                    .unwrap(),
+                edit_with_command(
+                    command,
+                    &workspace,
+                    "original",
+                    4,
+                    Stdio::null(),
+                    &termination
+                )
+                .await
+                .unwrap(),
                 "abcd"
             );
         }
         assert_eq!(
             edit_with_command(
                 r#"/bin/sh -c 'printf "a\r\nb\r\n" > "$0"'"#,
+                &workspace,
                 "original",
                 4,
                 Stdio::null(),
@@ -286,6 +327,7 @@ mod tests {
         assert!(
             edit_with_command(
                 "/bin/sh -c 'exit 7'",
+                &workspace,
                 "original",
                 64,
                 Stdio::null(),
@@ -299,9 +341,16 @@ mod tests {
             r#"/bin/sh -c 'printf "\377" > "$0"'"#,
         ] {
             assert!(
-                edit_with_command(command, "original", 4, Stdio::null(), &termination)
-                    .await
-                    .is_err()
+                edit_with_command(
+                    command,
+                    &workspace,
+                    "original",
+                    4,
+                    Stdio::null(),
+                    &termination
+                )
+                .await
+                .is_err()
             );
         }
     }
