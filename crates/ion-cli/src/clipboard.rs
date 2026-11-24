@@ -18,6 +18,13 @@ pub enum CopyOutcome {
 }
 
 pub async fn copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutcome> {
+    // A native helper on the remote host cannot reach the caller's clipboard.
+    if ["SSH_CONNECTION", "SSH_CLIENT", "MOSH_CONNECTION"]
+        .iter()
+        .any(|key| std::env::var_os(key).is_some_and(|value| !value.is_empty()))
+    {
+        return request_terminal_copy(text, terminal);
+    }
     let mut commands: Vec<(&str, &[&str])> = Vec::new();
     if cfg!(target_os = "macos") {
         commands.push(("pbcopy", &[]));
@@ -35,22 +42,23 @@ pub async fn copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutc
             return Ok(CopyOutcome::Copied);
         }
     }
-    let remote = std::env::var_os("SSH_CONNECTION").is_some()
-        || std::env::var_os("SSH_CLIENT").is_some()
-        || std::env::var_os("MOSH_CONNECTION").is_some();
     let display =
         std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_some();
-    if remote || (cfg!(target_os = "linux") && !display) {
-        let encoded = STANDARD.encode(text);
-        if encoded.len() > OSC52_LIMIT {
-            bail!("clipboard text exceeds the terminal clipboard request size limit");
-        }
-        let mut output = terminal.output()?;
-        output.write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes())?;
-        output.flush()?;
-        return Ok(CopyOutcome::RequestedFromTerminal);
+    if cfg!(target_os = "linux") && !display {
+        return request_terminal_copy(text, terminal);
     }
     bail!("clipboard is unavailable in this environment")
+}
+
+fn request_terminal_copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutcome> {
+    if text.len() > OSC52_LIMIT / 4 * 3 {
+        bail!("clipboard text exceeds the terminal clipboard request size limit");
+    }
+    let encoded = STANDARD.encode(text);
+    let mut output = terminal.output()?;
+    output.write_all(format!("\x1b]52;c;{encoded}\x07").as_bytes())?;
+    output.flush()?;
+    Ok(CopyOutcome::RequestedFromTerminal)
 }
 
 pub fn failure_status(error: anyhow::Error) -> Result<String> {

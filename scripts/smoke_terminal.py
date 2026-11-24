@@ -1,5 +1,6 @@
 """Exercise a coding turn through Ion's actual terminal client and a PTY."""
 
+import base64
 import errno
 import fcntl
 import json
@@ -550,7 +551,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if sent_help_keys and b"app.clipboard.pasteImage" in output[help_start:] and b"app.details.nextPage" in output[help_start:] and not sent_copy:
                     os.write(master, b"\x18")
                     sent_copy = True
-                if sent_copy and b"Copied last assistant answer" in output and not sent_quit:
+                if sent_copy and b"Sent clipboard request to terminal" in output and not sent_quit:
                     os.write(master, b"\x04\x04")
                     sent_quit = True
                 if child.poll() is not None:
@@ -578,7 +579,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert "├ Edited data.txt".encode() in plain_output and "└ Ran cat data.txt created.txt".encode() in plain_output, "grouped tool tree was not rendered"
             assert b"THINKING_STEP_" not in plain_output, "hidden reasoning leaked into the terminal"
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_preparation and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
-            assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"
+            copies = re.findall(rb"\x1b\]52;c;([A-Za-z0-9+/=]+)\x07", output)
+            assert len(copies) == 1 and b"RESUMED" in base64.b64decode(copies[0], validate=True), copies
+            assert not copy_file.exists(), "remote copy invoked a host clipboard helper"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\nsecond token updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"
