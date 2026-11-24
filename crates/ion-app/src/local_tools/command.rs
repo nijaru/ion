@@ -7,7 +7,7 @@ use std::{
 use futures_util::FutureExt;
 use rustix::process::{Pid, Signal, WaitId, WaitIdOptions, kill_process_group, waitid};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
@@ -126,7 +126,7 @@ pub(super) async fn run(
         )
     };
     tokio::pin!(captures);
-    let (mut stdout, mut stderr) = tokio::select! {
+    let (stdout, stderr) = tokio::select! {
         biased;
         () = stop.cancelled(), if !cancelled => {
             cancelled = true;
@@ -176,41 +176,20 @@ pub(super) async fn run(
         ),
     };
     let mut artifacts = Vec::new();
-    let stdout_artifact = stdout.artifact.take().map(|artifact| {
-        let index = artifacts.len();
-        artifacts.push(artifact);
-        index
-    });
-    let stderr_artifact = stderr.artifact.take().map(|artifact| {
-        let index = artifacts.len();
-        artifacts.push(artifact);
-        index
-    });
-    let (stdout_text, stdout_lossy) = stdout.preview();
-    let (stderr_text, stderr_lossy) = stderr.preview();
-    let mut result = json!({
-        "exit_code": exit_code, "signal": signal, "wait_error": wait_error,
-        "stdout_lossy": stdout_lossy,
-        "stderr_lossy": stderr_lossy,
-        "stdout": stdout_text, "stderr": stderr_text,
-        "stdout_complete": stdout.complete, "stderr_complete": stderr.complete,
-        "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0),
-        "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0),
-        "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes,
-        "stdout_artifact": stdout_artifact, "stderr_artifact": stderr_artifact,
-        "stdout_artifact_error": stdout.full_error, "stderr_artifact_error": stderr.full_error,
-        "cancelled": cancelled, "timed_out": timed_out,
-    });
-    for (stream, capture) in [("stdout", &stdout), ("stderr", &stderr)] {
-        match &capture.spill {
-            Ok(Some(path)) => result[format!("{stream}_file")] = json!(path),
-            Err(error) => result[format!("{stream}_file_error")] = json!(error.to_string()),
-            Ok(None) => {}
-        }
-    }
+    let mut result = [
+        ("exit_code".into(), json!(exit_code)),
+        ("signal".into(), json!(signal)),
+        ("wait_error".into(), json!(wait_error)),
+        ("cancelled".into(), json!(cancelled)),
+        ("timed_out".into(), json!(timed_out)),
+    ]
+    .into_iter()
+    .collect();
+    stdout.record(OutputStream::Stdout, &mut result, &mut artifacts);
+    stderr.record(OutputStream::Stderr, &mut result, &mut artifacts);
     ToolOutput {
         artifacts,
-        value: result,
+        value: Value::Object(result),
         images: Vec::new(),
         is_error: !succeeded || cancelled || timed_out,
     }
@@ -283,6 +262,40 @@ struct Captured {
 }
 
 impl Captured {
+    fn record(
+        mut self,
+        stream: OutputStream,
+        result: &mut Map<String, Value>,
+        artifacts: &mut Vec<ion_core::ArtifactRef>,
+    ) {
+        let stream = stream.label();
+        let artifact_index = self.artifact.take().map(|artifact| {
+            let index = artifacts.len();
+            artifacts.push(artifact);
+            index
+        });
+        let (text, lossy) = self.preview();
+        result.insert(stream.into(), json!(text));
+        for (suffix, value) in [
+            ("lossy", json!(lossy)),
+            ("complete", json!(self.complete)),
+            (
+                "truncated",
+                json!(!self.complete || self.omitted_bytes != Some(0)),
+            ),
+            ("omitted_bytes", json!(self.omitted_bytes)),
+            ("artifact", json!(artifact_index)),
+            ("artifact_error", json!(self.full_error)),
+        ] {
+            result.insert(format!("{stream}_{suffix}"), value);
+        }
+        match self.spill {
+            Ok(Some(path)) => result.insert(format!("{stream}_file"), json!(path)),
+            Err(error) => result.insert(format!("{stream}_file_error"), json!(error.to_string())),
+            Ok(None) => None,
+        };
+    }
+
     fn preview(&self) -> (Cow<'_, str>, bool) {
         if self.has_gap {
             let (head, tail) = self.bytes.split_at(OUTPUT_HEAD_BYTES);
@@ -965,9 +978,10 @@ mod tests {
             CancellationToken::new(),
         )
         .await;
-        let captures = ["stdout", "stderr"].map(|stream| {
-            let reference = &output.artifacts
-                [output.value[format!("{stream}_artifact")].as_u64().unwrap() as usize];
+        let captures = [("stdout", 0), ("stderr", 1)].map(|(stream, index)| {
+            assert_eq!(output.value[format!("{stream}_artifact")], index);
+            let reference = &output.artifacts[index];
+            assert_eq!(reference.label, stream);
             assert!(reference.complete);
             owner.bytes(reference)
         });
