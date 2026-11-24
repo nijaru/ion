@@ -327,14 +327,17 @@ pub(crate) fn render_command(
     };
     for field in fields {
         let stream = field.label();
+        let incomplete = output[format!("{stream}_complete")].as_bool() == Some(false);
+        let truncated = output[format!("{stream}_truncated")].as_bool() == Some(true);
         if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
             let line_count = text.lines().count();
-            // Keep short stderr warnings visible; longer progress output
-            // from successful commands needn't fill the compact transcript.
-            if successful
-                && detail.detail == OutputDetail::Compact
-                && (field == Field::Stdout || line_count > compact_lines)
-            {
+            let fold_success = match field {
+                // Like Pi's collapsed output, keep the ending of a noisy
+                // command visible even when the full capture spills.
+                Field::Stdout => !truncated || incomplete,
+                _ => line_count > compact_lines,
+            };
+            if successful && detail.detail == OutputDetail::Compact && fold_success {
                 let unit = if line_count == 1 { "line" } else { "lines" };
                 note(
                     rows,
@@ -363,7 +366,7 @@ pub(crate) fn render_command(
                 );
             }
         }
-        if output[format!("{stream}_complete")].as_bool() == Some(false) {
+        if incomplete {
             note(
                 rows,
                 prefix,
@@ -371,7 +374,7 @@ pub(crate) fn render_command(
                 width,
                 detail.theme,
             );
-        } else if output[format!("{stream}_truncated")].as_bool() == Some(true) {
+        } else if truncated {
             let notice = match output[format!("{stream}_omitted_bytes")].as_u64() {
                 Some(bytes) => format!(
                     "… {stream} truncated · {bytes} raw bytes omitted · {}",
@@ -382,7 +385,7 @@ pub(crate) fn render_command(
             note(rows, prefix, &notice, width, detail.theme);
         }
         if let Some(path) = output[format!("{stream}_file")].as_str() {
-            let label = if output[format!("{stream}_complete")].as_bool() == Some(false) {
+            let label = if incomplete {
                 "Partial output"
             } else {
                 "Full output"
@@ -843,6 +846,49 @@ pub(crate) mod tests {
             rows.iter()
                 .any(|row| row.line.to_string().contains("SHORT_WARNING"))
         );
+    }
+
+    #[test]
+    fn successful_truncated_stdout_keeps_a_bounded_tail_in_compact_output() {
+        let keys = crate::keybindings::KeyBindings::default();
+        let theme = Theme::default();
+        let detail = RenderOptions::new(
+            OutputDetail::Compact,
+            &keys,
+            &theme,
+            ThinkingVisibility::Hidden,
+            std::path::Path::new("/workspace"),
+        );
+        for complete in [true, false] {
+            let output = json!({
+                "stdout": "BEGIN\nprogress 1\nprogress 2\nprogress 3\nPASSED\n",
+                "stdout_truncated": true,
+                "stdout_complete": complete,
+                "stdout_omitted_bytes": 5000,
+                "stdout_file": "/tmp/capture",
+            });
+            let mut rows = vec![];
+            render_command(&mut rows, &output, "", 100, &detail, 3, true);
+            let text = rows
+                .iter()
+                .map(|row| row.line.to_string())
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.contains("PASSED"), complete, "{text}");
+            assert!(
+                !text.contains("BEGIN") && !text.contains("progress 1"),
+                "{text}"
+            );
+            let disclosure = if complete {
+                "Full output"
+            } else {
+                "Partial output"
+            };
+            assert!(
+                text.contains(disclosure) && text.contains("/tmp/capture"),
+                "{text}"
+            );
+        }
     }
 
     #[test]

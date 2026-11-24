@@ -485,7 +485,7 @@ fn disclosure_hints_follow_configured_or_disabled_detail_action() {
         let published = rows(&items, 160, &options);
         for label in [
             "read outputs folded",
-            "stdout · 6 lines folded",
+            "earlier stdout lines",
             "stdout truncated",
             "more diff",
         ] {
