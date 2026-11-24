@@ -487,8 +487,10 @@ fn read_file<R: Read>(
 }
 
 fn line_text(segment: &str) -> &str {
-    let line = segment.strip_suffix('\n').unwrap_or(segment);
-    line.strip_suffix('\r').unwrap_or(line)
+    segment
+        .strip_suffix("\r\n")
+        .or_else(|| segment.strip_suffix('\n'))
+        .unwrap_or(segment)
 }
 
 /// Visible, UTF-8-safe line context of at most 1024 bytes around the first match.

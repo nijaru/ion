@@ -505,6 +505,25 @@ fn grep_context_keeps_neighbors_in_order_without_counting_them_as_matches() {
 }
 
 #[test]
+fn grep_preserves_a_bare_carriage_return_in_an_unterminated_line() {
+    let root = root("grep-bare-cr");
+    fs::write(root.join("mixed.txt"), b"needle\r\ntail\r").unwrap();
+    let value = run(
+        grep,
+        &root,
+        json!({"pattern": r"needle$|tail\r$", "context": 1}),
+    );
+    fs::remove_dir_all(root).unwrap();
+
+    let items = grep_matches(&value);
+    assert_eq!(items.len(), 2, "{value}");
+    assert_eq!(items[0]["text"], "needle");
+    assert_eq!(items[0]["context"][0]["text"], "tail\r");
+    assert_eq!(items[1]["text"], "tail\r");
+    assert_eq!(items[1]["byte_offset"], 8);
+}
+
+#[test]
 fn grep_long_lines_return_a_bounded_snippet_and_exact_byte_location() {
     let root = root("grep-long");
     let prefix = "x".repeat(5000);
