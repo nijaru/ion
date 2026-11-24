@@ -23,7 +23,7 @@ struct Inspection {
     id: uuid::Uuid,
     cwd: Option<PathBuf>,
     name: Option<String>,
-    #[serde(serialize_with = "omit_each")]
+    #[serde(serialize_with = "inspect_entries")]
     entries: Vec<SessionEntry>,
     #[serde(serialize_with = "omit_each")]
     messages: Vec<Message>,
@@ -335,6 +335,30 @@ where
     serializer.collect_seq(items.iter().map(OmitImages))
 }
 
+fn inspect_entries<S: Serializer>(
+    entries: &[SessionEntry],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct PositionedEntry<'a> {
+        entry: usize,
+        #[serde(flatten)]
+        fact: OmitImages<'a, SessionEntry>,
+    }
+
+    // SessionView retains every committed entry in journal order, even when
+    // its selected model context omits part of the journal.
+    serializer.collect_seq(
+        entries
+            .iter()
+            .enumerate()
+            .map(|(index, fact)| PositionedEntry {
+                entry: index + 1,
+                fact: OmitImages(fact),
+            }),
+    )
+}
+
 pub(crate) fn to_value(view: &SessionView) -> anyhow::Result<serde_json::Value> {
     Ok(serde_json::to_value(OmitImages(view))?)
 }
@@ -536,6 +560,14 @@ mod tests {
         let view = view();
         let original = serde_json::to_value(&view).unwrap();
         let mut expected = original.clone();
+        for (index, entry) in expected["entries"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .enumerate()
+        {
+            entry["entry"] = json!(index + 1);
+        }
         let marker = format!(
             "[base64 image data omitted: {} characters]",
             view.messages[0]
@@ -632,6 +664,7 @@ mod tests {
         let original = serde_json::to_value(&view).unwrap();
         let mut expected = original.clone();
         for index in [0, 1] {
+            expected["entries"][index]["entry"] = json!(index + 1);
             expected["entries"][index]["data"]["record"]["spec"]["input"]["content"][1]["Image"]
                 ["data"] = json!(marker);
         }

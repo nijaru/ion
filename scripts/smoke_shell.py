@@ -294,7 +294,8 @@ for mode in ("inline", "fullscreen"):
             listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, capture_output=True, text=True, check=True).stdout
             session_id = listing.split("\t")[0]
             inspect = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, capture_output=True, text=True, check=True).stdout
-            entries = observed_shells(json.loads(inspect))
+            view = json.loads(inspect)
+            entries = observed_shells(view)
             assert len(entries) == 3, entries
             assert entries[0][1]["output"]["value"]["stdout"] == "VISIBLE_OUTPUT\n" and not entries[0][0]["exclude_from_context"]
             assert entries[1][1]["output"]["value"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["value"]["exit_code"] == 7 and entries[1][1]["output"]["is_error"]
@@ -303,7 +304,7 @@ for mode in ("inline", "fullscreen"):
             assert output_path.parent == work and output_path.read_bytes() == b"PRIVATE_OUTPUT\n\xff"
             assert output_path.stat().st_mode & 0o777 == 0o600
             output_path.unlink()
-            settlement = max(index for index, entry in enumerate(json.loads(inspect)["entries"], 1) if entry["kind"] == "user_shell_settled")
+            settlement = max(entry["entry"] for entry in view["entries"] if entry["kind"] == "user_shell_settled")
             fallback = subprocess.check_output([binary, "--cwd", workspace, "--session", session_id, "artifact", str(settlement), "0"], env=env)
             assert fallback == b"PRIVATE_OUTPUT\n\xff"
             transcript = (workspace / "session.txt").read_text()
