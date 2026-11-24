@@ -1236,7 +1236,15 @@ mod tests {
                 source: ion_core::TranscriptSource { entry: 1, part: 0 },
                 command: "previous-check".into(),
                 outcome: Some(ion_core::UserShellOutcome::Observed {
-                    output: ToolOutput::success(serde_json::json!({"stdout": "SAVED_SHELL"})),
+                    output: ToolOutput {
+                        is_error: true,
+                        ..ToolOutput::success(serde_json::json!({
+                            "exit_code": 7,
+                            "stdout": "SAVED_SHELL",
+                            "stderr": "FIRST_DIAGNOSTIC",
+                            "stderr_complete": true,
+                        }))
+                    },
                 }),
                 exclude_from_context: true,
             })],
@@ -1275,7 +1283,10 @@ mod tests {
         );
         let initial = view.rows().join("\n");
         assert!(initial.contains("CURRENT_REQUEST"));
-        assert!(initial.contains("SAVED_SHELL"));
+        let diagnostic = initial.find("FIRST_DIAGNOSTIC").unwrap();
+        let stdout = initial.find("SAVED_SHELL").unwrap();
+        let metadata = initial.find("Result metadata").unwrap();
+        assert!(diagnostic < stdout && stdout < metadata);
         assert!(initial.contains("not shared with model"));
         assert!(initial.contains("queued"));
         assert!(initial.contains("no committed result"));

@@ -13,6 +13,14 @@ use ratatui::text::{Line, Span};
 use serde_json::Value;
 use std::ops::Range;
 
+fn command_fields(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+    let fields = value.as_object()?;
+    ["stdout", "stderr"]
+        .iter()
+        .any(|stream| fields.get(*stream).is_some_and(Value::is_string))
+        .then_some(fields)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum PathPart {
     Key(String),
@@ -227,7 +235,11 @@ impl Document {
                                 },
                                 width,
                             );
-                            self.json(key, JsonField::Result, &output.value, width);
+                            if let Some(fields) = command_fields(&output.value) {
+                                self.command_result(key, fields, output.is_error, width);
+                            } else {
+                                self.json(key, JsonField::Result, &output.value, width);
+                            }
                             self.artifacts(key, &output.artifacts, width);
                             for (index, image) in output.images.iter().enumerate() {
                                 self.generated(
@@ -272,14 +284,10 @@ impl Document {
             self.raw(key, Field::Subject, "Subject: ", subject, width);
         }
         let patch = crate::edit_diff::recorded(activity);
-        let command = activity.result.as_ref().and_then(|result| {
-            (activity.activity.kind == ToolActivityKind::Command
-                && ["stdout", "stderr"]
-                    .iter()
-                    .any(|stream| result.value[*stream].is_string()))
-            .then(|| result.value.as_object())
-            .flatten()
-        });
+        let command = match (activity.activity.kind, &activity.result) {
+            (ToolActivityKind::Command, Some(result)) => command_fields(&result.value),
+            _ => None,
+        };
         let result_first = patch.is_some() || command.is_some();
         if !result_first {
             self.request(activity, key, width);
