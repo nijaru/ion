@@ -53,11 +53,18 @@ impl Session {
             let header = read_header(&snapshot)?;
             // The read must have the same committed frontier as the in-memory
             // index, even if the selected branch and prompt list are empty.
-            let frontier: i64 =
-                snapshot.query_row("SELECT COALESCE(MAX(seq), 0) FROM entries", [], |row| {
-                    row.get(0)
-                })?;
-            let revision = u64::try_from(frontier).map_err(|_| SessionError::InvalidHistory)?;
+            // Check the first key too: a physical row at zero is not an
+            // empty journal. Separate subqueries let SQLite seek either end.
+            let (first, last): (Option<i64>, Option<i64>) = snapshot.query_row(
+                "SELECT (SELECT MIN(seq) FROM entries), (SELECT MAX(seq) FROM entries)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let revision = match (first, last) {
+                (None, None) => 0,
+                (Some(1), Some(last)) if last > 0 => last as u64,
+                _ => return Err(SessionError::InvalidHistory),
+            };
             if header.id != self.id()
                 || header.provider_session_id != self.provider_session_id()
                 || revision != store.state.sequence
