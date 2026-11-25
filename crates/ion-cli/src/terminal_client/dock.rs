@@ -290,7 +290,9 @@ impl Dock {
                 };
             }
             InputTarget::Composer => {}
-            InputTarget::Details => unreachable!("inspector owns its fullscreen viewport"),
+            InputTarget::Details | InputTarget::History => {
+                unreachable!("overlay owns its fullscreen viewport")
+            }
         }
         let budget = height;
         let mut status = Vec::new();

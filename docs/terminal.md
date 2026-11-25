@@ -42,9 +42,13 @@ Use `/recovery save ID PATH` to save a JSON inspection backup of the original so
 
 `/recovery discard ID` irreversibly releases the local source, not its effects. For unresolved input, a small receipt/Session record remains and blocks new input in that Session until the receipt positively resolves. Unknown command sources can be removed, but that does not establish rollback or make retry safe. Other Sessions are not frozen.
 
-Only the original input receipt can resolve quarantined input: a matching committed acknowledgement releases the source without replay and refreshes canonical history; confirmed nonacceptance returns the exact draft and attachments without submitting. If another Session is current, the nonaccepted source waits until its original Session is selected. If a picker, details view, question or pending clipboard read owns input, the returned draft waits in the recovered-draft queue instead of replacing the composer. Discarded sources are never resurrected. Pending, committing and unresolved receipts remain fenced; refreshed history, missing journal entries, saved backups and discard are not acceptance evidence.
+Only the original input receipt can resolve quarantined input: a matching committed acknowledgement releases the source without replay and refreshes canonical history; confirmed nonacceptance returns the exact draft and attachments without submitting. If another Session is current, the nonaccepted source waits until its original Session is selected. If a picker, transcript, details view, question or pending clipboard read owns input, the returned draft waits in the recovered-draft queue instead of replacing the composer. Discarded sources are never resurrected. Pending, committing and unresolved receipts remain fenced; refreshed history, missing journal entries, saved backups and discard are not acceptance evidence.
 
 Unsaved recovery sources and receipt fences are lost when the process exits. Save anything needed before quitting; Ion does not persist or automatically retry this quarantine. Shutdown still joins owned work, including a started recovery save.
+
+## Browse the transcript
+
+Press Alt-T in the composer to open the read-only transcript. Use Up and Down, Page Up and Page Down, or the mouse wheel to browse. End resumes following the latest output. Ctrl-O opens the evidence inspector; Esc returns to the transcript. Press Esc or Alt-T from the transcript to return to your draft without changing terminal mode or rewriting scrollback.
 
 ## Inspect tool output
 

@@ -10,6 +10,7 @@ use super::{Builtin, EditorDraft, Frontend, PickerValue, navigation::apply_fork}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum InputTarget {
     Details,
+    History,
     Picker,
     Question,
     Composer,
@@ -19,6 +20,8 @@ impl Frontend {
     pub(super) fn input_target(&self) -> InputTarget {
         if self.details.is_some() {
             InputTarget::Details
+        } else if self.history_view.is_some() {
+            InputTarget::History
         } else if self.pickers.active().is_some() {
             InputTarget::Picker
         } else if self.question.is_some() {

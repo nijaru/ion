@@ -15,7 +15,8 @@ pub(crate) const PICKER: u8 = 4;
 pub(crate) const CHOICE: u8 = 8;
 pub(crate) const TEXT: u8 = 16;
 pub(crate) const DETAILS: u8 = 32;
-const GLOBAL: u8 = COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS;
+pub(crate) const HISTORY: u8 = 64;
+const GLOBAL: u8 = COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS | HISTORY;
 const EDIT: u8 = COMPOSER | TEXT;
 const SELECT: u8 = COMPLETION | PICKER | CHOICE | TEXT;
 
@@ -41,7 +42,8 @@ actions! {
     External, "app.editor.external", EDIT, ["ctrl+g"], "Open external editor";
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
     Copy, "app.message.copy", COMPOSER | DETAILS, ["ctrl+x"], "Copy answer or selected tool evidence";
-    ExpandTools, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Inspect output (shared inline) or expand/collapse it; close inspection";
+    Transcript, "app.transcript.open", COMPOSER | HISTORY, ["alt+t"], "Open or close the read-only transcript";
+    ExpandTools, "app.tools.expand", COMPOSER | DETAILS | HISTORY, ["ctrl+o"], "Inspect output (shared inline) or expand/collapse it; close inspection";
     FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up while busy; submit normally when idle";
     Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Withdraw queued steering and follow-ups; cycle returned drafts";
     Scope, "tui.select.toggleScope", PICKER, ["tab"], "Toggle model shortlist/all routes or launch Session folder scope";
@@ -50,7 +52,7 @@ actions! {
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";
     Confirm, "tui.select.confirm", COMPLETION | PICKER | CHOICE, ["enter"], "Accept the visible selected item";
-    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS, ["escape"], "Dismiss local UI or stop work; press twice on an empty composer to open the Session tree";
+    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS | HISTORY, ["escape"], "Dismiss local UI or stop work; press twice on an empty composer to open the Session tree";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
     SelectPageUp, "tui.select.pageUp", PICKER, ["pageup"], "Move up one visible picker page";
@@ -77,13 +79,13 @@ actions! {
     Redo, "tui.editor.redo", COMPOSER, ["ctrl+alt+-"], "Redo composer edit";
     Yank, "tui.editor.yank", COMPOSER, ["ctrl+y"], "Yank last kill";
     YankPop, "tui.editor.yankPop", COMPOSER, ["alt+y"], "Cycle directly preceding yank";
-    PageUp, "tui.editor.pageUp", COMPOSER | DETAILS | CHOICE, ["pageup"], "Scroll transcript/details or question preview/review up";
-    PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview/review down";
-    DetailUp, "app.details.up", DETAILS, ["up"], "Scroll details up one row";
-    DetailDown, "app.details.down", DETAILS, ["down"], "Scroll details down one row";
+    PageUp, "tui.editor.pageUp", COMPOSER | DETAILS | CHOICE | HISTORY, ["pageup"], "Scroll transcript/details or question preview/review up";
+    PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE | HISTORY, ["pagedown"], "Scroll transcript/details or question preview/review down";
+    DetailUp, "app.details.up", DETAILS | HISTORY, ["up"], "Scroll details or transcript up one row";
+    DetailDown, "app.details.down", DETAILS | HISTORY, ["down"], "Scroll details or transcript down one row";
     SaveOutput, "app.details.saveOutput", DETAILS, ["s"], "Save retained output from the first visible capture summary";
     DetailStart, "app.details.start", DETAILS, ["home"], "Jump to the start of the current detail page";
-    DetailEnd, "app.details.end", DETAILS, ["end"], "Jump to the end of the current detail page";
+    DetailEnd, "app.details.end", DETAILS | HISTORY, ["end"], "Jump to the end of details or follow the transcript tail";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";
     Later, "app.details.nextPage", DETAILS, ["right"], "Show later detail page";
 }
@@ -98,6 +100,7 @@ impl KeyAction {
                 | Self::Submit
                 | Self::FollowUp
                 | Self::External
+                | Self::Transcript
                 | Self::ExpandTools
                 | Self::SaveOutput
                 | Self::CycleReasoning

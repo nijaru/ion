@@ -238,6 +238,54 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         while viewport_draft not in tmux("capture-pane", "-p", "-t", "ion"):
             assert time.monotonic() < deadline, "expanded-view draft did not paint"
             time.sleep(0.02)
+        # The read-only transcript uses a separate viewport, not the composer
+        # or primary scrollback. Try input and reflow before returning to it.
+        tmux("send-keys", "-t", "ion", "M-t")
+        history_deadline = time.monotonic() + 6
+
+        def wait_transcript(*markers, rows=None):
+            while True:
+                pane = tmux("capture-pane", "-p", "-t", "ion")
+                lines = pane.splitlines()
+                if ((rows is None or len(lines) == rows)
+                        and lines and lines[-1].startswith("Transcript")
+                        and all(marker in pane for marker in markers)):
+                    return pane
+                assert time.monotonic() < history_deadline, f"transcript missing {markers}:\n{pane}"
+                time.sleep(0.02)
+
+        def alternate_screen():
+            return tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip() == "1"
+
+        pane = wait_transcript("FINAL_ONCE")
+        assert alternate_screen() and viewport_draft not in pane, pane
+        tmux("send-keys", "-t", "ion", "x", "Enter")
+        tmux("set-buffer", "IGNORED_TRANSCRIPT_PASTE")
+        tmux("paste-buffer", "-p", "-d", "-t", "ion")
+        tmux("resize-window", "-t", "ion", "-x", "72", "-y", "6")
+        wait_transcript("FINAL_ONCE", rows=6)
+        tmux("send-keys", "-t", "ion", "PPage", "PPage", "PPage", "PPage", "PPage")
+        wait_transcript("NARRATIVE_ONCE")
+        tmux("resize-window", "-t", "ion", "-x", "68", "-y", "7")
+        wait_transcript("NARRATIVE_ONCE", rows=7)
+        tmux("send-keys", "-t", "ion", "C-o")
+        while "Conversation ·" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < history_deadline, f"transcript inspector did not open:\n{pane}"
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "Escape")
+        wait_transcript("NARRATIVE_ONCE", rows=7)
+        assert alternate_screen(), "closing the inspector left the transcript's screen"
+        tmux("send-keys", "-t", "ion", "End")
+        wait_transcript("FINAL_ONCE")
+        tmux("resize-window", "-t", "ion", "-x", "100", "-y", "24")
+        tmux("send-keys", "-t", "ion", "Escape")
+        while alternate_screen() or viewport_draft not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < history_deadline, "transcript did not restore the composer"
+            time.sleep(0.02)
+        assert "IGNORED_TRANSCRIPT_PASTE" not in pane and f"{viewport_draft}x" not in pane, pane
+        assert len(requests) == 2, "transcript submitted the draft"
+        check_history()
+
         tmux("send-keys", "-t", "ion", "C-o")
         while True:
             pane = tmux("capture-pane", "-p", "-t", "ion")

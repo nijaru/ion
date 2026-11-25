@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::display_text::{fit_line, push_wrapped};
-use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, KeyAction, KeyBindings};
+use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, HISTORY, KeyAction, KeyBindings};
 use crate::terminal_commands::Builtin;
 use crate::transcript_detail::{DetailView, tools};
 use crate::transcript_render::{activity_subject, state_label};
@@ -161,6 +161,7 @@ struct Frontend {
     conversation: conversation::Conversation,
     presenter: block_presenter::BlockPresenter,
     view: block_presenter::ConversationView,
+    history_view: Option<HistoryViewport>,
     editor: Editor,
     gestures: gestures::Gestures,
     recovery: recovery::Recovery,
@@ -178,6 +179,13 @@ struct Frontend {
     context_estimate: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
     usage_totals: ion_core::UsageTotals,
     provider_usage: provider_usage::UsageStatus,
+}
+
+/// Separate from the composer viewport and native publication frontier.
+#[derive(Default)]
+struct HistoryViewport {
+    view: block_presenter::ConversationView,
+    page_rows: u16,
 }
 
 pub struct ChatInit {
@@ -471,7 +479,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             .paste(&text);
                         apply_question_action(&mut ui, questions.as_ref(), action, terminal, screen, &mut interrupt).await?;
                         poll_control = true;
-                    } else if ui.input_target() != interaction::InputTarget::Details {
+                    } else if !matches!(ui.input_target(), interaction::InputTarget::Details | interaction::InputTarget::History) {
                         ui.insert(&text);
                     }
                 },
@@ -1052,7 +1060,7 @@ impl Frontend {
         commands: Option<&ion_app::CommandCatalog>,
         force: bool,
     ) {
-        if self.details.is_some() || self.pickers.active().is_some() || self.question_owns_input() {
+        if self.input_target() != interaction::InputTarget::Composer {
             self.editor.completion.clear();
             self.pickers.cancel_files();
             return;
@@ -1096,6 +1104,9 @@ impl Frontend {
             self.editor.break_edit_focus();
             self.editor.completion.clear();
             return self.detail_key(key);
+        }
+        if self.input_target() == interaction::InputTarget::History {
+            return self.history_key(key);
         }
         // The real input pump dispatches question actions to Host. Direct
         // frontend callers must never fall through into composer editing.
@@ -1262,6 +1273,12 @@ impl Frontend {
                 }
                 Action::None
             }
+            Some(KeyAction::Transcript) => {
+                self.editor.completion.clear();
+                self.pickers.cancel_files();
+                self.history_view = Some(HistoryViewport::default());
+                return Action::None;
+            }
             Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
             Some(KeyAction::External) => Action::Command(CommandInput::Shortcut(Builtin::Editor)),
             Some(KeyAction::Model) => Action::Command(CommandInput::Shortcut(Builtin::Model)),
@@ -1338,6 +1355,11 @@ impl Frontend {
                     .expect("derived inspector focus")
                     .scroll_by(if down { 3 } else { -3 });
             }
+            interaction::InputTarget::History => {
+                if let Some(history) = &mut self.history_view {
+                    history.view.scroll(if down { 3 } else { -3 });
+                }
+            }
             interaction::InputTarget::Picker => self.pickers.move_selection(down, 1),
             interaction::InputTarget::Question => self.view.scroll(if down { 3 } else { -3 }),
             interaction::InputTarget::Composer => {
@@ -1345,6 +1367,31 @@ impl Frontend {
                 self.view.scroll(if down { 3 } else { -3 });
             }
         }
+    }
+
+    fn history_key(&mut self, key: KeyEvent) -> Action {
+        let Some(action) = self.keys.action(HISTORY, key) else {
+            return Action::None;
+        };
+        if key.repeat && action.requires_fresh_press() {
+            return Action::None;
+        }
+        let history = self
+            .history_view
+            .as_mut()
+            .expect("derived transcript focus");
+        let page = history.page_rows.max(1) as isize;
+        match action {
+            KeyAction::Cancel | KeyAction::Transcript => self.history_view = None,
+            KeyAction::ExpandTools => self.open_details(None),
+            KeyAction::DetailUp => history.view.scroll(-1),
+            KeyAction::DetailDown => history.view.scroll(1),
+            KeyAction::PageUp => history.view.scroll(-page),
+            KeyAction::PageDown => history.view.scroll(page),
+            KeyAction::DetailEnd => history.view.follow_end(),
+            _ => {}
+        }
+        Action::None
     }
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {
@@ -1441,6 +1488,9 @@ impl Frontend {
 
     fn discard_provisional(&mut self) {
         self.view.discard_provisional();
+        if let Some(history) = &mut self.history_view {
+            history.view.discard_provisional();
+        }
         if let Some(details) = &mut self.details {
             details.discard_provisional();
         }
@@ -1470,7 +1520,11 @@ async fn prepare_draw(
     screen: &mut Screen,
     ui: &Frontend,
 ) -> Result<Option<(u16, u16)>> {
-    if ui.input_target() == interaction::InputTarget::Details || ui.mode == TuiMode::Fullscreen {
+    if matches!(
+        ui.input_target(),
+        interaction::InputTarget::Details | interaction::InputTarget::History
+    ) || ui.mode == TuiMode::Fullscreen
+    {
         terminal.enter_alt_screen(screen).await?;
         let (width, height) = terminal.size()?;
         screen.resize_fullscreen(width, height);
@@ -1518,6 +1572,9 @@ fn draw_prepared(
 ) -> Result<bool> {
     if ui.input_target() == interaction::InputTarget::Details {
         return draw_modal_fullscreen(terminal, screen, ui, operation, width, height);
+    }
+    if ui.history_view.is_some() {
+        return draw_history_fullscreen(terminal, screen, ui, (width, height));
     }
     if ui.mode == TuiMode::Fullscreen {
         return draw_chat_fullscreen(
@@ -1706,6 +1763,61 @@ fn visible_status(ui: &Frontend, operation: Option<ActiveOperation>) -> Option<S
         });
     }
     (!status.is_empty()).then_some(status)
+}
+
+fn draw_history_fullscreen(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+    (width, height): (u16, u16),
+) -> Result<bool> {
+    let width = width.max(1) as usize;
+    let history = ui.history_view.as_mut().expect("history viewport active");
+    let body = height.max(1) - 1;
+    let mut rows = ui.presenter.window(
+        &ui.conversation,
+        &mut history.view,
+        (width, body as usize),
+        false,
+        false,
+        &crate::tool_output::RenderOptions::new(
+            ui.output_detail,
+            &ui.keys,
+            ui.themes.theme(),
+            ui.thinking_visibility,
+            &ui.cwd,
+        ),
+    );
+    rows.resize_with(body as usize, Line::default);
+    let close = ui
+        .keys
+        .bound_hint(KeyAction::Cancel)
+        .or_else(|| ui.keys.bound_hint(KeyAction::Transcript))
+        .map_or_else(String::new, |key| format!(" · {key} close"));
+    let inspect = ui
+        .keys
+        .bound_hint(KeyAction::ExpandTools)
+        .map_or_else(String::new, |key| format!(" · {key} inspect"));
+    let question = if ui.question.is_some() {
+        " · question pending"
+    } else {
+        ""
+    };
+    rows.push(Line::styled(
+        fit_line(&format!("Transcript{close}{question}{inspect}"), width),
+        ui.themes
+            .theme()
+            .style(crate::presentation_style::Role::Secondary),
+    ));
+    let painted = terminal
+        .paint_fullscreen(screen, |screen, out| {
+            screen.draw_fullscreen(out, &rows, None)
+        })?
+        .is_some();
+    if painted {
+        history.page_rows = body.saturating_sub(1);
+    }
+    Ok(painted)
 }
 
 fn draw_chat_fullscreen(
