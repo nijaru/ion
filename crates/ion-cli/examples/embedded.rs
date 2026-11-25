@@ -42,12 +42,11 @@ async fn main() -> Result<()> {
 
     // Keep every fallible step after opening the Session inside this outcome.
     // `?` must not destroy the runtime before shutdown joins retained work.
-    let retirements = ion_core::SessionRetirements::default();
-    retirements.register(&session)?;
+    let retirement = session.retirement();
     let outcome = submit(args, &cwd, session.clone()).await;
     let shutdown = session.shutdown().await;
     drop(session);
-    let resources = retirements.join().await;
+    let resources = retirement.join().await;
     let outcome = match (outcome, shutdown) {
         (Ok(answer), Ok(())) => Ok(answer),
         (Err(error), Ok(())) => Err(error),
@@ -108,21 +107,9 @@ async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<String>
         tokio_util::sync::CancellationToken::new(),
     );
     let setup = preparation.join().await?;
-    let mut control = setup.into_control::<()>();
-    let application_owner = control.owner();
+    let mut control = setup.into_application_control::<()>();
     let mut outcome = prompt(&mut control, args.prompt).await;
-    if let Some(owner) = &application_owner {
-        owner.request_shutdown();
-    }
     let report = control.shutdown().await;
-    if let Some(owner) = &application_owner
-        && let Err(error) = owner.join_shutdown().await
-    {
-        outcome = Err(match outcome {
-            Ok(_) => error,
-            Err(primary) => primary.context(format!("application shutdown also failed: {error}")),
-        });
-    }
     for error in report.cleanup_errors {
         outcome = match outcome {
             Ok(_) => Err(error.into()),
@@ -180,8 +167,7 @@ async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {
     {
         tokio::select! {
             _ = signal.recv(), if listening => {
-                owner.request_shutdown();
-                owner.join_shutdown().await?;
+                control.request_shutdown();
                 return Err(ion_core::AgentError::Cancelled.into());
             }
             result = owner.background().drain() => result?,

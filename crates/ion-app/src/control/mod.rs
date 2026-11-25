@@ -157,7 +157,8 @@ pub struct SessionControl<M = ()> {
     shell_output: bool,
     stop_requested: bool,
     closed: bool,
-    cleanup_errors: Vec<SessionError>,
+    cleanup_errors: Vec<ShutdownError>,
+    shutdown_application: Option<Arc<crate::ApplicationOwner>>,
     pub(crate) owner: uuid::Uuid,
     question_changes: Option<watch::Receiver<u64>>,
     question_seen: u64,
@@ -169,7 +170,10 @@ fn lock<M>(custody: &Mutex<Custody<M>>) -> custody::Guard<'_, M> {
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
-    pub(crate) fn from_setup(setup: SessionSetup) -> Self {
+    pub(crate) fn from_setup(
+        setup: SessionSetup,
+        shutdown_application: Option<Arc<crate::ApplicationOwner>>,
+    ) -> Self {
         let (observations, receiver) = broadcast::channel(OBSERVATION_CAPACITY);
         let owner = uuid::Uuid::now_v7();
         let completions = crate::completion::CompletionReceiver::new(setup.session.id());
@@ -208,6 +212,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             stop_requested: false,
             closed: false,
             cleanup_errors: Vec::new(),
+            shutdown_application,
             owner,
             question_changes,
             question_seen,
@@ -342,7 +347,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             pending_follow_ups,
             stop_requested: self.stop_requested,
             closed: self.closed,
-            shutdown_complete: self.shutdown_complete,
+            shutdown_complete: self.shutdown_complete && self.shutdown_application.is_none(),
         }
     }
     fn active_turn(&self, active: &Active<M>, custody: &Custody<M>) -> Option<u64> {
@@ -697,6 +702,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
     /// Close admission and request stop without waiting or consuming results.
     pub fn request_shutdown(&mut self) {
         self.closed = true;
+        if let Some(application) = &self.shutdown_application {
+            application.request_shutdown();
+        }
         if let Some(questions) = &self.setup.questions {
             questions.close(self.owner, "shutdown");
         }
@@ -715,9 +723,15 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
         if !self.shutdown_complete {
             if let Err(error) = self.setup.session.shutdown().await {
-                self.cleanup_errors.push(error);
+                self.cleanup_errors.push(ShutdownError::Session(error));
             }
             self.shutdown_complete = true;
+        }
+        if let Some(application) = &self.shutdown_application {
+            if let Err(error) = application.join_shutdown().await {
+                self.cleanup_errors.push(ShutdownError::Application(error));
+            }
+            self.shutdown_application = None;
         }
     }
 
@@ -737,6 +751,9 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
 
 impl<M> Drop for SessionControl<M> {
     fn drop(&mut self) {
+        if let Some(application) = &self.shutdown_application {
+            application.request_shutdown();
+        }
         if let Some(binding) = &self.binding {
             binding.request_stop();
         }

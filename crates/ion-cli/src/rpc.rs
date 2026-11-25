@@ -75,7 +75,7 @@ impl Control {
     fn new(setup: SessionSetup, services: Arc<ion_app::Host>) -> Self {
         Self {
             services,
-            host: setup.into_control::<RpcMetadata>(),
+            host: setup.into_application_control::<RpcMetadata>(),
             question_responder: None,
             question_changed: false,
             correlations: BTreeMap::new(),

@@ -229,6 +229,10 @@ impl Fixture {
 }
 impl<M: Serialize + Send + 'static> Fixture<M> {
     fn with_metadata(model: Arc<Model>, images: bool) -> Self {
+        Self::with_scope(model, images, false)
+    }
+
+    fn with_scope(model: Arc<Model>, images: bool, owns_application: bool) -> Self {
         let root = std::env::temp_dir().join(format!("ion-control-test-{}", uuid::Uuid::now_v7()));
         fs::create_dir_all(&root).unwrap();
         let host = Arc::new(Host::new(root.join("config"), root.join("state")));
@@ -270,7 +274,11 @@ impl<M: Serialize + Send + 'static> Fixture<M> {
             root,
             host,
             selected,
-            control: setup.into_control(),
+            control: if owns_application {
+                setup.into_application_control()
+            } else {
+                setup.into_control()
+            },
         }
     }
     fn fault(&self, predicate: &str) {
@@ -284,6 +292,23 @@ impl<M> Drop for Fixture<M> {
         let _ = fs::remove_dir_all(&self.root);
     }
 }
+#[tokio::test]
+async fn application_shutdown_is_explicit_and_completion_can_be_rejoined() {
+    let mut shared = Fixture::new(Model::new(0), false);
+    let background = shared.control.background().unwrap();
+    assert!(shared.control.shutdown().await.cleanup_errors.is_empty());
+    assert!(!background.snapshot().closed);
+
+    let mut owned = Fixture::<Metadata>::with_scope(Model::new(0), false, true);
+    let background = owned.control.background().unwrap();
+    owned.control.request_shutdown();
+    assert!(background.snapshot().closed);
+    assert!(!owned.control.state().shutdown_complete);
+    assert!(owned.control.shutdown().await.cleanup_errors.is_empty());
+    assert!(owned.control.state().shutdown_complete);
+    assert!(owned.control.shutdown().await.cleanup_errors.is_empty());
+}
+
 async fn settle(
     control: &mut SessionControl<Metadata>,
 ) -> (Vec<ReturnedInput<Metadata>>, Settlement<Metadata>) {
@@ -1320,8 +1345,8 @@ async fn panic_blocks_reuse_and_preserves_primary_and_cleanup_failures() {
     let report = fixture.control.shutdown().await;
     assert!(matches!(
         report.cleanup_errors.as_slice(),
-        [SessionError::Operation(
+        [ShutdownError::Session(SessionError::Operation(
             ion_core::OperationError::TaskFailed(_)
-        )]
+        ))]
     ));
 }

@@ -80,9 +80,9 @@ pub use control::{
     OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot, QueuedInput,
     RecoveryAdmission, RecoveryDecision, RecoveryFailure, RejectedBatch, RejectedInput,
     RequestAdmission, RequestDecision, RequestLaunch, RequestPlan, ReturnReason, ReturnSnapshot,
-    ReturnedInput, SessionControl, Settlement, ShutdownReport, SnapshotCursor, SteeringReceipt,
-    SteeringStatus, StopTarget, TurnSteering, UnresolvedInput, UnresolvedRequest, UpdateSnapshot,
-    UserInput, preflight_messages,
+    ReturnedInput, SessionControl, Settlement, ShutdownError, ShutdownReport, SnapshotCursor,
+    SteeringReceipt, SteeringStatus, StopTarget, TurnSteering, UnresolvedInput, UnresolvedRequest,
+    UpdateSnapshot, UserInput, preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{

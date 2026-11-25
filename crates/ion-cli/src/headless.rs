@@ -25,8 +25,7 @@ pub(super) async fn run(
     mut signal: tokio::signal::unix::Signal,
     termination: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let mut control = setup.into_control::<()>();
-    let application_owner = control.owner();
+    let mut control = setup.into_application_control::<()>();
     let result = foreground(
         &mut control,
         request,
@@ -35,20 +34,13 @@ pub(super) async fn run(
         &termination,
     )
     .await;
-    if let Some(owner) = &application_owner {
-        owner.request_shutdown();
-    }
+    finish_control(&mut control, result).await
+}
+
+async fn finish_control<T>(control: &mut SessionControl, mut result: Result<T>) -> Result<T> {
     let report = control.shutdown().await;
-    let mut result = result;
-    if let Some(owner) = &application_owner {
-        result = combine(
-            result,
-            owner.join_shutdown().await,
-            "application shutdown also failed",
-        );
-    }
     for error in report.cleanup_errors {
-        result = combine(result, Err(error.into()), "Session shutdown also failed");
+        result = combine(result, Err(error.into()), "cleanup also failed");
     }
     for update in report.updates {
         if let ControlUpdate::Settled(settlement) = update {
@@ -118,12 +110,6 @@ async fn foreground(
     // Once this publisher loses a prefix, suppress the remaining provisional
     // stream. The reliable committed final below is the reconciliation boundary.
     let mut suppress_progress = false;
-    let application_owner = control.owner();
-    let request_shutdown = || {
-        if let Some(owner) = &application_owner {
-            owner.request_shutdown();
-        }
-    };
     let background = control.background();
     let mut background_revision = 0;
     let mut completion_revision = 0;
@@ -154,27 +140,25 @@ async fn foreground(
             }
             _ = crate::termination::requested(signal, termination), if listening => {
                 listening = false;
-                control.request_stop();
-                request_shutdown();
+                control.request_shutdown();
                 if parent_result.is_some() { parent_result = Some(Err(AgentError::Cancelled.into())); }
             }
             published = output.advance(), if output.is_healthy() && output.has_pending() => {
                 if let Err(error) = published {
                     publication_error = Some(error);
-                    control.request_stop();
-                    request_shutdown();
+                    control.request_shutdown();
                 }
             }
             revision = async { background.as_ref().expect("guarded owner").changed(background_revision).await }, if background.is_some() => {
                 background_revision = revision;
                 let owner = background.as_ref().expect("guarded owner");
-                if owner.check().is_err() { control.request_stop(); request_shutdown(); }
+                if owner.check().is_err() { control.request_shutdown(); }
                 // Invalidation only: actual results remain in bounded owner
                 // custody and committed facts, independent of this publisher.
                 if output.can_acquire() {
                     let record = if json_output { output.enqueue(json!({"type":"background_changed","revision":revision,"resync":"inspect"})) }
                         else { output.enqueue("[background task state changed; results remain inspectable]".to_owned()) };
-                    if let Err(error) = record { publication_error = Some(error); control.request_stop(); request_shutdown(); }
+                    if let Err(error) = record { publication_error = Some(error); control.request_shutdown(); }
                 }
             }
             update = control.next(), if poll_control => match update {
@@ -182,7 +166,6 @@ async fn foreground(
                     // This client launches only anonymous prompts or compaction.
                     // Do not silently consume an unrequested management result.
                     control.request_shutdown();
-                    request_shutdown();
                     parent_result = Some(Err(anyhow!("unexpected application admission result in headless mode")));
                 }
                 ControlUpdate::McpReconnectFinished(finished) => {
@@ -193,8 +176,7 @@ async fn foreground(
                     let queued = if json_output { output.enqueue(record) } else { output.enqueue(record.to_string()) };
                     if let Err(error) = queued {
                         publication_error = Some(error);
-                        control.request_stop();
-                        request_shutdown();
+                        control.request_shutdown();
                     }
                 }
                 ControlUpdate::Automated { .. } => {}
@@ -214,8 +196,7 @@ async fn foreground(
                     } else { Ok(()) };
                     if let Err(error) = queued {
                         publication_error = Some(error);
-                        control.request_stop();
-                        request_shutdown();
+                        control.request_shutdown();
                     }
                 }
                 ControlUpdate::Activity(Observation::ShellOutput { .. }) => {},
@@ -242,25 +223,25 @@ async fn foreground(
                 }
                 ControlUpdate::Unresolved(input) => {
                     rejected = Some(anyhow!("input commit is unresolved in Session {}; inspect it before retrying", input.session));
-                    request_shutdown();
+                    control.request_shutdown();
                 }
                 ControlUpdate::Settled(settlement) => {
                     let result = answer(settlement.outcome);
-                    if result.is_err() { request_shutdown(); }
+                    if result.is_err() { control.request_shutdown(); }
                     // Failed/cancelled work cannot be hidden by a later result.
                     if parent_result.as_ref().is_none_or(Result::is_ok) { parent_result = Some(result); }
                 }
                 ControlUpdate::Idle => {
                     poll_control = false;
                     if let Some(error) = rejected.take() {
-                        request_shutdown();
+                        control.request_shutdown();
                         parent_result = Some(match parent_result.take() {
                             Some(Err(primary)) => Err(primary.context(format!("input also returned: {error:#}"))),
                             _ => Err(error),
                         });
                     }
                     if parent_result.is_none() {
-                        request_shutdown();
+                        control.request_shutdown();
                         parent_result = Some(Err(anyhow!("operation ended without settlement")));
                     }
                 }
@@ -272,19 +253,8 @@ async fn foreground(
         }
     };
 
-    // Delegated work has settled; managed servers must now stop as well.
     // Final publication may block indefinitely on an otherwise healthy pipe.
-    let result = if let Some(owner) = &application_owner {
-        match (result, owner.join_shutdown().await) {
-            (result, Ok(())) => result,
-            (Ok(_), Err(error)) => Err(error),
-            (Err(error), Err(cleanup)) => {
-                Err(error.context(format!("application shutdown also failed: {cleanup:#}")))
-            }
-        }
-    } else {
-        result
-    };
+    let result = finish_control(control, result).await;
     let mut publication = output.finish().await;
     if publication.is_ok() && output.is_healthy() {
         if suppress_progress {

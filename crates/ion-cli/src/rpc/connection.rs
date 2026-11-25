@@ -40,7 +40,6 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     let inspections = ReplyCredits::new(1);
     let controls = ReplyCredits::new(2);
     let mut poll_host = true;
-    let application_owner = control.host.owner();
     let background = control.host.background();
     let mut background_revision = 0;
     let mut completion_revision = 0;
@@ -122,9 +121,6 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
     // No publication wait can postpone stop/join. Borrowed shutdown itself is
     // cancellation safe; this foreground owner awaits it to completion on every
     // EOF/read/write/protocol-invariant/unknown-task failure path.
-    if let Some(owner) = &application_owner {
-        owner.request_shutdown();
-    }
     if control.host.is_busy() {
         // shutdown deliberately discards observations while joining. Zero is
         // a resync request, not a fabricated count of missing shell events.
@@ -146,13 +142,6 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
         }
     }
     let report = control.host.shutdown().await;
-    if let Some(owner) = &application_owner {
-        result = combine_errors(
-            result,
-            owner.join_shutdown().await,
-            "application cleanup also failed",
-        );
-    }
     if interrupted {
         // SIGINT closes this transport after owned work joins. Do not require
         // an unread peer to drain queued frames; committed facts remain the
@@ -231,28 +220,15 @@ pub(super) async fn connection<R: AsyncBufRead + Unpin, W: AsyncWrite + Unpin>(
 
 /// Setup errors still release any application resources captured by the recipe.
 pub(super) async fn startup_failure(control: &mut Control, error: anyhow::Error) -> Result<()> {
-    let owner = control.host.owner();
-    if let Some(owner) = &owner {
-        owner.request_shutdown();
-    }
     let report = control.host.shutdown().await;
-    let result = combine_errors(
+    combine_errors(
         Err(error),
         cleanup_result(report.cleanup_errors),
         "Host shutdown also failed",
-    );
-    if let Some(owner) = &owner {
-        combine_errors(
-            result,
-            owner.join_shutdown().await,
-            "application cleanup also failed",
-        )
-    } else {
-        result
-    }
+    )
 }
 
-pub(super) fn cleanup_result(errors: Vec<ion_core::SessionError>) -> Result<()> {
+pub(super) fn cleanup_result(errors: Vec<ion_app::ShutdownError>) -> Result<()> {
     let mut result = Ok(());
     for error in errors {
         result = combine_errors(result, Err(error.into()), "additional cleanup failure");

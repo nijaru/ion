@@ -839,9 +839,9 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 }
             }
             .await;
-            // Unconditional outer fallback, including preflight/client failure.
-            // Join children and programs before releasing their captured MCP environment.
-            let result = if let Some(owner) = &application_owner {
+            // After handoff the client control owns application shutdown. Before
+            // handoff, join here before releasing the captured MCP environment.
+            let result = if preflight_session.is_some() && let Some(owner) = &application_owner {
                 match (result, owner.join_shutdown().await) {
                     (result, Ok(())) => result,
                     (Ok(()), Err(error)) => Err(error),

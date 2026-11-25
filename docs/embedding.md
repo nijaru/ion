@@ -40,7 +40,9 @@ Core execution APIs treat a caller's cancellation token as a parent scope. Cance
 
 `Session::create/open` and `SessionSetup::new` are blocking factory operations. Async coding clients use retained `CodingApplication::prepare_setup`, Session I/O and reader capabilities. Keep `setup.retirements()` outside the controller. After controller shutdown, drain reliable updates, release every Session/read capability, then await the retirement scope's `join()`.
 
-Shutdown preserves read-only access; retirement separately joins native SQLite close and writer-lease release. Cancelling a borrowed wait does not cancel or discard its native work.
+Use `setup.into_control()` when the application is shared: shutdown stops only that controller's Session. A standalone client uses `setup.into_application_control()`. Its shutdown also closes and joins application-owned subagents and processes. Both return pending control updates and cleanup errors; a cleanup failure does not replace an earlier operation failure.
+
+Shutdown preserves read-only access. Retirement separately joins native SQLite close and writer-lease release after the last reader drops. Cancelling a borrowed wait does not abandon native work.
 
 
 ## Tool schemas

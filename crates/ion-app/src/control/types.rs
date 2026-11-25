@@ -497,5 +497,13 @@ impl ControlObserver {
 pub struct ShutdownReport<M> {
     pub updates: Vec<ControlUpdate<M>>,
     /// Independent cleanup failures never replace primary operation failures.
-    pub cleanup_errors: Vec<SessionError>,
+    pub cleanup_errors: Vec<ShutdownError>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum ShutdownError {
+    #[error("Session shutdown failed: {0}")]
+    Session(#[source] SessionError),
+    #[error("application shutdown failed: {0}")]
+    Application(#[source] anyhow::Error),
 }

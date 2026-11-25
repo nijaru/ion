@@ -195,12 +195,10 @@ pub struct ChatInit {
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
-    let footer = orientation::Footer::load(init.services.config_root())?;
-    let mut runtime = init.setup.into_control::<EditorDraft>().with_shell_output();
-    let questions = runtime
-        .attach_question_responder()
-        .context("attach the terminal question consumer")?;
-    let application_owner = runtime.owner();
+    let mut runtime = init
+        .setup
+        .into_application_control::<EditorDraft>()
+        .with_shell_output();
     let background = runtime.background();
     let mut background_revision = 0;
     let mut completion_revision = 0;
@@ -214,7 +212,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         dedicated_pane: init.dedicated_pane,
         keys: init.keys,
         themes: init.themes,
-        footer,
         ..Frontend::default()
     };
     let mut interrupt = init.interrupt;
@@ -223,8 +220,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut terminal_owner = None;
     let mut screen_owner = None;
     let mut outcome = async {
-        // Even terminal entry and the first history read are inside the shared
-        // shutdown boundary: no post-Session error bypasses retained cleanup.
+        // All fallible terminal setup shares the control's shutdown boundary.
+        ui.footer = orientation::Footer::load(init.services.config_root())?;
+        let questions = runtime
+            .attach_question_responder()
+            .context("attach the terminal question consumer")?;
         terminal_owner = Some(TerminalSession::enter()
             .await
             .context("interactive chat requires a terminal")?);
@@ -501,20 +501,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     ui.pickers.close();
     // shutdown closes admission, stops and joins both preparation and Core work.
     // Process every reliable return/settlement even when presentation has failed.
-    if let Some(owner) = &application_owner {
-        owner.request_shutdown();
-    }
     runtime.request_shutdown();
     while ui.session_io.has_read() {
         let finished = ui.session_io.complete().await;
         session_io::cleanup(&mut ui, finished, &mut outcome);
     }
     let report = runtime.shutdown().await;
-    if let Some(owner) = &application_owner
-        && let Err(error) = owner.join_shutdown().await
-    {
-        activity::combine_error(&mut outcome, error);
-    }
     for update in report.updates {
         activity::cleanup_update(&mut ui, &runtime, update, &mut outcome);
     }

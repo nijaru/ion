@@ -294,8 +294,17 @@ impl SessionSetup {
     pub fn session_id(&self) -> String {
         self.session.id().to_string()
     }
+    /// Control this Session without shutting down a shared application.
     pub fn into_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
-        SessionControl::from_setup(self)
+        SessionControl::from_setup(self, None)
+    }
+
+    /// Control this Session as the application's sole lifecycle owner. Shutdown
+    /// also closes admission and joins application-owned children and processes.
+    /// Use `into_control` if other clients share those resources.
+    pub fn into_application_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
+        let owner = self.owner();
+        SessionControl::from_setup(self, owner)
     }
 }
 
