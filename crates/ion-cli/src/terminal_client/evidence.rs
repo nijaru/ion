@@ -6,7 +6,7 @@ use anyhow::Result;
 use ion_app::SessionControl;
 use ion_core::{
     Session, SessionError, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget,
-    TranscriptActivity, TranscriptActivityIdentity, TranscriptItem, TranscriptProjection,
+    TranscriptActivity, TranscriptActivityIdentity, TranscriptItem,
 };
 
 use super::{EditorDraft, Frontend, Picker, PickerItem, PickerValue, session_io::ReadOutput};
@@ -23,7 +23,6 @@ pub(super) struct Inspection {
 pub(super) enum Source {
     Live,
     HistoryPage,
-    Committed(TranscriptProjection),
     Recorded(Box<ToolEvidence>),
 }
 
@@ -113,18 +112,9 @@ pub(super) fn open_committed(
 ) -> Result<()> {
     let target = match selection {
         Select::Conversation => {
-            let reader = session.reader()?;
-            return ui.session_io.start(session, async move {
-                Ok(reader
-                    .map_presentation(None, |snapshot| ReadOutput::Inspection {
-                        inspection: Box::new(Inspection {
-                            view: DetailView::new(None),
-                            source: Source::Committed(snapshot.transcript),
-                        }),
-                        from: None,
-                    })
-                    .await?)
-            });
+            ui.history_view = Some(super::HistoryViewport::archive());
+            ui.details = Some(Inspection::page(DetailView::default()));
+            return Ok(());
         }
         Select::Latest => Some(ToolEvidenceTarget::Latest),
         Select::Number(number) => NonZeroUsize::new(number).map(ToolEvidenceTarget::Number),

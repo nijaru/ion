@@ -150,6 +150,10 @@ impl ContextIndex {
             .map_or(0, |batch| batch.first - 1 + batch.results.len())
     }
 
+    pub(super) fn first_tool_number(&self, assistant: u64) -> Option<usize> {
+        self.tool_batches.get(&assistant).map(|batch| batch.first)
+    }
+
     pub(super) fn tool_batch(&self, head: u64) -> &ToolBatch {
         &self.tool_batches[&head]
     }

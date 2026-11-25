@@ -526,6 +526,10 @@ fn transcript_pages_attach_results_to_repeated_call_occurrences() {
         })
         .collect::<Vec<_>>();
     assert_eq!(results, ["first result", "second result"]);
+    assert_eq!(
+        page.tool_starts.values().copied().collect::<Vec<_>>(),
+        [1, 2]
+    );
     let mut listed = Vec::new();
     session
         .visit_committed_tools(|number, activity| {

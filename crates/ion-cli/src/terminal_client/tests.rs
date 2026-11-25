@@ -1336,17 +1336,22 @@ async fn committed_inspector_opens_without_a_resident_chat_transcript() {
     ui.insert("unsent draft");
     assert_eq!(ui.conversation.items().count(), 0);
     evidence::open(&fixture.control, &mut ui, evidence::Select::Conversation).unwrap();
-    settle_io(&mut fixture.control, &mut ui).await;
+    let history = ui
+        .history_view
+        .as_mut()
+        .expect("idle inspector must own a pager");
+    assert!(history.is_archive());
+    history.start(fixture.control.session(), 0, false);
+    let loaded = history.complete().await;
+    ui.finish_history_read(loaded);
     assert_eq!(
         ui.conversation.items().count(),
         0,
         "inspection must not hydrate chat"
     );
-    let evidence::Source::Committed(document) = &ui.details.as_ref().unwrap().source else {
-        panic!("idle inspector must own its committed document");
-    };
+    let document = ui.history_view.as_ref().unwrap().page.as_ref().unwrap();
     assert!(
-        matches!(&document.items[..], [TranscriptItem::UserShell(shell)]
+        matches!(document.items().collect::<Vec<_>>().as_slice(), [TranscriptItem::UserShell(shell)]
         if matches!(&shell.outcome, Some(ion_core::UserShellOutcome::Observed { output })
             if output.value["stdout"] == "COMMITTED_EVIDENCE"))
     );
@@ -1356,7 +1361,7 @@ async fn committed_inspector_opens_without_a_resident_chat_transcript() {
             .any(|row| row.to_string().contains("printf COMMITTED_EVIDENCE"))
     );
     ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
-    assert!(ui.details.is_none());
+    assert!(ui.details.is_none() && ui.history_view.is_none());
     assert_eq!(ui.editor.draft, "unsent draft");
     fixture.control.shutdown().await;
 }

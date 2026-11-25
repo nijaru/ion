@@ -1,5 +1,7 @@
 //! One resident committed page, with source-relative row navigation.
-use std::{future::Future, pin::Pin};
+use std::{collections::BTreeMap, future::Future, pin::Pin};
+
+use crate::transcript_detail::DetailView;
 
 use ion_core::{
     Session, SessionError, TranscriptCursor, TranscriptItem, TranscriptPage, TranscriptProjection,
@@ -33,8 +35,18 @@ enum Inspection {
 
 pub(super) enum Completion {
     Current,
+    LoadedPage { at_start: bool },
     Stale,
     Expanded(TranscriptSource),
+}
+
+#[derive(Default)]
+enum Purpose {
+    #[default]
+    Transcript,
+    Archive {
+        restore: Option<Box<DetailView>>,
+    },
 }
 
 #[derive(Default)]
@@ -43,6 +55,8 @@ pub(super) struct HistoryViewport {
     pub(super) presenter: block_presenter::BlockPresenter,
     pub(super) page: Option<conversation::Conversation>,
     pub(super) page_rows: u16,
+    pub(super) tool_starts: BTreeMap<u64, usize>,
+    purpose: Purpose,
     read: Option<(Load, u64, Read<TranscriptPage>)>,
     inspection: Option<Inspection>,
     requested: Option<Load>,
@@ -54,6 +68,64 @@ pub(super) struct HistoryViewport {
 }
 
 impl HistoryViewport {
+    pub(super) fn archive() -> Self {
+        Self {
+            purpose: Purpose::Archive { restore: None },
+            ..Self::default()
+        }
+    }
+
+    pub(super) fn is_archive(&self) -> bool {
+        matches!(self.purpose, Purpose::Archive { .. })
+    }
+
+    pub(super) fn page_first_source(&self) -> Option<TranscriptSource> {
+        self.page.as_ref()?.items().find_map(TranscriptItem::source)
+    }
+
+    pub(super) fn turn_archive_page(&mut self, later: bool) {
+        if !self.pending() && self.requested.is_none() && self.inspection.is_none() {
+            self.requested = if later {
+                self.newer.last().copied().map(Load::Newer)
+            } else {
+                self.older.map(Load::Older)
+            };
+        }
+    }
+
+    pub(super) fn expand_archive(&mut self, view: &mut DetailView) {
+        if self.pending() || self.requested.is_some() || self.inspection.is_some() {
+            return;
+        }
+        let Some(source) = view.top_source() else {
+            return;
+        };
+        let Some(request) = self.expansion(Some(source)) else {
+            return;
+        };
+        let Purpose::Archive { restore } = &mut self.purpose else {
+            return;
+        };
+        *restore = Some(Box::new(std::mem::replace(
+            view,
+            DetailView::at_source(source),
+        )));
+        self.inspection = Some(request);
+    }
+
+    pub(super) fn restore_archive(&mut self) -> Option<DetailView> {
+        let Purpose::Archive { restore } = &mut self.purpose else {
+            return None;
+        };
+        let view = *restore.take()?;
+        self.inspection = None;
+        Some(view)
+    }
+
+    pub(super) fn archive_at_page(&self) -> bool {
+        self.is_archive() && self.inspection.is_none()
+    }
+
     pub(super) fn scroll(&mut self, delta: isize) {
         if self.read.is_some() || self.requested.is_some() {
             return;
@@ -84,13 +156,17 @@ impl HistoryViewport {
         self.read = None;
         self.requested = None;
         let source = self.view.top_source();
-        self.inspection = Some(match (self.current, source, &self.page) {
+        self.inspection = Some(self.expansion(source).unwrap_or(Inspection::Page));
+        source
+    }
+
+    fn expansion(&self, source: Option<TranscriptSource>) -> Option<Inspection> {
+        match (self.current, source, &self.page) {
             (Some(cursor), Some(source), Some(page)) if page.items().any(|item| {
                 matches!(item, TranscriptItem::Oversized { source: omitted } if *omitted == source)
-            }) => Inspection::Requested { cursor, source },
-            _ => Inspection::Page,
-        });
-        source
+            }) => Some(Inspection::Requested { cursor, source }),
+            _ => None,
+        }
     }
 
     pub(super) fn close_inspection(&mut self) {
@@ -98,8 +174,8 @@ impl HistoryViewport {
     }
 
     pub(super) fn inspection_items(&self) -> impl Iterator<Item = &TranscriptItem> {
-        let expanded = match self.inspection.as_ref().expect("open history inspection") {
-            Inspection::Ready(projection) => Some(projection.items.as_slice()),
+        let expanded = match &self.inspection {
+            Some(Inspection::Ready(projection)) => Some(projection.items.as_slice()),
             _ => None,
         };
         self.page
@@ -110,12 +186,16 @@ impl HistoryViewport {
     }
 
     pub(super) fn inspection_status(&self) -> Option<&'static str> {
-        match self.inspection.as_ref()? {
-            Inspection::Requested { .. } | Inspection::Reading { .. } => {
+        match &self.inspection {
+            Some(Inspection::Requested { .. } | Inspection::Reading { .. }) => {
                 Some("Loading committed evidence…")
             }
-            Inspection::Failed(status) => Some(status),
-            Inspection::Page | Inspection::Ready(_) => None,
+            Some(Inspection::Failed(status)) => Some(status),
+            None if self.is_archive() && self.error => {
+                Some("History read failed · reopen /tool all to retry")
+            }
+            None if self.is_archive() && self.pending() => Some("Loading committed history…"),
+            _ => None,
         }
     }
 
@@ -141,6 +221,7 @@ impl HistoryViewport {
         }
         let load = self.requested.take().or_else(|| {
             (!self.error
+                && (!self.is_archive() || self.current.is_none())
                 && self.newer.is_empty()
                 && !self.view.is_reading()
                 && (self.page.is_none() || !busy)
@@ -227,12 +308,14 @@ impl HistoryViewport {
         }
         self.current = Some(page.cursor);
         self.older = page.older;
+        self.tool_starts = page.tool_starts;
         self.page = Some(conversation::Conversation::history_page(page.projection));
         self.presenter = block_presenter::BlockPresenter::default();
         self.view = block_presenter::ConversationView::default();
-        if matches!(load, Load::Newer(_)) {
+        let at_start = matches!(load, Load::Newer(_));
+        if at_start {
             self.view.start_at_top();
         }
-        Completion::Current
+        Completion::LoadedPage { at_start }
     }
 }

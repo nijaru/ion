@@ -48,12 +48,16 @@ pub struct TranscriptPage {
     pub cursor: TranscriptCursor,
     pub projection: TranscriptProjection,
     pub older: Option<TranscriptCursor>,
+    /// Global number of the first tool in each included assistant response.
+    /// Includes omitted bundles so opening them does not renumber their calls.
+    pub tool_starts: BTreeMap<u64, usize>,
 }
 
 struct DisplayBundle {
     root: u64,
     parent: u64,
     records: Vec<u64>,
+    first_tool: Option<usize>,
 }
 
 fn encoded_len(size: &mut rusqlite::Statement<'_>, record: u64) -> Result<usize, SessionError> {
@@ -202,6 +206,7 @@ impl Session {
                     root,
                     parent,
                     records,
+                    first_tool: index.first_tool_number(root),
                 });
                 root = parent;
             }
@@ -210,6 +215,7 @@ impl Session {
         let mut budget = PAGE_BYTES;
         let mut older = cursor.root;
         let mut projected = Vec::new();
+        let mut tool_starts = BTreeMap::new();
         let mut size = snapshot.prepare_cached("SELECT length(body) FROM entries WHERE seq=?1")?;
         for bundle in bundles {
             let mut bytes = 0usize;
@@ -234,12 +240,16 @@ impl Session {
                 read_display_bundle(&snapshot, bundle.records)?.items
             };
             older = bundle.parent;
+            if let Some(first) = bundle.first_tool {
+                tool_starts.insert(bundle.root, first);
+            }
             projected.extend(items.into_iter().rev());
         }
         projected.reverse();
         Ok(Some(TranscriptPage {
             cursor,
             projection: TranscriptProjection { items: projected },
+            tool_starts,
             older: (older != 0).then_some(TranscriptCursor {
                 root: older,
                 ..cursor

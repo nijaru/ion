@@ -84,6 +84,7 @@ actions! {
     DetailUp, "app.details.up", DETAILS | HISTORY, ["up"], "Scroll details or transcript up one row";
     DetailDown, "app.details.down", DETAILS | HISTORY, ["down"], "Scroll details or transcript down one row";
     SaveOutput, "app.details.saveOutput", DETAILS, ["s"], "Save retained output from the first visible capture summary";
+    InspectEntry, "app.details.inspectEntry", DETAILS, ["enter"], "Expand omitted evidence at the top of an archived page";
     DetailStart, "app.details.start", DETAILS, ["home"], "Jump to the start of the current detail page";
     DetailEnd, "app.details.end", DETAILS | HISTORY, ["end"], "Jump to the end of details or follow the transcript tail";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";
@@ -103,6 +104,7 @@ impl KeyAction {
                 | Self::Transcript
                 | Self::ExpandTools
                 | Self::SaveOutput
+                | Self::InspectEntry
                 | Self::CycleReasoning
                 | Self::QuestionCollapse
                 | Self::Scope

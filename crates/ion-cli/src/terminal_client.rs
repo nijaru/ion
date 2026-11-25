@@ -343,17 +343,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 },
                 current = async { ui.history_view.as_mut().expect("pending history").complete().await }, if ui.history_view.as_ref().is_some_and(HistoryViewport::pending) => {
-                    match current {
-                        history_view::Completion::Current => {}
-                        history_view::Completion::Stale => {
-                            ui.details = None;
-                            ui.history_view = None;
-                            ui.status = "Transcript selection changed; reopen history".into();
-                        }
-                        history_view::Completion::Expanded(source) => {
-                            ui.details = Some(evidence::Inspection::page(DetailView::at_source(source)));
-                        }
-                    }
+                    ui.finish_history_read(current);
                     continue;
                 },
                 event = terminal.next_input() => event,
@@ -1431,14 +1421,49 @@ impl Frontend {
         Action::None
     }
 
+    fn finish_history_read(&mut self, completion: history_view::Completion) {
+        match completion {
+            history_view::Completion::Current => {}
+            history_view::Completion::LoadedPage { at_start } => {
+                if let Some(history) = &self.history_view
+                    && history.is_archive()
+                {
+                    let source = if at_start {
+                        history.page_first_source()
+                    } else {
+                        None
+                    };
+                    let view = source.map_or_else(DetailView::default, DetailView::at_source);
+                    self.details = Some(evidence::Inspection::page(view));
+                }
+            }
+            history_view::Completion::Stale => {
+                self.details = None;
+                self.history_view = None;
+                self.status = "Transcript selection changed; reopen history".into();
+            }
+            history_view::Completion::Expanded(source) => {
+                self.details = Some(evidence::Inspection::page(DetailView::at_source(source)));
+            }
+        }
+    }
+
     fn detail_key(&mut self, key: KeyEvent) -> Action {
         match self.keys.action(DETAILS, key) {
-            Some(KeyAction::ExpandTools) if key.repeat => {}
+            Some(KeyAction::ExpandTools | KeyAction::InspectEntry) if key.repeat => {}
             Some(KeyAction::Cancel | KeyAction::ExpandTools) => {
-                self.details = None;
                 if let Some(history) = &mut self.history_view {
-                    history.close_inspection();
+                    if let Some(view) = history.restore_archive() {
+                        self.details = Some(evidence::Inspection::page(view));
+                        return Action::None;
+                    }
+                    if history.is_archive() {
+                        self.history_view = None;
+                    } else {
+                        history.close_inspection();
+                    }
                 }
+                self.details = None;
                 if self.pickers.active().is_none() {
                     self.status = "Details closed".into();
                 }
@@ -1451,6 +1476,22 @@ impl Frontend {
                     .is_some() =>
             {
                 return Action::InspectAdjacent(action == KeyAction::Later);
+            }
+            Some(action @ (KeyAction::Earlier | KeyAction::Later))
+                if let Some(history) = &mut self.history_view
+                    && history.archive_at_page()
+                    && self.details.as_ref().is_some_and(|inspection| {
+                        inspection.view.at_page_edge(action == KeyAction::Later)
+                    }) =>
+            {
+                history.turn_archive_page(action == KeyAction::Later);
+            }
+            Some(KeyAction::InspectEntry) => {
+                if let Some(history) = &mut self.history_view
+                    && let Some(inspection) = &mut self.details
+                {
+                    history.expand_archive(&mut inspection.view);
+                }
             }
             Some(KeyAction::SaveOutput) => return Action::SaveOutput,
             Some(KeyAction::Copy) => {
@@ -1961,25 +2002,22 @@ fn modal_rows(
     let height = height.max(1) as usize;
     let inspector = ui.details.as_mut().expect("inspector owns viewport");
     match &inspector.source {
-        evidence::Source::HistoryPage => inspector.view.prepare_themed(
-            ui.history_view
+        evidence::Source::HistoryPage => {
+            let history = ui
+                .history_view
                 .as_ref()
-                .expect("history inspection has a page owner")
-                .inspection_items(),
-            &[],
-            0,
-            width,
-            ui.themes.theme(),
-        ),
+                .expect("history inspection has a page owner");
+            inspector.view.prepare_committed_page(
+                history.inspection_items(),
+                &history.tool_starts,
+                width,
+                ui.themes.theme(),
+            );
+        }
         evidence::Source::Recorded(tool) => {
             inspector
                 .view
                 .prepare_recorded(tool, width, ui.themes.theme())
-        }
-        evidence::Source::Committed(document) => {
-            inspector
-                .view
-                .prepare_themed(document.items.iter(), &[], 0, width, ui.themes.theme())
         }
         evidence::Source::Live => inspector.view.prepare_themed(
             ui.conversation.items(),

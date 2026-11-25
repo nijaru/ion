@@ -12,7 +12,7 @@ use ion_core::{
     TranscriptSource,
 };
 use ratatui::text::Line;
-use std::num::NonZeroUsize;
+use std::{collections::BTreeMap, num::NonZeroUsize};
 
 const PAGE_ENTRIES: usize = 32;
 
@@ -247,6 +247,24 @@ impl DetailView {
         }
     }
 
+    pub(crate) fn at_page_edge(&self, later: bool) -> bool {
+        self.page.as_ref().is_some_and(|page| {
+            if later {
+                page.end == page.total
+            } else {
+                page.before.is_none()
+            }
+        })
+    }
+
+    pub(crate) fn top_source(&self) -> Option<TranscriptSource> {
+        let page = self.page.as_ref()?;
+        match page.document.anchor(self.top(page, self.viewport)).entry {
+            EntryKey::Fact(source) => Some(source),
+            _ => None,
+        }
+    }
+
     fn top(&self, page: &Page, height: usize) -> usize {
         let limit = page.document.len.saturating_sub(height.max(1));
         // A chosen tool is a document to read from its heading. Only the
@@ -305,6 +323,28 @@ impl DetailView {
         revision: u64,
         width: usize,
         theme: &Theme,
+    ) {
+        self.prepare_source(items, notices, revision, width, theme, None);
+    }
+
+    pub(crate) fn prepare_committed_page<'a>(
+        &mut self,
+        items: impl Iterator<Item = &'a TranscriptItem>,
+        tool_starts: &BTreeMap<u64, usize>,
+        width: usize,
+        theme: &Theme,
+    ) {
+        self.prepare_source(items, &[], 0, width, theme, Some(tool_starts));
+    }
+
+    fn prepare_source<'a>(
+        &mut self,
+        items: impl Iterator<Item = &'a TranscriptItem>,
+        notices: &[String],
+        revision: u64,
+        width: usize,
+        theme: &Theme,
+        tool_starts: Option<&BTreeMap<u64, usize>>,
     ) {
         let width = width.max(1);
         if self.page.as_ref().is_some_and(|page| {
@@ -438,8 +478,15 @@ impl DetailView {
             );
             let mut number = 0;
             for (index, entry) in entries.iter().enumerate().take(end) {
-                if matches!(entry, Entry::Tool(_)) {
-                    number += 1;
+                if let Entry::Tool(activity) = entry {
+                    number = if let Some(starts) = tool_starts {
+                        let TranscriptActivityIdentity::Tool(tool) = activity.identity else {
+                            unreachable!("conversation entries list top-level tools");
+                        };
+                        starts[&tool.assistant_entry] + tool.ordinal
+                    } else {
+                        number + 1
+                    };
                 }
                 if index >= start {
                     document.entry(

@@ -649,6 +649,31 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 assert tmux("capture-pane", "-p", "-t", target, "-S", "-").count("PAGED_SHELL_057") == 1
             tmux("send-keys", "-t", target, "C-c", "C-c")
             wait_for(lambda pane: "PAGED_UNSENT" not in pane and composer_ready(pane))
+
+            end = time.monotonic() + 12
+            tmux("resize-window", "-t", target, "-x", "100", "-y", "46")
+            tmux("send-keys", "-t", target, "-l", "/tool all")
+            tmux("send-keys", "-t", target, "Enter")
+            wait_for(lambda pane: "Conversation ·" in pane and "exceeds the page limit" in pane)
+            for direction, marker in (("Left", "PAGED_SHELL_009"), ("Right", "PAGED_SHELL_010")):
+                for _ in range(26):
+                    if marker in capture():
+                        break
+                    tmux("send-keys", "-t", target, direction)
+                    time.sleep(0.05)
+                wait_for(lambda pane: "Conversation ·" in pane and marker in pane)
+            tmux("send-keys", "-t", target, "Right", "Right", "Right", "End")
+            wait_for(lambda pane: "Conversation ·" in pane and "exceeds the page limit" in pane)
+            tmux("resize-window", "-t", target, "-x", "26", "-y", "3")
+            wait_for(lambda pane: "Conversation ·" in pane and "/export" in pane and "History entry" not in pane)
+            tmux("send-keys", "-t", target, "Enter")
+            wait_for(lambda pane: "User shell" in pane and "/export" not in pane)
+            tmux("resize-window", "-t", target, "-x", "100", "-y", "22")
+            wait_for(lambda pane: "Conversation ·" in pane and "PAGED_SHELL_057" in pane and "PAGED_SHELL_056" not in pane)
+            tmux("send-keys", "-t", target, "Escape")
+            wait_for(lambda pane: "Conversation ·" in pane and "exceeds the page limit" in pane)
+            tmux("send-keys", "-t", target, "Escape")
+            wait_for(lambda pane: composer_ready(pane) and "Conversation ·" not in pane)
             tmux("send-keys", "-t", target, "C-d", "C-d")
             while tmux("display-message", "-p", "-t", target, "#{pane_dead}").strip() != "1":
                 assert time.monotonic() < end, f"{mode}: reopened pager did not exit"
@@ -656,7 +681,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert tmux("display-message", "-p", "-t", target, "#{pane_dead_status}").strip() == "0"
             tmux("kill-session", "-t", target)
             assert len(requests) == 5, "passive paging issued a model request"
-            print(f"Ion {mode} committed transcript pages: older, resize, page evidence, oversized evidence, newer, end, exact draft: OK")
+            print(f"Ion {mode} Alt-T and /tool all: older/newer, resize, page evidence, oversized evidence, exact draft: OK")
     finally:
         if native_pid is not None:
             try:
