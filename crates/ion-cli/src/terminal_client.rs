@@ -254,7 +254,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.provider_usage.bind(runtime.provider_usage().filter(|source| ui.footer.shows_provider_usage(source.kind())));
             ui.reconcile_recovery(runtime.session().id())?;
-            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, &ui.conversation) {
+            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, &ui.conversation, ui.conversation.scope().is_none() && !ui.dedicated_pane) {
                 ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }
@@ -574,7 +574,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     }
     if outcome.is_ok()
         && std::io::stdout().is_terminal()
-        && ui.conversation.items().next().is_some()
+        && (ui.conversation.has_omitted_history() || ui.conversation.items().next().is_some())
         && let Some(command) = resume_command(runtime.catalog(), runtime.session())
     {
         crate::print_stdout(format_args!("To resume: {command}"))?;
@@ -1286,9 +1286,21 @@ impl Frontend {
             }
             Some(KeyAction::ExpandTools) => {
                 if self.mode == TuiMode::Inline && !self.dedicated_pane {
-                    self.details = Some(evidence::Inspection::live(DetailView::latest_output(
-                        self.conversation.items(),
-                    )));
+                    if self.conversation.has_omitted_history()
+                        && !self
+                            .conversation
+                            .items()
+                            .any(|item| matches!(item, TranscriptItem::UserShell(_)))
+                        && !crate::transcript_detail::tools(self.conversation.items())
+                            .any(|tool| tool.result.is_some())
+                    {
+                        self.open_archive();
+                    } else {
+                        self.details = Some(evidence::Inspection::live(DetailView::latest_output(
+                            self.conversation.items(),
+                            self.conversation.tool_offset(),
+                        )));
+                    }
                 } else {
                     self.toggle_tool_output();
                 }
@@ -1524,8 +1536,13 @@ impl Frontend {
         }
     }
 
+    fn open_archive(&mut self) {
+        self.history_view = Some(HistoryViewport::archive());
+        self.details = Some(evidence::Inspection::page(DetailView::default()));
+    }
+
     fn open_live_details(&mut self, selection: evidence::Select) {
-        match selection.view(self.conversation.items()) {
+        match selection.view(self.conversation.items(), self.conversation.tool_offset()) {
             Ok(view) => self.details = Some(evidence::Inspection::live(view)),
             Err(status) => self.status = status.into(),
         }
@@ -2019,10 +2036,11 @@ fn modal_rows(
                 .view
                 .prepare_recorded(tool, width, ui.themes.theme())
         }
-        evidence::Source::Live => inspector.view.prepare_themed(
+        evidence::Source::Live => inspector.view.prepare_live(
             ui.conversation.items(),
             ui.conversation.live().map_or(&[], LiveTranscript::notices),
             ui.conversation.revision(),
+            ui.conversation.tool_offset(),
             width,
             ui.themes.theme(),
         ),

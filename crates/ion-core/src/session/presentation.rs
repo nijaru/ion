@@ -120,9 +120,70 @@ pub struct SessionPresentation {
     pub unfinished: bool,
     pub after: Option<PresentationCursor>,
     pub checkpoint: Option<PresentationCursor>,
+    /// Number of top-level tools in an intentionally omitted startup prefix.
+    /// `Some(0)` still indicates older history is available in the pager.
+    pub omitted_prefix: Option<usize>,
     pub transcript: TranscriptProjection,
     pub prompts: Vec<String>,
     pub usage: UsageTotals,
+}
+
+enum DisplayRead {
+    Reconcile(Option<PresentationCursor>),
+    Seed,
+}
+
+struct TailBoundary {
+    entry: u64,
+    tools: usize,
+}
+
+struct TailFact {
+    entry: u64,
+    previous: Option<TailBoundary>,
+}
+
+enum DisplayPlan {
+    Selected(Vec<u64>),
+    Tail {
+        newest: TailBoundary,
+        facts: Vec<TailFact>,
+    },
+}
+
+impl DisplayPlan {
+    fn finish(self, snapshot: &Connection) -> Result<(Vec<u64>, Option<usize>), SessionError> {
+        let Self::Tail { newest, facts } = self else {
+            let Self::Selected(entries) = self else {
+                unreachable!()
+            };
+            return Ok((entries, None));
+        };
+        let mut remaining = PAGE_BYTES;
+        let mut keep = 0;
+        let mut boundary = newest;
+        let mut size = snapshot.prepare_cached("SELECT length(body) FROM entries WHERE seq=?1")?;
+        for (index, fact) in facts.iter().enumerate() {
+            let Some(bytes) = remaining.checked_sub(encoded_len(&mut size, fact.entry)?) else {
+                break;
+            };
+            remaining = bytes;
+            if let Some(previous) = &fact.previous {
+                keep = index + 1;
+                boundary = TailBoundary {
+                    entry: previous.entry,
+                    tools: previous.tools,
+                };
+            }
+        }
+        let selected = facts
+            .into_iter()
+            .take(keep)
+            .rev()
+            .map(|fact| fact.entry)
+            .collect();
+        Ok((selected, (boundary.entry != 0).then_some(boundary.tools)))
+    }
 }
 
 impl Session {
@@ -500,6 +561,17 @@ impl Session {
         &self,
         after: Option<PresentationCursor>,
     ) -> Result<SessionPresentation, SessionError> {
+        self.read_presentation(DisplayRead::Reconcile(after))
+    }
+
+    /// Initialize an ordinary terminal from a bounded suffix of complete
+    /// settled units. Never use this to reconcile an already-mounted display.
+    /// Interrupted and non-boundary selections still rebuild in full.
+    pub fn presentation_seed(&self) -> Result<SessionPresentation, SessionError> {
+        self.read_presentation(DisplayRead::Seed)
+    }
+
+    fn read_presentation(&self, read: DisplayRead) -> Result<SessionPresentation, SessionError> {
         let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
         let (
@@ -522,21 +594,6 @@ impl Session {
             let revision = store.state.sequence;
             let index = &store.context_index;
             let unfinished = store.state.active.is_some() || store.state.pending_shell.is_some();
-            let after = after.filter(|cut| {
-                cut.session == header.id
-                    && cut.selection == index.selection
-                    && cut.revision <= revision
-            });
-            let (after, selected) = match after.and_then(|cut| index.transcript_after(cut.through))
-            {
-                Some(selected) => (after, selected),
-                None => (
-                    None,
-                    index
-                        .transcript_after(0)
-                        .expect("root terminates every ancestry"),
-                ),
-            };
             let checkpoint = if unfinished {
                 None
             } else {
@@ -548,6 +605,51 @@ impl Session {
                         revision,
                         through,
                     })
+            };
+            let (after, selected) = match (read, checkpoint) {
+                (DisplayRead::Seed, Some(checkpoint)) => {
+                    let newest = TailBoundary {
+                        entry: checkpoint.through,
+                        tools: index.tools_through(checkpoint.through),
+                    };
+                    let mut cursor = newest.entry;
+                    let mut facts = Vec::new();
+                    while cursor != 0 && facts.len() < PAGE_RECORDS {
+                        let previous = index.transcript_parent(cursor);
+                        facts.push(TailFact {
+                            entry: cursor,
+                            previous: index.is_transcript_boundary(previous).then(|| {
+                                TailBoundary {
+                                    entry: previous,
+                                    tools: index.tools_through(previous),
+                                }
+                            }),
+                        });
+                        cursor = previous;
+                    }
+                    (None, DisplayPlan::Tail { newest, facts })
+                }
+                (read, _) => {
+                    let after = match read {
+                        DisplayRead::Reconcile(after) => after.filter(|cut| {
+                            cut.session == header.id
+                                && cut.selection == index.selection
+                                && cut.revision <= revision
+                        }),
+                        DisplayRead::Seed => None,
+                    };
+                    match after.and_then(|cut| index.transcript_after(cut.through)) {
+                        Some(selected) => (after, DisplayPlan::Selected(selected)),
+                        None => (
+                            None,
+                            DisplayPlan::Selected(
+                                index
+                                    .transcript_after(0)
+                                    .expect("root terminates every ancestry"),
+                            ),
+                        ),
+                    }
+                }
             };
             (
                 snapshot,
@@ -564,6 +666,7 @@ impl Session {
                 index.prompt_recall.snapshot(),
             )
         };
+        let (selected, omitted_prefix) = selected.finish(&snapshot)?;
         let transcript = TranscriptProjection::from_selected(
             selected
                 .into_iter()
@@ -579,6 +682,7 @@ impl Session {
             unfinished,
             after,
             checkpoint,
+            omitted_prefix,
             transcript,
             prompts,
             usage,

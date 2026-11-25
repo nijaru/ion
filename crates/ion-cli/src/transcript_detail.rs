@@ -16,6 +16,11 @@ use std::{collections::BTreeMap, num::NonZeroUsize};
 
 const PAGE_ENTRIES: usize = 32;
 
+enum Numbering<'a> {
+    Linear(usize),
+    Committed(&'a BTreeMap<u64, usize>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EntryKey {
     Fact(TranscriptSource),
@@ -104,8 +109,11 @@ impl DetailView {
 
     /// Open the latest recorded tool at its heading. If a manual shell run is
     /// newer, the conversation inspector is the view that includes its output.
-    pub(crate) fn latest_output<'a>(items: impl IntoIterator<Item = &'a TranscriptItem>) -> Self {
-        let mut number = 0;
+    pub(crate) fn latest_output<'a>(
+        items: impl IntoIterator<Item = &'a TranscriptItem>,
+        offset: usize,
+    ) -> Self {
+        let mut number = offset;
         let mut latest = None;
         for entry in entries(items.into_iter()) {
             match entry {
@@ -316,6 +324,7 @@ impl DetailView {
         self.prepare_themed(items, notices, revision, width, &Theme::default());
     }
 
+    #[cfg(test)]
     pub(crate) fn prepare_themed<'a>(
         &mut self,
         items: impl Iterator<Item = &'a TranscriptItem>,
@@ -324,7 +333,26 @@ impl DetailView {
         width: usize,
         theme: &Theme,
     ) {
-        self.prepare_source(items, notices, revision, width, theme, None);
+        self.prepare_source(items, notices, revision, width, theme, Numbering::Linear(0));
+    }
+
+    pub(crate) fn prepare_live<'a>(
+        &mut self,
+        items: impl Iterator<Item = &'a TranscriptItem>,
+        notices: &[String],
+        revision: u64,
+        offset: usize,
+        width: usize,
+        theme: &Theme,
+    ) {
+        self.prepare_source(
+            items,
+            notices,
+            revision,
+            width,
+            theme,
+            Numbering::Linear(offset),
+        );
     }
 
     pub(crate) fn prepare_committed_page<'a>(
@@ -334,7 +362,14 @@ impl DetailView {
         width: usize,
         theme: &Theme,
     ) {
-        self.prepare_source(items, &[], 0, width, theme, Some(tool_starts));
+        self.prepare_source(
+            items,
+            &[],
+            0,
+            width,
+            theme,
+            Numbering::Committed(tool_starts),
+        );
     }
 
     fn prepare_source<'a>(
@@ -344,7 +379,7 @@ impl DetailView {
         revision: u64,
         width: usize,
         theme: &Theme,
-        tool_starts: Option<&BTreeMap<u64, usize>>,
+        numbering: Numbering<'_>,
     ) {
         let width = width.max(1);
         if self.page.as_ref().is_some_and(|page| {
@@ -423,6 +458,10 @@ impl DetailView {
         let mut document = Document::new(theme);
         let mut evidence = None;
         let mut adjacent_tools = [None, None];
+        let offset = match numbering {
+            Numbering::Linear(offset) => offset,
+            Numbering::Committed(_) => 0,
+        };
         if let Some((number, identity)) = &mut self.tool {
             let mut previous = None;
             let mut tool_entries = entries
@@ -435,7 +474,7 @@ impl DetailView {
                 .map(|(index, activity)| {
                     (
                         (
-                            NonZeroUsize::new(index + 1).expect("one-based tool number"),
+                            NonZeroUsize::new(offset + index + 1).expect("one-based tool number"),
                             activity.identity,
                         ),
                         activity,
@@ -476,10 +515,10 @@ impl DetailView {
                 ),
                 width,
             );
-            let mut number = 0;
+            let mut number = offset;
             for (index, entry) in entries.iter().enumerate().take(end) {
                 if let Entry::Tool(activity) = entry {
-                    number = if let Some(starts) = tool_starts {
+                    number = if let Numbering::Committed(starts) = numbering {
                         let TranscriptActivityIdentity::Tool(tool) = activity.identity else {
                             unreachable!("conversation entries list top-level tools");
                         };

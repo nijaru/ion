@@ -207,6 +207,49 @@ fn observed_turn_advances_the_cut_only_if_admission_follows_the_prefix() {
 }
 
 #[test]
+fn terminal_seed_bounds_old_units_without_limiting_post_start_catchup() {
+    let (root, path, session) = fixture();
+    for index in 0..42 {
+        finish(&session, &format!("question {index}"), "answer");
+    }
+    let seed = session.presentation_seed().unwrap();
+    let full = session.presentation(None).unwrap();
+    assert_eq!(seed.omitted_prefix, Some(0));
+    assert_eq!(seed.transcript.items.len(), 64);
+    assert_eq!(
+        seed.transcript.items,
+        full.transcript.items[full.transcript.items.len() - 64..]
+    );
+    assert_eq!(seed.checkpoint, full.checkpoint);
+    finish(&session, "large reply", &"x".repeat(270 * 1024));
+    let delta = session.presentation(seed.checkpoint).unwrap();
+    assert_eq!(delta.after, seed.checkpoint);
+    assert!(delta.omitted_prefix.is_none());
+    assert_eq!(
+        delta.transcript.items.len(),
+        2,
+        "mounted displays cannot omit a new large unit"
+    );
+    drop(session);
+    let session = Session::open(&path).unwrap();
+    let oversized_seed = session.presentation_seed().unwrap();
+    assert_eq!(oversized_seed.omitted_prefix, Some(0));
+    assert!(oversized_seed.transcript.items.is_empty());
+    assert_eq!(oversized_seed.checkpoint, delta.checkpoint);
+    let _ = session
+        .admit_user_shell("interrupted shell".into(), true)
+        .unwrap();
+    let interrupted = session.presentation_seed().unwrap();
+    assert!(interrupted.unfinished && interrupted.omitted_prefix.is_none());
+    assert_eq!(
+        interrupted.transcript,
+        session.presentation(None).unwrap().transcript
+    );
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn terminal_refresh_reuses_only_idle_cuts_and_catches_up_in_selected_order() {
     let (root, path, session) = fixture();
     finish(&session, "base", "base reply");
