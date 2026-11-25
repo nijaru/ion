@@ -14,8 +14,7 @@ use std::{
 use crate::display_text::{fit_line, push_wrapped};
 use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, HISTORY, KeyAction, KeyBindings};
 use crate::terminal_commands::Builtin;
-use crate::transcript_detail::{DetailView, tools};
-use crate::transcript_render::{activity_subject, state_label};
+use crate::transcript_detail::DetailView;
 use anyhow::{Context, Result};
 use ion_ai::{Content, ModelRef};
 use ion_app::attachments::AttachmentSource;
@@ -43,6 +42,7 @@ mod editing;
 mod editor;
 mod editor_control;
 mod editor_recovery;
+mod evidence;
 mod file_discovery;
 mod gestures;
 mod history_view;
@@ -170,7 +170,7 @@ struct Frontend {
     status: String,
     session_io: session_io::SessionIo,
     pickers: Pickers,
-    details: Option<DetailView>,
+    details: Option<evidence::Inspection>,
     clipboard_job: Option<ClipboardJob>,
     termination: CancellationToken,
     question: Option<QuestionModal>,
@@ -351,7 +351,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             ui.status = "Transcript selection changed; reopen history".into();
                         }
                         history_view::Completion::Expanded(source) => {
-                            ui.details = Some(DetailView::at_source(source));
+                            ui.details = Some(evidence::Inspection::page(DetailView::at_source(source)));
                         }
                     }
                     continue;
@@ -760,7 +760,11 @@ async fn login_in_terminal(
 }
 
 async fn copy_detail_evidence(ui: &mut Frontend, terminal: &mut TerminalSession) -> Result<()> {
-    let Some((number, evidence)) = ui.details.as_ref().and_then(DetailView::copy_evidence) else {
+    let Some((number, evidence)) = ui
+        .details
+        .as_ref()
+        .and_then(|details| details.view.copy_evidence())
+    else {
         ui.status = "No selected tool evidence; open /tool N to copy".into();
         return Ok(());
     };
@@ -1284,7 +1288,9 @@ impl Frontend {
             }
             Some(KeyAction::ExpandTools) => {
                 if self.mode == TuiMode::Inline && !self.dedicated_pane {
-                    self.details = Some(DetailView::latest_output(self.conversation.items()));
+                    self.details = Some(evidence::Inspection::live(DetailView::latest_output(
+                        self.conversation.items(),
+                    )));
                 } else {
                     self.toggle_tool_output();
                 }
@@ -1370,6 +1376,7 @@ impl Frontend {
                 self.details
                     .as_mut()
                     .expect("derived inspector focus")
+                    .view
                     .scroll_by(if down { 3 } else { -3 });
             }
             interaction::InputTarget::History => {
@@ -1401,11 +1408,10 @@ impl Frontend {
         match action {
             KeyAction::Cancel | KeyAction::Transcript => self.history_view = None,
             KeyAction::ExpandTools => {
-                self.details = Some(
-                    history
-                        .open_inspection()
-                        .map_or_else(|| DetailView::new(None), DetailView::at_source),
-                );
+                let view = history
+                    .open_inspection()
+                    .map_or_else(|| DetailView::new(None), DetailView::at_source);
+                self.details = Some(evidence::Inspection::page(view));
             }
             KeyAction::DetailUp => history.scroll(-1),
             KeyAction::DetailDown => history.scroll(1),
@@ -1434,7 +1440,7 @@ impl Frontend {
                 if self
                     .details
                     .as_ref()
-                    .and_then(DetailView::copy_evidence)
+                    .and_then(|details| details.view.copy_evidence())
                     .is_some()
                 {
                     return Action::CopyDetail;
@@ -1442,8 +1448,8 @@ impl Frontend {
                 self.status = "No selected tool evidence; open /tool N to copy".into();
             }
             Some(action) => {
-                if let Some(view) = &mut self.details {
-                    view.navigate(action);
+                if let Some(details) = &mut self.details {
+                    details.view.navigate(action);
                 }
             }
             None => {}
@@ -1451,90 +1457,27 @@ impl Frontend {
         Action::None
     }
 
-    fn open_tool_picker(&mut self, output_query: Option<&str>) {
-        let mut items: Vec<_> = tools(self.conversation.items())
-            .enumerate()
-            .filter(|(_, activity)| {
-                output_query.is_none_or(|query| {
-                    activity.result.as_ref().is_some_and(|result| {
-                        crate::transcript_detail::result_contains(&result.value, query)
-                    })
-                })
-            })
-            .map(|(index, activity)| {
-                let mut label = format!(
-                    "{} · {} · {}",
-                    index + 1,
-                    activity.name,
-                    state_label(activity.state)
-                );
-                if let Some(subject) = activity_subject(activity, &self.cwd) {
-                    label.push_str(" · ");
-                    label.push_str(&crate::display_text::fit_line(&subject, 200));
-                }
-                PickerItem {
-                    label,
-                    detail: None,
-                    value: PickerValue::RecordedTool(activity.identity),
-                }
-            })
-            .collect();
-        if items.is_empty() {
-            self.status = if output_query.is_some() {
-                "No matching recorded tool output (raw captures not searched)"
-            } else {
-                "No tools in this session"
-            }
-            .into();
-            return;
-        }
-        items.reverse();
-        self.pickers.open(Picker {
-            title: if output_query.is_some() {
-                "Recorded tool output"
-            } else {
-                "Recorded tools"
-            },
-            query: String::new(),
-            selected: 0,
-            items,
-        });
-    }
-
-    fn open_recorded_tool(&mut self, identity: ion_core::TranscriptActivityIdentity) {
-        let number = tools(self.conversation.items())
-            .position(|activity| activity.identity == identity)
-            .and_then(|index| std::num::NonZeroUsize::new(index + 1));
-        if let Some(number) = number {
-            self.details = Some(DetailView::new(Some((number, identity))));
-        } else {
-            self.status = "Tool no longer in the transcript; reopen /tools".into();
-        }
-    }
-
     fn discard_provisional(&mut self) {
         self.view.discard_provisional();
-        if let Some(details) = &mut self.details {
-            details.discard_provisional();
+        if let Some(details) = &mut self.details
+            && matches!(details.source, evidence::Source::Live)
+        {
+            details.view.discard_provisional();
         }
     }
 
+    fn open_live_details(&mut self, selection: evidence::Select) {
+        match selection.view(self.conversation.items()) {
+            Ok(view) => self.details = Some(evidence::Inspection::live(view)),
+            Err(status) => self.status = status.into(),
+        }
+    }
+
+    #[cfg(test)]
     fn open_details(&mut self, number: Option<usize>) {
-        let selected = match number {
-            None => None,
-            Some(index) => {
-                let Some(number) = std::num::NonZeroUsize::new(index) else {
-                    self.status = "Tool result not found; use /tools to list tools".into();
-                    return;
-                };
-                let Some(activity) = tools(self.conversation.items()).nth(index - 1) else {
-                    self.status = "Tool result not found; use /tools to list tools".into();
-                    return;
-                };
-                Some((number, activity.identity))
-            }
-        };
-        self.details = Some(DetailView::new(selected));
+        self.open_live_details(
+            number.map_or(evidence::Select::Conversation, evidence::Select::Number),
+        );
     }
 }
 
@@ -2000,16 +1943,29 @@ fn modal_rows(
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
     let inspector = ui.details.as_mut().expect("inspector owns viewport");
-    if let Some(history) = &ui.history_view {
-        inspector.prepare_themed(history.inspection_items(), &[], 0, width, ui.themes.theme());
-    } else {
-        inspector.prepare_themed(
+    match &inspector.source {
+        evidence::Source::HistoryPage => inspector.view.prepare_themed(
+            ui.history_view
+                .as_ref()
+                .expect("history inspection has a page owner")
+                .inspection_items(),
+            &[],
+            0,
+            width,
+            ui.themes.theme(),
+        ),
+        evidence::Source::Committed(document) => {
+            inspector
+                .view
+                .prepare_themed(document.items.iter(), &[], 0, width, ui.themes.theme())
+        }
+        evidence::Source::Live => inspector.view.prepare_themed(
             ui.conversation.items(),
             ui.conversation.live().map_or(&[], LiveTranscript::notices),
             ui.conversation.revision(),
             width,
             ui.themes.theme(),
-        );
+        ),
     }
     let show_controls = ui.gestures.prompt().is_none();
     let inspection_status = ui
@@ -2033,6 +1989,7 @@ fn modal_rows(
         .details
         .as_mut()
         .expect("inspector owns viewport")
+        .view
         .window_rows(viewport);
     let mut rows = content.cloned().collect::<Vec<_>>();
     let padding = viewport - rows.len();
@@ -2043,6 +2000,7 @@ fn modal_rows(
         ui.details
             .as_ref()
             .expect("inspector owns viewport")
+            .view
             .controls(&ui.keys)
     });
     let mut next_row = viewport;

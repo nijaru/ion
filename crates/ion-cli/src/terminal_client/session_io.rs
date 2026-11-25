@@ -16,6 +16,8 @@ type ReadFuture = Pin<Box<dyn Future<Output = Result<ReadOutput>> + Send>>;
 
 pub(super) enum ReadOutput {
     History(Box<History>),
+    Inspection(Box<super::evidence::Inspection>),
+    Status(String),
     Notice(String),
     CredentialRemoved(String),
     Picker(Box<super::Picker>),
@@ -563,6 +565,8 @@ pub(super) fn apply(
                 }
             }
         }
+        Ok(ReadOutput::Inspection(inspection)) => ui.details = Some(*inspection),
+        Ok(ReadOutput::Status(status)) => ui.status = status,
         Ok(ReadOutput::Notice(notice)) => ui.print(notice),
         Ok(ReadOutput::CredentialRemoved(provider)) => {
             ui.provider_usage.credential_changed(&provider);
@@ -767,8 +771,10 @@ impl Frontend {
             }
             self.view.follow_end();
         }
-        if let Some(details) = &mut self.details {
-            details.invalidate();
+        if let Some(details) = &mut self.details
+            && matches!(details.source, super::evidence::Source::Live)
+        {
+            details.view.invalidate();
         }
         self.editor.replace_prompt_history(prompts, same_session);
         self.session_label = label;

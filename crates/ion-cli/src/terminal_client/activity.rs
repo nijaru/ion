@@ -310,8 +310,10 @@ pub(super) fn apply(
                 && let Some(live) = ui.conversation.live()
             {
                 ui.view.commit_response(live, &event);
-                if let Some(details) = &mut ui.details {
-                    details.commit_response(live, &event);
+                if let Some(details) = &mut ui.details
+                    && matches!(details.source, super::evidence::Source::Live)
+                {
+                    details.view.commit_response(live, &event);
                 }
             }
             if ui.conversation.observe(operation, &event) {
@@ -831,7 +833,7 @@ mod tests {
         }
         ui.open_details(None);
         super::super::modal_rows(&mut ui, None, 80, 12);
-        ui.details.as_mut().unwrap().scroll_by(-30);
+        ui.details.as_mut().unwrap().view.scroll_by(-30);
         let before = super::super::modal_rows(&mut ui, None, 80, 12).0[0].to_string();
         assert!(before.starts_with("BODY_"));
         apply(
@@ -855,7 +857,7 @@ mod tests {
         );
         // Commit splits the streamed parts into separately sourced entries.
         // A refresh must keep the text part, not adopt the earlier thinking part.
-        ui.details.as_mut().unwrap().invalidate();
+        ui.details.as_mut().unwrap().view.invalidate();
         assert_eq!(
             super::super::modal_rows(&mut ui, None, 30, 16).0[0].to_string(),
             before
@@ -874,9 +876,10 @@ mod tests {
         ui.details
             .as_mut()
             .unwrap()
+            .view
             .navigate(crate::keybindings::KeyAction::Later);
         super::super::modal_rows(&mut ui, None, 80, 12);
-        ui.details.as_mut().unwrap().scroll_by(-30);
+        ui.details.as_mut().unwrap().view.scroll_by(-30);
         assert!(
             super::super::modal_rows(&mut ui, None, 80, 12).0[0]
                 .to_string()
@@ -908,9 +911,10 @@ mod tests {
         ui.details
             .as_mut()
             .unwrap()
+            .view
             .navigate(crate::keybindings::KeyAction::Later);
         super::super::modal_rows(&mut ui, None, 80, 12);
-        ui.details.as_mut().unwrap().scroll_by(-30);
+        ui.details.as_mut().unwrap().view.scroll_by(-30);
         assert!(
             super::super::modal_rows(&mut ui, None, 80, 12).0[0]
                 .to_string()

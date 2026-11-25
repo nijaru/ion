@@ -32,7 +32,8 @@ pub(super) enum PickerValue {
     Model(ModelRef),
     Reasoning(ion_ai::Reasoning),
     Login(String),
-    RecordedTool(ion_core::TranscriptActivityIdentity),
+    LiveTool(ion_core::TranscriptActivityIdentity),
+    CommittedTool(ion_core::TranscriptActivityIdentity),
     Setting(super::configuration::Setting),
     Themes,
     Theme(String),
@@ -869,8 +870,9 @@ impl Pickers {
                         PickerValue::CompletionDelivery(policy) => {
                             Some(PickerValue::CompletionDelivery(policy))
                         }
-                        PickerValue::RecordedTool(identity) => {
-                            Some(PickerValue::RecordedTool(identity))
+                        PickerValue::LiveTool(identity) => Some(PickerValue::LiveTool(identity)),
+                        PickerValue::CommittedTool(identity) => {
+                            Some(PickerValue::CommittedTool(identity))
                         }
                         _ => None,
                     };

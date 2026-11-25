@@ -312,8 +312,18 @@ pub(super) async fn apply_picker(
         return Ok(());
     }
     let result = match value {
-        PickerValue::RecordedTool(identity) => {
-            ui.open_recorded_tool(identity);
+        PickerValue::LiveTool(identity) => {
+            ui.open_live_details(super::evidence::Select::Identity(identity));
+            return Ok(());
+        }
+        PickerValue::CommittedTool(identity) => {
+            if let Err(error) = super::evidence::open_committed(
+                runtime.session(),
+                ui,
+                super::evidence::Select::Identity(identity),
+            ) {
+                ui.status = format!("{error:#}");
+            }
             return Ok(());
         }
         PickerValue::Context { target, .. } => {

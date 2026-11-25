@@ -1320,6 +1320,48 @@ async fn withdrawn_preparation_replaces_draft_and_invalidates_file_completion() 
 }
 
 #[tokio::test]
+async fn committed_inspector_opens_without_a_resident_chat_transcript() {
+    let mut fixture = Fixture::new();
+    fixture
+        .control
+        .shell(
+            "printf COMMITTED_EVIDENCE".into(),
+            false,
+            EditorDraft::at_end("!printf COMMITTED_EVIDENCE".into()),
+        )
+        .unwrap();
+    drain(&mut fixture.control, &mut Frontend::default()).await;
+
+    let mut ui = Frontend::default();
+    ui.insert("unsent draft");
+    assert_eq!(ui.conversation.items().count(), 0);
+    evidence::open(&fixture.control, &mut ui, evidence::Select::Conversation).unwrap();
+    settle_io(&mut fixture.control, &mut ui).await;
+    assert_eq!(
+        ui.conversation.items().count(),
+        0,
+        "inspection must not hydrate chat"
+    );
+    let evidence::Source::Committed(document) = &ui.details.as_ref().unwrap().source else {
+        panic!("idle inspector must own its committed document");
+    };
+    assert!(
+        matches!(&document.items[..], [TranscriptItem::UserShell(shell)]
+        if matches!(&shell.outcome, Some(ion_core::UserShellOutcome::Observed { output })
+            if output.value["stdout"] == "COMMITTED_EVIDENCE"))
+    );
+    let (rows, _) = modal_rows(&mut ui, None, 100, 80);
+    assert!(
+        rows.iter()
+            .any(|row| row.to_string().contains("printf COMMITTED_EVIDENCE"))
+    );
+    ui.key(KeyEvent::new(KeyCode::Esc, Modifiers::NONE), None, None);
+    assert!(ui.details.is_none());
+    assert_eq!(ui.editor.draft, "unsent draft");
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn settled_shell_is_reconciled_and_shutdown_errors_remain_visible() {
     let mut fixture = Fixture::new();
     fixture

@@ -216,7 +216,11 @@ fn transcript_details_cannot_scroll_past_either_end() {
     assert!(top[8].to_string().starts_with("ROW_"));
     // Wheel and keyboard share the same bounds, even after a taller resize.
     for _ in 0..100 {
-        ui.details.as_mut().unwrap().navigate(KeyAction::PageUp);
+        ui.details
+            .as_mut()
+            .unwrap()
+            .view
+            .navigate(KeyAction::PageUp);
     }
     let (taller, _) = modal_rows(&mut ui, None, 80, 30);
     assert!(taller[0].to_string().starts_with("Conversation · entries"));
@@ -224,7 +228,11 @@ fn transcript_details_cannot_scroll_past_either_end() {
 
     for _ in 0..100 {
         ui.mouse(MouseKind::ScrollDown);
-        ui.details.as_mut().unwrap().navigate(KeyAction::PageDown);
+        ui.details
+            .as_mut()
+            .unwrap()
+            .view
+            .navigate(KeyAction::PageDown);
     }
     let (end, _) = modal_rows(&mut ui, None, 80, 12);
     assert_eq!(tail, end);
@@ -287,7 +295,7 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
     };
     ui.conversation = conversation::fixtures::document(history);
     ui.open_details(Some(1));
-    let view = ui.details.as_mut().unwrap();
+    let view = &mut ui.details.as_mut().unwrap().view;
     view.prepare(ui.conversation.items(), &[], ui.conversation.revision(), 13);
     let narrow = view.copy_evidence().unwrap().1.to_owned();
     view.prepare(
@@ -333,7 +341,7 @@ fn selected_tool_copy_is_unwrapped_recorded_evidence_and_keeps_inspector_state()
     assert_eq!(ui.editor.attachments.len(), 1);
     assert_eq!(ui.conversation.items().count(), 2);
     assert_eq!(ui.status, "inspector ready");
-    let view = ui.details.as_mut().unwrap();
+    let view = &mut ui.details.as_mut().unwrap().view;
     assert_eq!(view.window(10), inspected);
     assert_eq!(view.copy_evidence().unwrap().1, wide);
 }
@@ -347,7 +355,7 @@ fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
     ui.conversation =
         conversation::fixtures::document(history_with_tools(vec![tool("edit-call", None)]));
     ui.open_details(None);
-    ui.details.as_mut().unwrap().prepare(
+    ui.details.as_mut().unwrap().view.prepare(
         ui.conversation.items(),
         &[],
         ui.conversation.revision(),
@@ -363,7 +371,7 @@ fn conversation_ctrl_x_does_not_copy_an_assistant_answer() {
         Action::None
     ));
     assert!(ui.details.is_some());
-    assert!(ui.details.as_ref().unwrap().copy_evidence().is_none());
+    assert!(ui.details.as_ref().unwrap().view.copy_evidence().is_none());
     assert_eq!(ui.status, "No selected tool evidence; open /tool N to copy");
 }
 
@@ -377,7 +385,7 @@ fn selected_tool_without_a_result_copies_its_recorded_absence() {
         ..Frontend::default()
     };
     ui.open_details(Some(1));
-    ui.details.as_mut().unwrap().prepare(
+    ui.details.as_mut().unwrap().view.prepare(
         ui.conversation.items(),
         &[],
         ui.conversation.revision(),
@@ -392,7 +400,7 @@ fn selected_tool_without_a_result_copies_its_recorded_absence() {
         ),
         Action::CopyDetail
     ));
-    let evidence = ui.details.as_ref().unwrap().copy_evidence().unwrap().1;
+    let evidence = ui.details.as_ref().unwrap().view.copy_evidence().unwrap().1;
     assert!(evidence.contains("Call ID: pending-call"));
     assert!(evidence.contains("[no committed result]"));
 }

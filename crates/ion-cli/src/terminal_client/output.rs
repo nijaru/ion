@@ -16,7 +16,7 @@ pub(super) fn start(ui: &mut Frontend, session: &Arc<Session>) -> Result<()> {
     let Some(captures) = ui
         .details
         .as_ref()
-        .and_then(crate::transcript_detail::DetailView::visible_captures)
+        .and_then(|details| details.view.visible_captures())
     else {
         anyhow::bail!("Scroll to the capture summary to save output");
     };

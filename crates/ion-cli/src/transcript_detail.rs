@@ -279,7 +279,7 @@ impl DetailView {
         }) {
             return;
         }
-        // References only: Conversation remains the sole semantic transcript.
+        // Build a layout from references into the inspector's source document.
         let entries = entries(items).collect::<Vec<_>>();
         let total = entries.len();
         if let Some(source) = self.initial_source.take() {

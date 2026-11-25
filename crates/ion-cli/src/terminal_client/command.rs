@@ -12,9 +12,9 @@ use ion_terminal::{Screen, TerminalSession};
 
 use super::{
     Builtin, EditorDraft, Frontend, Picker, ProgramStatusState, TuiMode, context_report,
-    edit_text_in_terminal,
+    edit_text_in_terminal, evidence,
     interaction::{editor_delivery, submit_editor},
-    login_in_terminal, navigation, tasks, tools,
+    login_in_terminal, navigation, tasks,
 };
 use ion_app::attachments::AttachmentSource;
 
@@ -622,11 +622,11 @@ pub(super) fn handle_builtin(
                 lines.join("\n")
             });
         }
-        Builtin::Tools if args.is_empty() => ui.open_tool_picker(None),
+        Builtin::Tools if args.is_empty() => evidence::list(runtime, ui, None)?,
         Builtin::Tools if args.starts_with("output ") => {
             let query = args["output ".len()..].trim();
             anyhow::ensure!(!query.is_empty(), "use /tools output TEXT");
-            ui.open_tool_picker(Some(query));
+            evidence::list(runtime, ui, Some(query.to_owned()))?;
         }
         Builtin::Tools => {
             anyhow::ensure!(
@@ -644,16 +644,14 @@ pub(super) fn handle_builtin(
             }
         }
         Builtin::Tool => {
-            if args == "all" {
-                ui.open_details(None);
-                return Ok(());
-            }
-            let number = if args.is_empty() {
-                tools(ui.conversation.items()).count()
-            } else {
-                args.parse::<usize>().context("use /tool [N|all]")?
+            let selection = match args {
+                "all" => evidence::Select::Conversation,
+                "" => evidence::Select::Latest,
+                number => {
+                    evidence::Select::Number(number.parse::<usize>().context("use /tool [N|all]")?)
+                }
             };
-            ui.open_details(Some(number));
+            evidence::open(runtime, ui, selection)?;
         }
         kind => anyhow::bail!("use {}", kind.usage()),
     }
