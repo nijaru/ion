@@ -28,7 +28,17 @@ struct DisplayBundle {
     records: Vec<u64>,
 }
 
-/// The selected transcript and session-wide display metadata at one committed cut.
+/// A committed cut at an idle boundary. No transcript group or unresolved
+/// effect can extend from this cut into a later suffix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PresentationCursor {
+    session: uuid::Uuid,
+    selection: u64,
+    revision: u64,
+    through: u64,
+}
+
+/// The selected transcript (or a suffix) and display metadata at one committed cut.
 /// Recent editor prompts and cumulative usage deliberately include inactive branches.
 pub struct SessionPresentation {
     pub id: uuid::Uuid,
@@ -38,6 +48,8 @@ pub struct SessionPresentation {
     pub name: Option<String>,
     pub reasoning: Reasoning,
     pub unfinished: bool,
+    pub after: Option<PresentationCursor>,
+    pub checkpoint: Option<PresentationCursor>,
     pub transcript: TranscriptProjection,
     pub prompts: Vec<String>,
     pub usage: UsageTotals,
@@ -188,7 +200,12 @@ impl Session {
         Ok(self.lock_store()?.context_index.prompt_recall.snapshot())
     }
 
-    pub fn presentation(&self) -> Result<SessionPresentation, SessionError> {
+    /// Read display facts after a prior idle cut, or rebuild for a different
+    /// selection/session. The returned `after` tells which prefix to retain.
+    pub fn presentation(
+        &self,
+        after: Option<PresentationCursor>,
+    ) -> Result<SessionPresentation, SessionError> {
         let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
         let (
@@ -201,6 +218,8 @@ impl Session {
             unfinished,
             usage,
             selected,
+            after,
+            checkpoint,
             prompts,
         ) = {
             let store = self.lock_store()?;
@@ -208,6 +227,34 @@ impl Session {
             let header = self.check_display_snapshot(&snapshot, store.state.sequence)?;
             let revision = store.state.sequence;
             let index = &store.context_index;
+            let unfinished = store.state.active.is_some() || store.state.pending_shell.is_some();
+            let after = after.filter(|cut| {
+                cut.session == header.id
+                    && cut.selection == index.selection
+                    && cut.revision <= revision
+            });
+            let (after, selected) = match after.and_then(|cut| index.transcript_after(cut.through))
+            {
+                Some(selected) => (after, selected),
+                None => (
+                    None,
+                    index
+                        .transcript_after(0)
+                        .expect("root terminates every ancestry"),
+                ),
+            };
+            let checkpoint = if unfinished {
+                None
+            } else {
+                index
+                    .transcript_checkpoint()
+                    .map(|through| PresentationCursor {
+                        session: header.id,
+                        selection: index.selection,
+                        revision,
+                        through,
+                    })
+            };
             (
                 snapshot,
                 header,
@@ -215,9 +262,11 @@ impl Session {
                 index.selection,
                 index.head(),
                 store.state.reasoning,
-                store.state.active.is_some() || store.state.pending_shell.is_some(),
+                unfinished,
                 index.usage,
-                index.transcript_path(),
+                selected,
+                after,
+                checkpoint,
                 index.prompt_recall.snapshot(),
             )
         };
@@ -234,6 +283,8 @@ impl Session {
             name: header.name,
             reasoning,
             unfinished,
+            after,
+            checkpoint,
             transcript,
             prompts,
             usage,

@@ -22,6 +22,7 @@ struct Node {
     display_parent: u64,
     context: usize,
     transcript_fact: bool,
+    transcript_boundary: bool,
     display_root: bool,
     projection: ProjectionKind,
     selectable: bool,
@@ -85,15 +86,23 @@ impl ContextIndex {
         }
     }
 
-    pub(super) fn transcript_path(&self) -> Vec<u64> {
+    pub(super) fn transcript_checkpoint(&self) -> Option<u64> {
+        let head = self.transcript_head(self.head);
+        (head == 0 || self.nodes[(head - 1) as usize].transcript_boundary).then_some(head)
+    }
+
+    pub(super) fn transcript_after(&self, boundary: u64) -> Option<Vec<u64>> {
         let mut head = self.transcript_head(self.head);
         let mut path = Vec::new();
-        while head != 0 {
+        while head > boundary {
             path.push(head);
             head = self.transcript_parent(head);
         }
+        if head != boundary {
+            return None;
+        }
         path.reverse();
-        path
+        Some(path)
     }
 
     pub(super) fn transcript_parent(&self, entry: u64) -> u64 {
@@ -318,6 +327,10 @@ impl ContextIndex {
             transcript_parent: self.transcript_head(parent),
             display_parent: self.display_ancestor(parent),
             transcript_fact,
+            transcript_boundary: matches!(
+                entry,
+                SessionEntry::TurnEnded { .. } | SessionEntry::UserShellSettled { .. }
+            ),
             display_root: transcript_fact
                 && !matches!(
                     entry,

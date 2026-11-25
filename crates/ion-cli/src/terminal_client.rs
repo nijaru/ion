@@ -254,7 +254,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.provider_usage.bind(runtime.provider_usage().filter(|source| ui.footer.shows_provider_usage(source.kind())));
             ui.reconcile_recovery(runtime.session().id())?;
-            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, ui.conversation.revision()) {
+            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, &ui.conversation) {
                 ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }
@@ -524,7 +524,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         activity::combine_error(&mut outcome, error.into());
     }
     if outcome.is_ok() {
-        match session_io::final_history(runtime.session()).await {
+        match session_io::final_history(
+            runtime.session(),
+            ui.conversation.checkpoint(runtime.session()),
+        )
+        .await
+        {
             Ok(history) => ui.apply_history(runtime.session().path(), history),
             Err(error) => {
                 activity::combine_error(&mut outcome, error.context("final Session refresh failed"))

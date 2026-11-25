@@ -22,7 +22,19 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
         let session = fixture.control.session();
         let mut view = session.view().unwrap();
         let mut conversation = Conversation::default();
-        conversation.reconcile(session, &view);
+        let base = session.presentation(None).unwrap();
+        let checkpoint = base.checkpoint.expect("empty session is an idle cut");
+        conversation.reconcile_prepared(
+            session.path(),
+            Prepared::committed(
+                base.transcript,
+                base.id,
+                base.selection,
+                base.head_entry,
+                None,
+                Some(checkpoint),
+            ),
+        );
         let input = Message::user_input("request".into(), []);
         conversation.observe(
             operation,
@@ -81,7 +93,17 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
             ion_core::SessionEntry::TurnEnded { turn: 1, reason },
         ];
         view.context_path = vec![1, 2];
-        conversation.reconcile(session, &view);
+        conversation.reconcile_prepared(
+            session.path(),
+            Prepared::committed(
+                TranscriptProjection::from_session(&view),
+                base.id,
+                base.selection,
+                2,
+                Some(checkpoint),
+                None,
+            ),
+        );
         assert_eq!(
             conversation
                 .items()

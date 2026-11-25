@@ -3,11 +3,12 @@ use std::{collections::HashMap, path::PathBuf};
 
 use ion_app::OperationId;
 use ion_core::{
-    AgentEvent, LiveTranscript, TranscriptItem, TranscriptProjection, TranscriptSource,
+    AgentEvent, LiveTranscript, PresentationCursor, Session, TranscriptItem, TranscriptProjection,
+    TranscriptSource,
 };
 
 #[cfg(test)]
-use ion_core::{Session, SessionEntry, SessionView};
+use ion_core::{SessionEntry, SessionView};
 
 fn source_positions(canonical: &TranscriptProjection) -> HashMap<TranscriptSource, usize> {
     let positions = canonical
@@ -36,7 +37,13 @@ pub(super) struct Prepared {
     session: uuid::Uuid,
     selection: u64,
     head_entry: u64,
-    tail: super::ResumeHistoryTail,
+    prefix: PreparedPrefix,
+    checkpoint: Option<PresentationCursor>,
+}
+
+enum PreparedPrefix {
+    Rebuild(super::ResumeHistoryTail),
+    Retain(PresentationCursor),
 }
 
 impl Prepared {
@@ -50,6 +57,8 @@ impl Prepared {
                 .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
                 .map_or(0, |index| index as u64 + 1),
             view.context_position().head_entry,
+            None,
+            None,
         )
     }
 
@@ -58,16 +67,22 @@ impl Prepared {
         session: uuid::Uuid,
         selection: u64,
         head_entry: u64,
+        after: Option<PresentationCursor>,
+        checkpoint: Option<PresentationCursor>,
     ) -> Self {
         let positions = source_positions(&canonical);
-        let tail = super::resume_history_tail(&canonical.items);
+        let prefix = after.map_or_else(
+            || PreparedPrefix::Rebuild(super::resume_history_tail(&canonical.items)),
+            PreparedPrefix::Retain,
+        );
         Self {
             canonical,
             positions,
             session,
             selection,
             head_entry,
-            tail,
+            prefix,
+            checkpoint,
         }
     }
 }
@@ -131,6 +146,9 @@ pub(super) struct Conversation {
     scope: Option<Scope>,
     canonical: TranscriptProjection,
     positions: HashMap<TranscriptSource, usize>,
+    // Item count at the idle cut, before any live promotion or replayed
+    // unfinished suffix. Native publication has its own, later frontier.
+    checkpoint: Option<(PresentationCursor, usize)>,
     live: Option<Live>,
     notices: Vec<Notice>,
     through: Option<TranscriptSource>,
@@ -156,6 +174,15 @@ impl Conversation {
 
     pub(super) fn revision(&self) -> u64 {
         self.revision
+    }
+
+    pub(super) fn checkpoint(&self, session: &Session) -> Option<PresentationCursor> {
+        let scope = self.scope.as_ref()?;
+        if scope.path == session.path() && scope.session == session.id() {
+            self.checkpoint.map(|(cursor, _)| cursor)
+        } else {
+            None
+        }
     }
     pub(super) fn live(&self) -> Option<&LiveTranscript> {
         self.live.as_ref().map(|live| &live.transcript)
@@ -278,7 +305,8 @@ impl Conversation {
             session,
             selection,
             head_entry,
-            tail,
+            prefix,
+            checkpoint,
         } = prepared;
         let scope = Scope {
             path: path.to_path_buf(),
@@ -296,6 +324,9 @@ impl Conversation {
             Change::Session
         };
         if change != Change::Unchanged {
+            let PreparedPrefix::Rebuild(tail) = prefix else {
+                unreachable!("new selection cannot reuse a transcript prefix");
+            };
             self.publication_generation += 1;
             let had_previous_session = self.scope.is_some();
             self.notices.clear();
@@ -336,15 +367,43 @@ impl Conversation {
             } else {
                 None
             };
-        } else if let Some(source) = self.through {
+        }
+        match prefix {
+            PreparedPrefix::Rebuild(_) => {
+                self.canonical = canonical;
+                self.positions = positions;
+                self.checkpoint = None;
+            }
+            PreparedPrefix::Retain(after) => {
+                let (previous, retained) =
+                    self.checkpoint.expect("delta requires a retained prefix");
+                assert_eq!(after, previous, "delta must start at the retained idle cut");
+                for item in self.canonical.items.drain(retained..) {
+                    self.positions.remove(
+                        &item
+                            .source()
+                            .expect("canonical facts have source coordinates"),
+                    );
+                }
+                for (source, offset) in positions {
+                    assert!(
+                        self.positions.insert(source, retained + offset).is_none(),
+                        "a committed suffix cannot duplicate an earlier source"
+                    );
+                }
+                self.canonical.items.extend(canonical.items);
+            }
+        }
+        if let Some(source) = self.through {
             assert!(
-                positions.contains_key(&source),
+                self.positions.contains_key(&source),
                 "a published source cannot disappear without a selection change"
             );
         }
+        if let Some(checkpoint) = checkpoint {
+            self.checkpoint = Some((checkpoint, self.canonical.items.len()));
+        }
         self.scope = Some(scope);
-        self.canonical = canonical;
-        self.positions = positions;
         self.live = None;
         self.revision += 1;
         change

@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use ion_app::{BindingChange, BindingFinished, BindingOperationId, BindingResult, SessionControl};
 #[cfg(test)]
 use ion_core::SessionView;
-use ion_core::{Session, SessionPresentation};
+use ion_core::{PresentationCursor, Session, SessionPresentation};
 
 use super::{EditorDraft, Frontend, conversation};
 
@@ -68,6 +68,8 @@ impl History {
                 snapshot.id,
                 snapshot.selection,
                 snapshot.head_entry,
+                snapshot.after,
+                snapshot.checkpoint,
             ),
             prompts: snapshot.prompts,
             label: label(snapshot.id, snapshot.name),
@@ -249,7 +251,7 @@ impl SessionIo {
     pub(super) fn start_refresh(
         &mut self,
         control: &SessionControl<EditorDraft>,
-        projection_revision: u64,
+        conversation: &conversation::Conversation,
     ) -> Result<()> {
         if !self.refresh_pending
             || self.has_read()
@@ -263,10 +265,11 @@ impl SessionIo {
         let io = session.io()?;
         let agent = control.agent().clone();
         let instructions = control.instructions().to_owned();
+        let after = conversation.checkpoint(session);
         self.start(session, async move {
             Ok(ReadOutput::History(
                 io.run(move |session| {
-                    let snapshot = session.presentation()?;
+                    let snapshot = session.presentation(after)?;
                     let revision = snapshot.revision;
                     let context = agent.context_report(session, &instructions);
                     let mut history = History::committed(snapshot);
@@ -286,7 +289,7 @@ impl SessionIo {
         self.read
             .as_mut()
             .expect("started refresh")
-            .projection_revision = Some(projection_revision);
+            .projection_revision = Some(conversation.revision());
         Ok(())
     }
 
@@ -726,10 +729,13 @@ pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut R
     }
 }
 
-pub(super) async fn final_history(session: &std::sync::Arc<Session>) -> Result<History> {
+pub(super) async fn final_history(
+    session: &std::sync::Arc<Session>,
+    after: Option<PresentationCursor>,
+) -> Result<History> {
     Ok(session
         .reader()?
-        .map_presentation(History::committed)
+        .map_presentation(after, History::committed)
         .await?)
 }
 

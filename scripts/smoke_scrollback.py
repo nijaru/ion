@@ -131,6 +131,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         launcher.chmod(0o700)
         tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "24",
              "-c", str(workspace), str(launcher))
+        tmux("set-option", "-w", "-t", "ion", "remain-on-exit", "on")
         deadline = time.monotonic() + 35
         while not composer_ready(pane := tmux("capture-pane", "-p", "-t", "ion")):
             assert time.monotonic() < deadline, f"inline composer did not become ready:\n{pane}"
@@ -529,6 +530,10 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             )
             time.sleep(0.02)
         assert exit_path.read_text().strip() == "0", "inline client failed on exit"
+        # Check again after shutdown's final reconciliation and native paint.
+        check_history()
+        assert help_counts() == (2, 2), "shutdown republished local output"
+        tmux("kill-session", "-t", "ion")
         session = next((work / "ion/sessions").rglob("*.sqlite"))
         inspected = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", session, "inspect"], env=env, capture_output=True, text=True, check=True).stdout)
         assistants = [entry["data"]["message"] for entry in inspected["entries"] if entry["kind"] == "assistant"]

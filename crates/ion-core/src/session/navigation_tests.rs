@@ -163,6 +163,66 @@ fn status_tracks_renaming_reasoning_selection_and_reopen() {
 }
 
 #[test]
+fn terminal_refresh_reuses_only_idle_cuts_and_catches_up_in_selected_order() {
+    let (root, path, session) = fixture();
+    finish(&session, "base", "base reply");
+    let base = session.presentation(None).unwrap();
+    let at_base = base.checkpoint.expect("settled turn closes its transcript");
+    let admission = session
+        .admit_user_shell("printf pending".into(), true)
+        .unwrap();
+    let pending = session.presentation(Some(at_base)).unwrap();
+    assert_eq!(pending.after, Some(at_base));
+    assert!(pending.checkpoint.is_none());
+    assert!(
+        matches!(&pending.transcript.items[..], [crate::TranscriptItem::UserShell(shell)] if shell.outcome.is_none())
+    );
+    session
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(serde_json::json!({"stdout":"done"})),
+        )
+        .unwrap();
+    // A gap larger than an Alt-T page is a suffix to catch up, not a seed
+    // from the latest page: every unseen commit must reach native history.
+    for index in 0..64 {
+        finish(&session, &format!("request {index}"), "reply");
+    }
+    let caught_up = session.presentation(Some(at_base)).unwrap();
+    assert_eq!(caught_up.after, Some(at_base));
+    assert_eq!(caught_up.transcript.items.len(), 129);
+    assert!(
+        matches!(&caught_up.transcript.items[0], crate::TranscriptItem::UserShell(shell) if shell.outcome.is_some())
+    );
+    let full = session.presentation(None).unwrap();
+    assert_eq!(
+        full.transcript.items,
+        [base.transcript.items, caught_up.transcript.items].concat()
+    );
+    let resumed = session.presentation(caught_up.checkpoint).unwrap();
+    assert!(resumed.after.is_some());
+    assert!(resumed.transcript.items.is_empty());
+
+    // Navigation can land inside a prior turn. Being idle now does not
+    // certify the selected historical prefix as a projection boundary.
+    select(&session, base.head_entry - 1);
+    assert!(session.presentation(None).unwrap().checkpoint.is_none());
+    select(&session, base.head_entry);
+    let branch = session.presentation(caught_up.checkpoint).unwrap();
+    assert!(branch.after.is_none());
+    assert_eq!(branch.transcript.items.len(), 2);
+    assert!(branch.checkpoint.is_some());
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(
+        reopened.presentation(branch.checkpoint).unwrap().after,
+        branch.checkpoint
+    );
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn editor_recall_bounds_recent_input_count_and_bytes_across_branches() {
     let (root, path, session) = fixture();
     for n in 0..100 {
@@ -171,7 +231,7 @@ fn editor_recall_bounds_recent_input_count_and_bytes_across_branches() {
     // All these inputs become inactive; their text is still useful for recall.
     select(&session, 0);
     assert_eq!(
-        session.presentation().unwrap().prompts,
+        session.presentation(None).unwrap().prompts,
         (4..100)
             .map(|n| format!("input {n:03}"))
             .collect::<Vec<_>>()
@@ -185,14 +245,17 @@ fn editor_recall_bounds_recent_input_count_and_bytes_across_branches() {
     finish(&session, &"x".repeat(MAX_RECALL_PROMPT_BYTES + 1), "answer");
     select(&session, 0);
     finish(&session, " exact latest ", "answer");
-    let snapshot = session.presentation().unwrap();
+    let snapshot = session.presentation(None).unwrap();
     let expected = [wide[1].as_str(), &wide[2], &wide[3], " exact latest "];
     assert_eq!(snapshot.prompts, expected);
     assert_eq!(session.recent_prompts().unwrap(), expected);
     assert_eq!(snapshot.transcript.items.len(), 2);
     drop(session);
     let reopened = Session::open(&path).unwrap();
-    assert_eq!(reopened.presentation().unwrap().prompts, snapshot.prompts);
+    assert_eq!(
+        reopened.presentation(None).unwrap().prompts,
+        snapshot.prompts
+    );
     assert_eq!(
         reopened
             .view()
@@ -213,7 +276,7 @@ fn terminal_snapshot_streams_selected_facts_but_keeps_global_recall_and_usage() 
 
     let (root, path, session) = fixture();
     let verify = |session: &Session, prompts: &[&str], selection| {
-        let snapshot = session.presentation().unwrap();
+        let snapshot = session.presentation(None).unwrap();
         let view = session.view().unwrap();
         assert_eq!(
             snapshot.transcript,
