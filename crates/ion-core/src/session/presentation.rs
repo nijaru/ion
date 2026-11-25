@@ -200,6 +200,37 @@ impl Session {
         Ok(self.lock_store()?.context_index.prompt_recall.snapshot())
     }
 
+    /// Anchor an uninterrupted observed turn without reading journal payloads.
+    /// The caller owns event continuity. The index verifies the observed
+    /// admission immediately follows the retained transcript and the observed
+    /// closure is still the selected idle boundary.
+    pub fn observed_turn_checkpoint(
+        &self,
+        prefix: PresentationCursor,
+        admission: u64,
+        closure: u64,
+    ) -> Result<Option<PresentationCursor>, SessionError> {
+        let store = self.lock_store()?;
+        let index = &store.context_index;
+        let revision = store.state.sequence;
+        if prefix.session != self.id()
+            || prefix.selection != index.selection
+            || admission <= prefix.revision
+            || closure <= admission
+            || store.state.active.is_some()
+            || store.state.pending_shell.is_some()
+            || index.transcript_checkpoint() != Some(closure)
+            || index.transcript_parent(admission) != prefix.through
+        {
+            return Ok(None);
+        }
+        Ok(Some(PresentationCursor {
+            revision,
+            through: closure,
+            ..prefix
+        }))
+    }
+
     /// Read display facts after a prior idle cut, or rebuild for a different
     /// selection/session. The returned `after` tells which prefix to retain.
     pub fn presentation(

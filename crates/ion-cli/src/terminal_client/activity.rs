@@ -402,6 +402,10 @@ pub(super) fn apply(
             ui.retry_progress = None;
             let observed_success = matches!(&settlement.outcome, OperationOutcome::Turn(Ok(_)))
                 && ui.conversation.live_for(settlement.operation);
+            if observed_success && !ui.session_io.blocked {
+                ui.conversation
+                    .accept_observed_turn(control.session(), settlement.operation)?;
+            }
             ui.discard_provisional();
             ui.conversation.clear_live();
             if observed_success {
@@ -479,7 +483,9 @@ pub(super) fn apply(
             } else {
                 drop(settlement.metadata);
             }
-            if observed_success {
+            if observed_success && !ui.session_io.blocked {
+                // The observed cut needs only metadata and a context estimate.
+                // If it couldn't advance, this read also reconciles its suffix.
                 ui.session_io.schedule_refresh();
             } else if !cold_shell_refusal {
                 // Cold refusal did not write Session facts. Preserve any

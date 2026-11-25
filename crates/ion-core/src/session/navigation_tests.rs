@@ -163,6 +163,50 @@ fn status_tracks_renaming_reasoning_selection_and_reopen() {
 }
 
 #[test]
+fn observed_turn_advances_the_cut_only_if_admission_follows_the_prefix() {
+    let (root, _path, session) = fixture();
+    let prefix = session.presentation(None).unwrap().checkpoint.unwrap();
+    let (turn, _) = session.begin_turn("observed".into(), model("one")).unwrap();
+    let admission = session.context_position().unwrap().head_entry;
+    session
+        .record_assistant(turn, answer("reply"), Usage::unknown(), false)
+        .unwrap();
+    let closure = session.context_position().unwrap().head_entry;
+    let cut = session
+        .observed_turn_checkpoint(prefix, admission, closure)
+        .unwrap()
+        .unwrap();
+    let next = session.presentation(Some(cut)).unwrap();
+    assert_eq!(next.after, Some(cut));
+    assert!(next.transcript.items.is_empty());
+
+    session
+        .admit_user_shell("unknown preceding shell".into(), true)
+        .unwrap();
+    let (turn, _) = session
+        .begin_turn("another observed turn".into(), model("one"))
+        .unwrap();
+    let admission = session.context_position().unwrap().head_entry;
+    session
+        .record_assistant(turn, answer("reply"), Usage::unknown(), false)
+        .unwrap();
+    let closure = session.context_position().unwrap().head_entry;
+    assert!(
+        session
+            .observed_turn_checkpoint(cut, admission, closure)
+            .unwrap()
+            .is_none()
+    );
+    let repaired = session.presentation(Some(cut)).unwrap();
+    assert!(matches!(
+        repaired.transcript.items.first(),
+        Some(crate::TranscriptItem::UserShell(_))
+    ));
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn terminal_refresh_reuses_only_idle_cuts_and_catches_up_in_selected_order() {
     let (root, path, session) = fixture();
     finish(&session, "base", "base reply");

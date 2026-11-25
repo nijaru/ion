@@ -110,6 +110,8 @@ struct Live {
     operation: OperationId,
     transcript: LiveTranscript,
     covered: usize,
+    admission: u64,
+    completed: Option<u64>,
 }
 
 struct Notice {
@@ -217,9 +219,10 @@ impl Conversation {
     /// cannot reconstruct missing call/thinking prefixes or an ahead-of-stream view.
     pub(super) fn observe(&mut self, operation: OperationId, event: &AgentEvent) -> bool {
         self.revision += 1;
-        if let AgentEvent::TurnAccepted { turn, .. }
+        if let AgentEvent::TurnAccepted { turn, entry, .. }
         | AgentEvent::CompletionCommitted {
             turn,
+            entry,
             new_turn: true,
             ..
         } = event
@@ -243,11 +246,21 @@ impl Conversation {
                 operation,
                 transcript,
                 covered: 0,
+                admission: *entry,
+                completed: None,
             });
         } else if let Some(live) = &mut self.live
             && live.operation == operation
         {
             live.transcript.observe(event);
+            if let AgentEvent::TurnEnded {
+                entry,
+                reason: ion_core::TurnEndReason::Completed,
+                ..
+            } = event
+            {
+                live.completed = Some(*entry);
+            }
         } else {
             return matches!(
                 event,
@@ -263,6 +276,37 @@ impl Conversation {
         }
         self.promote_sealed();
         false
+    }
+
+    /// Settlement follows the joined publisher's ready tail. A gap clears
+    /// `live`; a resumed or hidden predecessor cannot advance the idle cut.
+    pub(super) fn accept_observed_turn(
+        &mut self,
+        session: &Session,
+        operation: OperationId,
+    ) -> Result<bool, ion_core::SessionError> {
+        let Some(prefix) = self.checkpoint(session) else {
+            return Ok(false);
+        };
+        let Some(live) = self
+            .live
+            .as_ref()
+            .filter(|live| live.operation == operation)
+        else {
+            return Ok(false);
+        };
+        let Some(closure) = live.completed else {
+            return Ok(false);
+        };
+        if live.covered != live.transcript.projection().items.len() {
+            return Ok(false);
+        }
+        let Some(checkpoint) = session.observed_turn_checkpoint(prefix, live.admission, closure)?
+        else {
+            return Ok(false);
+        };
+        self.checkpoint = Some((checkpoint, self.canonical.items.len()));
+        Ok(true)
     }
 
     fn promote_sealed(&mut self) {
