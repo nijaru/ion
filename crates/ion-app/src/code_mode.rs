@@ -491,17 +491,9 @@ fn run_guest(
     if stop.is_cancelled() {
         return Err("JavaScript cancelled".into());
     }
-    // Worker startup time is not guest execution. The clock starts only once
-    // this worker begins; cancellation still precedes VM construction.
-    let budget = Rc::new(GuestBudget::new(limits.execution_budget)?);
     let runtime = Runtime::new().map_err(|e| e.to_string())?;
     runtime.set_memory_limit(limits.heap_bytes);
     runtime.set_max_stack_size(limits.stack_bytes);
-    let interrupt_budget = budget.clone();
-    let interrupt_stop = stop.clone();
-    runtime.set_interrupt_handler(Some(Box::new(move || {
-        interrupt_budget.exhausted() || interrupt_stop.is_cancelled()
-    })));
     // Eval is needed to compile the body; no host APIs or module loader exist.
     let context = Context::custom::<(
         intrinsic::Eval,
@@ -517,10 +509,22 @@ fn run_guest(
         admitted: Cell::new(0),
         limits,
     });
+    let helper = context
+        .with(|ctx| diagnostic_helper(&ctx))
+        .map_err(|e| context.with(|ctx| js_error(&ctx, e, None)))
+        .inspect_err(|_| stop.cancel())?;
+    if stop.is_cancelled() {
+        return Err("JavaScript cancelled".into());
+    }
+    // Context creation and the fixed diagnostic helper are trusted bootstrap.
+    // Arm the clock and interrupt before compiling or running the guest.
+    let budget = Rc::new(GuestBudget::new(limits.execution_budget)?);
+    let interrupt_budget = budget.clone();
+    let interrupt_stop = stop.clone();
+    runtime.set_interrupt_handler(Some(Box::new(move || {
+        interrupt_budget.exhausted() || interrupt_stop.is_cancelled()
+    })));
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        let helper = context
-            .with(|ctx| diagnostic_helper(&ctx))
-            .map_err(|e| context.with(|ctx| js_error(&ctx, e, None)))?;
         let root = context
             .with(|ctx| start_guest(ctx, &code, &tools_json, &bridge, output))
             .map_err(|e| context.with(|ctx| js_error(&ctx, e, Some(&helper))))?;
