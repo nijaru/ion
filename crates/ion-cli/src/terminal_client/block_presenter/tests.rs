@@ -16,6 +16,72 @@ fn item(entry: u64) -> TranscriptItem {
 }
 
 #[test]
+fn inline_tail_keeps_spacing_without_retaining_archive_layouts() {
+    let tail = TranscriptItem::UserShell(ion_core::UserShellActivity {
+        source: TranscriptSource {
+            entry: 513,
+            part: 0,
+        },
+        command: "pending-shell".into(),
+        outcome: None,
+        exclude_from_context: true,
+    });
+    let mut document = fixtures::document(TranscriptProjection {
+        items: (1..=512)
+            .map(|entry| {
+                assistant(
+                    entry,
+                    vec![TranscriptPart::Thinking(format!("reasoning {entry}"))],
+                )
+            })
+            .chain([tail])
+            .collect(),
+    });
+    let mut presenter = BlockPresenter::default();
+    let mut view = ConversationView::default();
+    let keys = crate::keybindings::KeyBindings::default();
+    let theme = Theme::default();
+    let options = |thinking| {
+        RenderOptions::new(
+            OutputDetail::Compact,
+            &keys,
+            &theme,
+            thinking,
+            std::path::Path::new("/workspace"),
+        )
+    };
+    let shown = options(ThinkingVisibility::Visible);
+    let hidden = options(ThinkingVisibility::Hidden);
+    let replay = presenter.publication(&document, 80, Rows::Sealed, &shown);
+    assert!(
+        replay
+            .iter()
+            .any(|line| line.to_string().contains("reasoning 512"))
+    );
+    assert!(
+        presenter.layouts.is_empty(),
+        "native replay must not cache the archive"
+    );
+    presenter.window(&document, &mut view, (80, 4096), false, false, &shown);
+    assert!(presenter.layouts.len() > 512);
+    for (options, has_gap) in [(&shown, true), (&hidden, false)] {
+        let blocks = BlockPresenter::blocks(&document, Rows::Mutable, options);
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].gap, has_gap);
+        let rows = presenter.window(&document, &mut view, (80, 8), true, false, options);
+        assert_eq!(rows[0].to_string().is_empty(), has_gap);
+        assert!(
+            rows.iter()
+                .any(|line| line.to_string().contains("pending-shell"))
+        );
+        assert_eq!(presenter.layouts.len(), 1);
+        assert!(presenter.layouts.capacity() < 32);
+    }
+    document.note("local command output".into(), false);
+    assert!(BlockPresenter::blocks(&document, Rows::Mutable, &hidden)[0].gap);
+}
+
+#[test]
 fn reading_anchor_survives_stream_growth_and_reflow_then_returns_to_follow_end() {
     let mut document = fixtures::document(TranscriptProjection {
         items: (1..=5).map(item).collect(),

@@ -3,8 +3,8 @@ use std::{collections::HashMap, path::PathBuf};
 
 use ion_app::OperationId;
 use ion_core::{
-    AgentEvent, LiveTranscript, PresentationCursor, Session, TranscriptItem, TranscriptProjection,
-    TranscriptSource,
+    AgentEvent, LiveTranscript, PresentationCursor, Session, TranscriptItem, TranscriptPart,
+    TranscriptProjection, TranscriptSource,
 };
 
 #[cfg(test)]
@@ -31,8 +31,60 @@ fn source_positions(canonical: &TranscriptProjection) -> HashMap<TranscriptSourc
     positions
 }
 
+// Summarize the sealed prefix so the inline tail never has to visit it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+enum Visibility {
+    #[default]
+    Empty,
+    Thinking,
+    Content,
+}
+
+impl Visibility {
+    fn of(item: &TranscriptItem) -> Self {
+        let TranscriptItem::Assistant(message) = item else {
+            return Self::Content;
+        };
+        let mut visible = Self::Empty;
+        for part in &message.parts {
+            match part {
+                TranscriptPart::Thinking(_) => visible = Self::Thinking,
+                TranscriptPart::Text(text) if text.trim().is_empty() => {}
+                TranscriptPart::Text(_) | TranscriptPart::Image { .. } => return Self::Content,
+            }
+        }
+        visible
+    }
+
+    fn visible(self, thinking: bool) -> bool {
+        self == Self::Content || (thinking && self == Self::Thinking)
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct SealedPrefix {
+    len: usize,
+    visibility: Visibility,
+}
+
+impl SealedPrefix {
+    fn extend(&mut self, items: &[TranscriptItem]) {
+        for item in items.iter().take_while(|item| item.is_sealed()) {
+            self.push(item);
+        }
+    }
+
+    fn push(&mut self, item: &TranscriptItem) {
+        self.len += 1;
+        if self.visibility != Visibility::Content {
+            self.visibility = self.visibility.max(Visibility::of(item));
+        }
+    }
+}
+
 pub(super) struct Prepared {
     canonical: TranscriptProjection,
+    sealed: SealedPrefix,
     positions: HashMap<TranscriptSource, usize>,
     session: uuid::Uuid,
     selection: u64,
@@ -71,12 +123,15 @@ impl Prepared {
         checkpoint: Option<PresentationCursor>,
     ) -> Self {
         let positions = source_positions(&canonical);
+        let mut sealed = SealedPrefix::default();
+        sealed.extend(&canonical.items);
         let prefix = after.map_or_else(
             || PreparedPrefix::Rebuild(super::resume_history_tail(&canonical.items)),
             PreparedPrefix::Retain,
         );
         Self {
             canonical,
+            sealed,
             positions,
             session,
             selection,
@@ -125,11 +180,21 @@ pub(super) enum Rows {
     Pending,
     Sealed,
     All,
+    Mutable,
 }
 
 pub(super) enum Segment<'a> {
     Item(&'a TranscriptItem),
     Notice { ordinal: usize, text: &'a str },
+}
+
+impl Segment<'_> {
+    pub(super) fn visible(&self, thinking: bool) -> bool {
+        match self {
+            Self::Item(item) => Visibility::of(item).visible(thinking),
+            Self::Notice { text, .. } => !text.is_empty(),
+        }
+    }
 }
 
 /// Coordinates certify a source prefix, not a number of fitted display rows.
@@ -150,9 +215,11 @@ pub(super) struct Conversation {
     positions: HashMap<TranscriptSource, usize>,
     // Item count at the idle cut, before any live promotion or replayed
     // unfinished suffix. Native publication has its own, later frontier.
-    checkpoint: Option<(PresentationCursor, usize)>,
+    checkpoint: Option<(PresentationCursor, SealedPrefix)>,
+    sealed: SealedPrefix,
     live: Option<Live>,
     notices: Vec<Notice>,
+    visible_notice: bool,
     through: Option<TranscriptSource>,
     notices_published: usize,
     publication_generation: u64,
@@ -163,9 +230,12 @@ pub(super) struct Conversation {
 impl Conversation {
     /// A read page has no publication custody or local notices.
     pub(super) fn history_page(canonical: TranscriptProjection) -> Self {
+        let mut sealed = SealedPrefix::default();
+        sealed.extend(&canonical.items);
         Self {
             positions: source_positions(&canonical),
             canonical,
+            sealed,
             ..Self::default()
         }
     }
@@ -206,7 +276,7 @@ impl Conversation {
         if self.live.is_some() {
             self.live_suffix()
         } else {
-            &self.canonical.items[self.canonical.sealed_prefix()..]
+            &self.canonical.items[self.sealed.len..]
         }
     }
     pub(super) fn clear_live(&mut self) {
@@ -236,8 +306,7 @@ impl Conversation {
             {
                 return false;
             }
-            if self.scope.is_none() || self.canonical.sealed_prefix() != self.canonical.items.len()
-            {
+            if self.scope.is_none() || self.sealed.len != self.canonical.items.len() {
                 return true;
             }
             let mut transcript = LiveTranscript::default();
@@ -305,7 +374,7 @@ impl Conversation {
         else {
             return Ok(false);
         };
-        self.checkpoint = Some((checkpoint, self.canonical.items.len()));
+        self.checkpoint = Some((checkpoint, self.sealed));
         Ok(true)
     }
 
@@ -329,6 +398,7 @@ impl Conversation {
             // sealed facts independently so an observation gap cannot discard an
             // already published prefix along with the removable live projection.
             self.canonical.items.push(item.clone());
+            self.sealed.push(item);
             live.covered += 1;
         }
     }
@@ -345,6 +415,7 @@ impl Conversation {
     ) -> Change {
         let Prepared {
             canonical,
+            sealed,
             positions,
             session,
             selection,
@@ -374,8 +445,9 @@ impl Conversation {
             self.publication_generation += 1;
             let had_previous_session = self.scope.is_some();
             self.notices.clear();
+            self.visible_notice = false;
             self.notices_published = 0;
-            let start = tail.start.min(canonical.sealed_prefix());
+            let start = tail.start.min(sealed.len);
             self.through = start.checked_sub(1).map(|index| {
                 canonical.items[index]
                     .source()
@@ -414,6 +486,7 @@ impl Conversation {
         }
         match prefix {
             PreparedPrefix::Rebuild(_) => {
+                self.sealed = sealed;
                 self.canonical = canonical;
                 self.positions = positions;
                 self.checkpoint = None;
@@ -422,7 +495,11 @@ impl Conversation {
                 let (previous, retained) =
                     self.checkpoint.expect("delta requires a retained prefix");
                 assert_eq!(after, previous, "delta must start at the retained idle cut");
-                for item in self.canonical.items.drain(retained..) {
+                self.sealed = SealedPrefix {
+                    len: retained.len + sealed.len,
+                    visibility: retained.visibility.max(sealed.visibility),
+                };
+                for item in self.canonical.items.drain(retained.len..) {
                     self.positions.remove(
                         &item
                             .source()
@@ -431,7 +508,9 @@ impl Conversation {
                 }
                 for (source, offset) in positions {
                     assert!(
-                        self.positions.insert(source, retained + offset).is_none(),
+                        self.positions
+                            .insert(source, retained.len + offset)
+                            .is_none(),
                         "a committed suffix cannot duplicate an earlier source"
                     );
                 }
@@ -445,7 +524,12 @@ impl Conversation {
             );
         }
         if let Some(checkpoint) = checkpoint {
-            self.checkpoint = Some((checkpoint, self.canonical.items.len()));
+            assert_eq!(
+                self.sealed.len,
+                self.canonical.items.len(),
+                "idle cut must be sealed"
+            );
+            self.checkpoint = Some((checkpoint, self.sealed));
         }
         self.scope = Some(scope);
         self.live = None;
@@ -455,8 +539,8 @@ impl Conversation {
 
     pub(super) fn note(&mut self, text: String, diagnostic: bool) {
         let after = self
-            .canonical
-            .sealed_prefix()
+            .sealed
+            .len
             .checked_sub(1)
             .and_then(|index| self.canonical.items[index].source());
         if diagnostic
@@ -466,6 +550,7 @@ impl Conversation {
         {
             return;
         }
+        self.visible_notice |= !text.is_empty();
         self.notices.push(Notice {
             after,
             text,
@@ -481,12 +566,24 @@ impl Conversation {
         self.through.is_some() || self.notices_published > 0
     }
 
+    pub(super) fn before_mutable(&self, thinking: bool) -> (Option<TranscriptSource>, bool) {
+        let previous = self
+            .sealed
+            .len
+            .checked_sub(1)
+            .and_then(|index| self.canonical.items[index].source());
+        (
+            previous,
+            self.visible_notice || self.sealed.visibility.visible(thinking),
+        )
+    }
+
     fn boundary(&self) -> usize {
         self.through.map_or(0, |source| self.positions[&source] + 1)
     }
 
     pub(super) fn prepare_publication(&self) -> Publication {
-        let end = self.canonical.sealed_prefix();
+        let end = self.sealed.len;
         assert!(self.boundary() <= end, "published facts must remain sealed");
         Publication {
             scope: self.scope.clone(),
@@ -518,10 +615,13 @@ impl Conversation {
     /// Presentation consumes the same ordered document in both viewports. Local
     /// output is anchored to a committed source boundary, never provisional rows.
     pub(super) fn segments(&self, rows: Rows) -> Vec<Segment<'_>> {
+        if rows == Rows::Mutable {
+            return self.mutable_items().iter().map(Segment::Item).collect();
+        }
         let pending = rows == Rows::Pending;
         let begin = if pending { self.boundary() } else { 0 };
         let end = if rows != Rows::All {
-            self.canonical.sealed_prefix()
+            self.sealed.len
         } else {
             self.canonical.items.len()
         };

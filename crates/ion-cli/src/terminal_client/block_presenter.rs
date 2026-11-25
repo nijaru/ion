@@ -224,28 +224,44 @@ impl BlockPresenter {
         rows: Rows,
         options: &RenderOptions<'_>,
     ) -> Vec<Block<'a>> {
-        let mut previous = None;
-        let mut visible_before = rows == Rows::Pending && conversation.has_published_prefix();
-        conversation.segments(rows).into_iter().map(|segment| {
-            let (key, visible) = match &segment {
-                Segment::Item(item) => {
-                    let key = match item.source() {
-                        Some(source) => { previous = Some(source); Key::Fact(source) }
+        let thinking = options.thinking != ThinkingVisibility::Hidden;
+        let (mut previous, mut visible_before) = match rows {
+            Rows::Mutable => conversation.before_mutable(thinking),
+            Rows::Pending => (None, conversation.has_published_prefix()),
+            Rows::All | Rows::Sealed => (None, false),
+        };
+        conversation
+            .segments(rows)
+            .into_iter()
+            .map(|segment| {
+                let key = match &segment {
+                    Segment::Item(item) => match item.source() {
+                        Some(source) => {
+                            previous = Some(source);
+                            Key::Fact(source)
+                        }
                         None => Key::Provisional(previous),
-                    };
-                    let visible = !matches!(item, TranscriptItem::Assistant(message) if message.parts.iter().all(|part| match part {
-                        TranscriptPart::Thinking(_) => options.thinking == ThinkingVisibility::Hidden,
-                        TranscriptPart::Text(text) => text.trim().is_empty(),
-                        TranscriptPart::Image { .. } => false,
-                    }));
-                    (key, visible)
-                }
-                Segment::Notice { ordinal, text } => (Key::Local(*ordinal), !text.is_empty()),
-            };
-            let gap = visible_before;
-            visible_before |= visible;
-            Block { key, segment, gap }
-        }).collect()
+                    },
+                    Segment::Notice { ordinal, .. } => Key::Local(*ordinal),
+                };
+                let gap = visible_before;
+                visible_before |= segment.visible(thinking);
+                Block { key, segment, gap }
+            })
+            .collect()
+    }
+
+    fn layout_segment(
+        segment: &Segment<'_>,
+        width: usize,
+        options: &RenderOptions<'_>,
+    ) -> crate::transcript_render::BlockLayout {
+        match segment {
+            Segment::Item(item) => crate::transcript_render::layout(item, width, options),
+            Segment::Notice { text, .. } => {
+                crate::transcript_render::BlockLayout::literal(text, width)
+            }
+        }
     }
 
     fn layout(
@@ -264,12 +280,7 @@ impl BlockPresenter {
             .get(&(block.key, width))
             .is_none_or(|layout| layout.revision != version)
         {
-            let content = match &block.segment {
-                Segment::Item(item) => crate::transcript_render::layout(item, width, options),
-                Segment::Notice { text, .. } => {
-                    crate::transcript_render::BlockLayout::literal(text, width)
-                }
-            };
+            let content = Self::layout_segment(&block.segment, width, options);
             self.layouts.insert(
                 (block.key, width),
                 Layout {
@@ -306,17 +317,16 @@ impl BlockPresenter {
         self.configure(conversation, width, options);
         let mut rows = Vec::new();
         for block in Self::blocks(conversation, selection, options) {
-            let body = &self
-                .layout(&block, conversation.revision(), width, options)
-                .content
-                .rows;
+            // Sealed native output is transferred to the terminal, not kept
+            // as a second full scrollback in the viewport's layout cache.
+            let body = Self::layout_segment(&block.segment, width, options).rows;
             if body.is_empty() {
                 continue;
             }
             if block.gap {
                 rows.push(Line::default());
             }
-            rows.extend(body.iter().cloned());
+            rows.extend(body);
         }
         rows
     }
@@ -507,16 +517,20 @@ impl BlockPresenter {
             view.follow_end();
             view.scope = conversation.scope().cloned();
         }
-        let mut blocks = Self::blocks(conversation, Rows::All, options);
+        let rows = if inline && !view.reading {
+            Rows::Mutable
+        } else {
+            Rows::All
+        };
+        let blocks = Self::blocks(conversation, rows, options);
         let keys: HashSet<_> = blocks.iter().map(|block| block.key).collect();
         self.layouts.retain(|(key, _), _| keys.contains(key));
-        if inline && !view.reading {
-            let mutable: HashSet<_> = conversation
-                .mutable_items()
-                .iter()
-                .map(TranscriptItem::source)
-                .collect();
-            blocks.retain(|block| matches!(&block.segment, Segment::Item(item) if mutable.contains(&item.source())));
+        if rows == Rows::Mutable
+            && self.layouts.capacity() > self.layouts.len().saturating_add(16).saturating_mul(4)
+        {
+            // Returning from a long fullscreen browse must release the old
+            // table too; HashMap retention itself scans table capacity.
+            self.layouts.shrink_to_fit();
         }
         let revision = conversation.revision();
         let tail = Point {

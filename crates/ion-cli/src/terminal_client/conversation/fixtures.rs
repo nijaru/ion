@@ -26,6 +26,9 @@ pub(in crate::terminal_client) fn append(conversation: &mut Conversation, item: 
             .insert(source, conversation.canonical.items.len())
             .is_none()
     );
+    if conversation.sealed.len == conversation.canonical.items.len() {
+        conversation.sealed.extend(std::slice::from_ref(&item));
+    }
     conversation.canonical.items.push(item);
     conversation.revision += 1;
 }
