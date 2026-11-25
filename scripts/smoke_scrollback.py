@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 calls = [
                     ("read", {"path": "data.txt"}),
                     ("edit", {"path": "data.txt", "base_digest": data_digest, "edits": [{"old_text": "observed data", "new_text": "UPDATED_SNAPSHOT"}]}),
-                    ("exec", {"command": "printf 'FIRST_%s\\nmid-one\\nmid-two\\nmid-three\\nCOMMAND_OUTPUT_%s\\n' HIDDEN ONCE"}),
+                    ("exec", {"command": "printf 'FIRST_%s\\nmid-one\\nmid-two\\nmid-three\\nCOMMAND_OUTPUT_%s\\n' HIDDEN ONCE; seq -f 'LIVE_%02g' 25 >&2; while ! test -f release-preview; do sleep 0.05; done"}),
                 ] if len(requests) == 1 else [
                     ("exec", {"command": "printf 'FUTURE_%s\\nmid-one\\nmid-two\\nfuture-last\\n' FIRST"}),
                 ]
@@ -129,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             f"printf '%s\\n' \"$status\" > {shlex.quote(str(exit_path))}\nexit \"$status\"\n"
         )
         launcher.chmod(0o700)
-        tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "30",
+        tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "24",
              "-c", str(workspace), str(launcher))
         deadline = time.monotonic() + 35
         while not composer_ready(pane := tmux("capture-pane", "-p", "-t", "ion")):
@@ -143,11 +143,22 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             time.sleep(0.02)
         assert "INPUT_ONCE: read data.txt" in pane and not requests, pane
         tmux("send-keys", "-t", "ion", "Enter")
+        while True:
+            pane = tmux("capture-pane", "-p", "-t", "ion")
+            if "LIVE_25" in [row.strip() for row in pane.splitlines()]:
+                break
+            assert time.monotonic() < deadline, f"live output tail did not paint:\n{pane}"
+            time.sleep(0.02)
+        assert "Running printf" in pane and "›" in pane, (
+            f"command output crowded out the transcript or composer:\n{pane}"
+        )
+        (workspace / "release-preview").touch()
         while "FINAL_ONCE" not in tmux("capture-pane", "-p", "-t", "ion"):
             assert time.monotonic() < deadline, "inline Turn did not finish"
             time.sleep(0.02)
 
         wait_completed_turns(1)
+        tmux("resize-window", "-t", "ion", "-x", "100", "-y", "30")
         assert requests[0]["messages"][-1]["content"] == "INPUT_ONCE: read data.txt\nand check it"
 
         def check_history():

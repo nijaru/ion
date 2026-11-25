@@ -379,7 +379,10 @@ impl Dock {
                 super::activity::OperationKind::Shell | super::activity::OperationKind::Coding
             )
         }) {
-            super::activity::preview_rows(&ui.command_preview, width, body_rows.min(20))
+            // Output is subordinate to the running command in the transcript.
+            // Keep room for its heading and nearby context before showing a tail.
+            let preview_budget = body_rows.saturating_sub(3).min(10);
+            super::activity::preview_rows(&ui.command_preview, width, preview_budget)
         } else {
             Vec::new()
         };

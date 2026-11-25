@@ -110,6 +110,9 @@ pub(super) fn preview_rows(
     width: usize,
     budget: usize,
 ) -> Vec<String> {
+    if budget == 0 {
+        return Vec::new();
+    }
     let mut streams = [Vec::new(), Vec::new()];
     for (stream, rows) in [
         ion_core::OutputStream::Stdout,
