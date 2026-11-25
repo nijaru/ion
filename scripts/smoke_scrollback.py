@@ -217,6 +217,17 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.1)
         check_history()
 
+        tmux("send-keys", "-t", "ion", "-l", "/tools")
+        tmux("send-keys", "-t", "ion", "Enter")
+        while "Recorded tools · 3 match(es)" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"recorded tool list did not open:\n{pane}"
+            time.sleep(0.02)
+        assert pane.index("3 · exec") < pane.index("2 · edit") < pane.index("1 · read"), pane
+        tmux("send-keys", "-t", "ion", "Escape")
+        while not composer_ready(pane := tmux("capture-pane", "-p", "-t", "ion")) or "Recorded tools" in pane:
+            assert time.monotonic() < deadline, f"tool list did not return to composer:\n{pane}"
+            time.sleep(0.02)
+
         # Search for a marker omitted from the preview and not present in
         # the exec arguments, then open the original numbered evidence.
         tmux("send-keys", "-t", "ion", "-l", "/tools output FIRST_HIDDEN")

@@ -526,6 +526,22 @@ fn transcript_pages_attach_results_to_repeated_call_occurrences() {
         })
         .collect::<Vec<_>>();
     assert_eq!(results, ["first result", "second result"]);
+    let mut listed = Vec::new();
+    session
+        .visit_committed_tools(|number, activity| {
+            listed.push((
+                number.get(),
+                activity.result.as_ref().unwrap().value["value"].clone(),
+            ));
+        })
+        .unwrap();
+    assert_eq!(
+        listed,
+        [
+            (2, serde_json::json!("second result")),
+            (1, serde_json::json!("first result"))
+        ]
+    );
     let second = session
         .tool_evidence(None, ToolEvidenceTarget::Latest)
         .unwrap()
@@ -547,7 +563,40 @@ fn transcript_pages_attach_results_to_repeated_call_occurrences() {
         "first result"
     );
     assert_ne!(first.activity.identity, second.activity.identity);
+    finish(&session, "unrelated input", "unrelated prose");
+    let unrelated = session.context_position().unwrap().head_entry - 1;
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=?2",
+            params![
+                br#"{"kind":"unreadable_fixture","data":{}}"#.as_slice(),
+                i64::try_from(unrelated).unwrap(),
+            ],
+        )
+        .unwrap();
+    assert!(
+        session.presentation(None).is_err(),
+        "fixture must fail a full display read"
+    );
+    let mut reread = Vec::new();
+    session
+        .visit_committed_tools(|number, activity| {
+            reread.push((
+                number.get(),
+                activity.result.as_ref().unwrap().value["value"].clone(),
+            ));
+        })
+        .unwrap();
+    assert_eq!(
+        reread, listed,
+        "tool listing must not decode unrelated prose"
+    );
+    drop(connection);
     select(&session, 0);
+    session
+        .visit_committed_tools(|_, _| panic!("inactive branch tool entered current listing"))
+        .unwrap();
     assert!(
         session
             .tool_evidence(Some(second.cursor), ToolEvidenceTarget::Latest)

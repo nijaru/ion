@@ -182,6 +182,23 @@ impl SessionReader {
             .await
     }
 
+    /// Fold a committed top-level tool walk in a retained worker. The visitor
+    /// receives one borrowed activity at a time, newest first.
+    pub async fn fold_committed_tools<T: Send + 'static>(
+        &self,
+        mut output: T,
+        mut visit: impl FnMut(&mut T, std::num::NonZeroUsize, &crate::TranscriptActivity)
+        + Send
+        + 'static,
+    ) -> Result<T, SessionError> {
+        self.run(move |session| {
+            session
+                .visit_committed_tools(|number, activity| visit(&mut output, number, activity))?;
+            Ok(output)
+        })
+        .await
+    }
+
     pub async fn tool_evidence(
         &self,
         cursor: Option<super::ToolEvidenceCursor>,

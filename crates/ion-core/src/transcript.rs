@@ -79,6 +79,52 @@ pub struct TranscriptActivity {
     pub children: Vec<TranscriptActivity>,
 }
 
+impl TranscriptActivity {
+    pub(crate) fn admitted(
+        occurrence: crate::ToolOccurrence,
+        call: &ion_ai::ToolCall,
+        stored: &crate::StoredToolActivity,
+        termination: &ResponseTermination,
+    ) -> Self {
+        Self {
+            identity: TranscriptActivityIdentity::Tool(occurrence),
+            call_id: call.id.clone(),
+            name: call.name.clone(),
+            activity: stored.activity.clone(),
+            arguments: call.arguments.clone(),
+            state: if matches!(termination, ResponseTermination::Completed) {
+                ActivityState::Queued
+            } else {
+                ActivityState::Rejected
+            },
+            result: None,
+            children: Vec::new(),
+        }
+    }
+
+    pub(crate) fn observe_outcome(&mut self, outcome: &crate::ToolOutcome) {
+        let output = outcome.inspection_output();
+        self.state = match outcome {
+            crate::ToolOutcome::Observed { .. } => result_state(output.is_error, &output.value),
+            crate::ToolOutcome::NotDispatched { .. } => ActivityState::Rejected,
+            crate::ToolOutcome::Unknown => ActivityState::Unknown,
+        };
+        self.result = Some(activity_result(
+            output.value.clone(),
+            &output.images,
+            output.artifacts.clone(),
+            output.is_error,
+            outcome.projection(),
+        ));
+    }
+
+    pub(crate) fn mark_unobserved(&mut self) {
+        if self.state == ActivityState::Queued {
+            self.state = ActivityState::Unknown;
+        }
+    }
+}
+
 /// Reasoning interleaved with a run of tool calls, without ending that run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupThinking {
@@ -311,13 +357,9 @@ impl TranscriptProjection {
         for item in &mut builder.projection.items {
             if let TranscriptItem::ActivityGroup(group) = item {
                 for activity in &mut group.activities {
-                    if activity.state == ActivityState::Queued {
-                        activity.state = ActivityState::Unknown;
-                    }
+                    activity.mark_unobserved();
                     for child in &mut activity.children {
-                        if child.state == ActivityState::Queued {
-                            child.state = ActivityState::Unknown;
-                        }
+                        child.mark_unobserved();
                     }
                 }
             }
@@ -419,20 +461,12 @@ impl TranscriptBuilder {
                     unreachable!("ensure_group returns an activity group");
                 };
                 let activity_index = group.activities.len();
-                group.activities.push(TranscriptActivity {
-                    identity: TranscriptActivityIdentity::Tool(occurrence),
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    activity: stored.activity.clone(),
-                    arguments: call.arguments.clone(),
-                    state: if matches!(termination, ResponseTermination::Completed) {
-                        ActivityState::Queued
-                    } else {
-                        ActivityState::Rejected
-                    },
-                    result: None,
-                    children: Vec::new(),
-                });
+                group.activities.push(TranscriptActivity::admitted(
+                    occurrence,
+                    call,
+                    stored,
+                    termination,
+                ));
                 self.calls
                     .insert((turn, call.id.clone()), (group_index, activity_index));
                 self.occurrences
@@ -453,21 +487,7 @@ impl TranscriptBuilder {
     }
 
     fn push_outcome(&mut self, turn: u64, call_id: &str, outcome: &crate::ToolOutcome) {
-        let output = outcome.inspection_output();
-        let state = match outcome {
-            crate::ToolOutcome::Observed { .. } => result_state(output.is_error, &output.value),
-            crate::ToolOutcome::NotDispatched { .. } => ActivityState::Rejected,
-            crate::ToolOutcome::Unknown => ActivityState::Unknown,
-        };
-        let activity = self.activity_mut(turn, call_id);
-        activity.state = state;
-        activity.result = Some(activity_result(
-            output.value.clone(),
-            &output.images,
-            output.artifacts.clone(),
-            output.is_error,
-            outcome.projection(),
-        ));
+        self.activity_mut(turn, call_id).observe_outcome(outcome);
     }
 
     fn parent_mut(&mut self, parent: crate::ToolOccurrence) -> &mut TranscriptActivity {

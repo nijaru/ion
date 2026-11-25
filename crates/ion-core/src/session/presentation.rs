@@ -365,6 +365,89 @@ impl Session {
         }))
     }
 
+    /// Visit top-level tool summaries and saved results, newest first, at one
+    /// committed cut. Each callback borrows one result; there is no transcript
+    /// projection or raw capture/child scan. The callback runs outside Store
+    /// locks and should retain only the data its caller needs.
+    pub fn visit_committed_tools(
+        &self,
+        mut visit: impl FnMut(NonZeroUsize, &TranscriptActivity),
+    ) -> Result<(), SessionError> {
+        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        let (snapshot, cut, mut head) = {
+            let store = self.lock_store()?;
+            let cut = store.state.sequence;
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_display_snapshot(&snapshot, cut)?;
+            (snapshot, cut, store.context_index.tool_head())
+        };
+        while head != 0 {
+            // Batch links and already-committed results are immutable. An
+            // append after the pinned WAL cut can fill a zero result slot;
+            // never read that newer coordinate from this historical walk.
+            let batch = self.lock_store()?.context_index.tool_batch(head).clone();
+            let SessionEntry::Assistant {
+                turn,
+                message,
+                tool_activities,
+                termination,
+                ..
+            } = read_entry(&snapshot, head)?
+            else {
+                return Err(SessionError::InvalidHistory);
+            };
+            if tool_activities.len() != batch.results.len() {
+                return Err(SessionError::InvalidHistory);
+            }
+            let mut calls = message.content.iter().rev().filter_map(|part| match part {
+                Content::ToolCall(call) => Some(call),
+                _ => None,
+            });
+            for (ordinal, (&entry, stored)) in
+                batch.results.iter().zip(&tool_activities).enumerate().rev()
+            {
+                let call = calls.next().ok_or(SessionError::InvalidHistory)?;
+                if call.id != stored.call_id {
+                    return Err(SessionError::InvalidHistory);
+                }
+                let mut activity = TranscriptActivity::admitted(
+                    ToolOccurrence {
+                        assistant_entry: head,
+                        ordinal,
+                    },
+                    call,
+                    stored,
+                    &termination,
+                );
+                if entry != 0 && entry <= cut {
+                    match read_entry(&snapshot, entry)? {
+                        SessionEntry::ToolResult {
+                            turn: recorded,
+                            result,
+                        } if recorded == turn
+                            && result.call_id == call.id
+                            && result.name == call.name =>
+                        {
+                            activity.observe_outcome(&result.outcome)
+                        }
+                        _ => return Err(SessionError::InvalidHistory),
+                    }
+                }
+                activity.mark_unobserved();
+                visit(
+                    NonZeroUsize::new(batch.first + ordinal).expect("one-based tool number"),
+                    &activity,
+                );
+            }
+            if calls.next().is_some() {
+                return Err(SessionError::InvalidHistory);
+            }
+            head = batch.previous;
+        }
+        Ok(())
+    }
+
     /// Bounded editable text observed from committed inputs across all branches.
     pub fn recent_prompts(&self) -> Result<Vec<String>, SessionError> {
         Ok(self.lock_store()?.context_index.prompt_recall.snapshot())

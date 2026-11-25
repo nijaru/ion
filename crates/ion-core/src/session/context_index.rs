@@ -36,10 +36,12 @@ pub(super) struct DisplayDependent {
     pub(super) ordinal: Option<usize>,
 }
 
-struct ToolBatch {
-    previous: u64,
-    first: usize,
-    count: usize,
+#[derive(Clone)]
+pub(super) struct ToolBatch {
+    pub(super) previous: u64,
+    pub(super) first: usize,
+    // Zero denotes an admitted call without a committed terminal result.
+    pub(super) results: Vec<u64>,
 }
 
 #[derive(Clone, Copy)]
@@ -145,14 +147,18 @@ impl ContextIndex {
     pub(super) fn tool_count(&self, head: u64) -> usize {
         self.tool_batches
             .get(&head)
-            .map_or(0, |batch| batch.first - 1 + batch.count)
+            .map_or(0, |batch| batch.first - 1 + batch.results.len())
+    }
+
+    pub(super) fn tool_batch(&self, head: u64) -> &ToolBatch {
+        &self.tool_batches[&head]
     }
 
     pub(super) fn tool_at(&self, mut head: u64, number: usize) -> Option<crate::ToolOccurrence> {
         while head != 0 && number != 0 {
             let batch = &self.tool_batches[&head];
             if let Some(ordinal) = number.checked_sub(batch.first) {
-                return (ordinal < batch.count).then_some(crate::ToolOccurrence {
+                return (ordinal < batch.results.len()).then_some(crate::ToolOccurrence {
                     assistant_entry: head,
                     ordinal,
                 });
@@ -171,7 +177,7 @@ impl ContextIndex {
             head = self.tool_batches[&head].previous;
         }
         let batch = self.tool_batches.get(&head)?;
-        (head == occurrence.assistant_entry && occurrence.ordinal < batch.count)
+        (head == occurrence.assistant_entry && occurrence.ordinal < batch.results.len())
             .then(|| batch.first + occurrence.ordinal)
     }
 
@@ -206,6 +212,11 @@ impl ContextIndex {
         let (root, ordinal) = match entry {
             SessionEntry::ToolResult { .. } => {
                 let tool = resolved.expect("validated tool result");
+                let batch = self
+                    .tool_batches
+                    .get_mut(&tool.assistant_entry)
+                    .expect("validated tool admission");
+                batch.results[tool.ordinal] = self.nodes.len() as u64;
                 (tool.assistant_entry, Some(tool.ordinal))
             }
             SessionEntry::ChildToolAdmitted { intent, .. } => {
@@ -349,7 +360,7 @@ impl ContextIndex {
                 ToolBatch {
                     previous,
                     first: self.tool_count(previous) + 1,
-                    count: tool_activities.len(),
+                    results: vec![0; tool_activities.len()],
                 },
             );
             coordinate

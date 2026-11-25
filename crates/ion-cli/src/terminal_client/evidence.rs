@@ -6,7 +6,7 @@ use anyhow::Result;
 use ion_app::SessionControl;
 use ion_core::{
     Session, SessionError, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget,
-    TranscriptActivityIdentity, TranscriptItem, TranscriptProjection,
+    TranscriptActivity, TranscriptActivityIdentity, TranscriptItem, TranscriptProjection,
 };
 
 use super::{EditorDraft, Frontend, Picker, PickerItem, PickerValue, session_io::ReadOutput};
@@ -208,8 +208,14 @@ pub(super) fn list(
     query: Option<String>,
 ) -> Result<()> {
     if control.is_busy() {
-        let output = picker(ui.conversation.items(), &ui.cwd, query.as_deref(), false);
-        match output {
+        let mut items: Vec<_> = tools(ui.conversation.items())
+            .enumerate()
+            .filter_map(|(index, activity)| {
+                matching_item(index + 1, activity, &ui.cwd, query.as_deref(), false)
+            })
+            .collect();
+        items.reverse();
+        match picker(items, query.is_some()) {
             Ok(picker) => ui.pickers.open(picker),
             Err(status) => ui.status = status.into(),
         }
@@ -218,71 +224,69 @@ pub(super) fn list(
     let session = control.session();
     let reader = session.reader()?;
     let cwd = ui.cwd.clone();
+    let searched = query.is_some();
     ui.session_io.start(session, async move {
-        Ok(reader
-            .map_presentation(None, move |snapshot| {
-                match picker(
-                    snapshot.transcript.items.iter(),
-                    &cwd,
-                    query.as_deref(),
-                    true,
-                ) {
-                    Ok(picker) => ReadOutput::Picker(Box::new(picker)),
-                    Err(status) => ReadOutput::Status(status.into()),
+        let items = reader
+            .fold_committed_tools(Vec::new(), move |items, number, activity| {
+                if let Some(item) =
+                    matching_item(number.get(), activity, &cwd, query.as_deref(), true)
+                {
+                    items.push(item);
                 }
             })
-            .await?)
+            .await?;
+        Ok(match picker(items, searched) {
+            Ok(picker) => ReadOutput::Picker(Box::new(picker)),
+            Err(status) => ReadOutput::Status(status.into()),
+        })
     })
 }
 
-fn picker<'a>(
-    items: impl Iterator<Item = &'a TranscriptItem>,
+fn matching_item(
+    number: usize,
+    activity: &TranscriptActivity,
     cwd: &Path,
     query: Option<&str>,
     committed: bool,
-) -> Result<Picker, &'static str> {
-    let mut items: Vec<_> = tools(items)
-        .enumerate()
-        .filter(|(_, activity)| {
-            query.is_none_or(|query| {
-                activity
-                    .result
-                    .as_ref()
-                    .is_some_and(|result| result_contains(&result.value, query))
-            })
-        })
-        .map(|(index, activity)| {
-            let mut label = format!(
-                "{} · {} · {}",
-                index + 1,
-                activity.name,
-                state_label(activity.state)
-            );
-            if let Some(subject) = activity_subject(activity, cwd) {
-                label.push_str(" · ");
-                label.push_str(&crate::display_text::fit_line(&subject, 200));
-            }
-            PickerItem {
-                label,
-                detail: None,
-                value: if committed {
-                    PickerValue::CommittedTool(activity.identity)
-                } else {
-                    PickerValue::LiveTool(activity.identity)
-                },
-            }
-        })
-        .collect();
+) -> Option<PickerItem> {
+    if let Some(query) = query
+        && !activity
+            .result
+            .as_ref()
+            .is_some_and(|result| result_contains(&result.value, query))
+    {
+        return None;
+    }
+    let mut label = format!(
+        "{number} · {} · {}",
+        activity.name,
+        state_label(activity.state)
+    );
+    if let Some(subject) = activity_subject(activity, cwd) {
+        label.push_str(" · ");
+        label.push_str(&crate::display_text::fit_line(&subject, 200));
+    }
+    Some(PickerItem {
+        label,
+        detail: None,
+        value: if committed {
+            PickerValue::CommittedTool(activity.identity)
+        } else {
+            PickerValue::LiveTool(activity.identity)
+        },
+    })
+}
+
+fn picker(items: Vec<PickerItem>, searched: bool) -> Result<Picker, &'static str> {
     if items.is_empty() {
-        return Err(if query.is_some() {
+        return Err(if searched {
             "No matching recorded tool output (raw captures not searched)"
         } else {
             "No tools in this session"
         });
     }
-    items.reverse();
     Ok(Picker {
-        title: if query.is_some() {
+        title: if searched {
             "Recorded tool output"
         } else {
             "Recorded tools"
