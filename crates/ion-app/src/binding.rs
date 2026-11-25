@@ -16,6 +16,40 @@ use crate::{
     SessionControl, preparation::Preparation,
 };
 
+/// Initial writer acquisition, performed by the retained setup worker only
+/// after caller preflight. Reopening can require the identity seen in preflight.
+#[derive(Debug)]
+pub enum SessionTarget {
+    Create(PathBuf),
+    Open {
+        path: PathBuf,
+        expected_id: Option<uuid::Uuid>,
+    },
+    OpenOrCreate(PathBuf),
+}
+
+impl SessionTarget {
+    pub(crate) fn acquire(self, cwd: Option<&Path>) -> Result<Arc<Session>> {
+        let (session, expected_id) = match self {
+            Self::Create(path) => (Session::create(path, cwd)?, None),
+            Self::Open { path, expected_id } => (Session::open(path)?, expected_id),
+            Self::OpenOrCreate(path) if path.try_exists()? => (Session::open(path)?, None),
+            Self::OpenOrCreate(path) => (Session::create(path, cwd)?, None),
+        };
+        ensure!(
+            session.cwd() == cwd && expected_id.is_none_or(|id| session.id() == id),
+            "saved Session identity or working directory changed during startup; reopen it explicitly"
+        );
+        Ok(Arc::new(session))
+    }
+}
+
+#[derive(Default)]
+pub struct SessionOptions {
+    pub reasoning: Option<Reasoning>,
+    pub questions: Option<QuestionCustody>,
+}
+
 /// Configuration, not execution. Consume this to create the sole control owner.
 pub struct SessionSetup {
     pub(crate) initial_completion_delivery: crate::CompletionDelivery,
@@ -27,6 +61,7 @@ pub struct SessionSetup {
     pub(crate) commands: CommandCatalog,
     pub(crate) questions: Option<Arc<QuestionCustody>>,
     retirements: crate::SessionRetirements,
+    shared_retirements: bool,
 }
 
 struct PreparedBinding {
@@ -189,6 +224,31 @@ impl SetupPreparation {
 }
 
 impl SessionSetup {
+    /// Acquire the writer and assemble a custom application binding on the
+    /// same retained worker. A failed setup releases the unopened execution
+    /// scope before reporting its error; no control has admitted work yet.
+    pub fn open(
+        target: SessionTarget,
+        catalog: SessionCatalog,
+        application: Arc<dyn Application>,
+        model: Option<ModelRef>,
+        options: SessionOptions,
+        stop: CancellationToken,
+    ) -> SetupPreparation {
+        SetupPreparation::start(stop, move |stop| {
+            let session = target.acquire(catalog.cwd())?;
+            check_stop(&stop)?;
+            Self::new(
+                session,
+                catalog,
+                application,
+                model.as_ref(),
+                options.reasoning,
+                options.questions,
+            )
+        })
+    }
+
     /// Initial receiving policy; live changes belong to SessionControl.
     pub fn with_completion_delivery(mut self, delivery: crate::CompletionDelivery) -> Self {
         self.initial_completion_delivery = delivery;
@@ -242,10 +302,13 @@ impl SessionSetup {
         } else {
             runtime.agent.validate_reasoning(session.reasoning()?)?;
         }
-        let retirements = application.session_retirements().unwrap_or_default();
+        let retirements = application.session_retirements();
+        let shared_retirements = retirements.is_some();
+        let retirements = retirements.unwrap_or_default();
         retirements.register(&session)?;
         Ok(Self {
             retirements,
+            shared_retirements,
             initial_completion_delivery: crate::CompletionDelivery::Inbox,
             application,
             catalog,
@@ -265,6 +328,10 @@ impl SessionSetup {
     /// join it after control shutdown to finish actual native Store destruction.
     pub fn retirements(&self) -> crate::SessionRetirements {
         self.retirements.clone()
+    }
+
+    pub(crate) fn has_shared_retirements(&self) -> bool {
+        self.shared_retirements || self.owner().is_some()
     }
 
     pub fn owner(&self) -> Option<Arc<crate::ApplicationOwner>> {
@@ -296,15 +363,14 @@ impl SessionSetup {
     }
     /// Control this Session without shutting down a shared application.
     pub fn into_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
-        SessionControl::from_setup(self, None)
+        SessionControl::from_setup(self, false)
     }
 
     /// Control this Session as the application's sole lifecycle owner. Shutdown
     /// also closes admission and joins application-owned children and processes.
     /// Use `into_control` if other clients share those resources.
     pub fn into_application_control<M: Serialize + Send + 'static>(self) -> SessionControl<M> {
-        let owner = self.owner();
-        SessionControl::from_setup(self, owner)
+        SessionControl::from_setup(self, true)
     }
 }
 

@@ -159,6 +159,7 @@ pub struct SessionControl<M = ()> {
     closed: bool,
     cleanup_errors: Vec<ShutdownError>,
     shutdown_application: Option<Arc<crate::ApplicationOwner>>,
+    join_retirements: bool,
     pub(crate) owner: uuid::Uuid,
     question_changes: Option<watch::Receiver<u64>>,
     question_seen: u64,
@@ -170,10 +171,9 @@ fn lock<M>(custody: &Mutex<Custody<M>>) -> custody::Guard<'_, M> {
 }
 
 impl<M: Serialize + Send + 'static> SessionControl<M> {
-    pub(crate) fn from_setup(
-        setup: SessionSetup,
-        shutdown_application: Option<Arc<crate::ApplicationOwner>>,
-    ) -> Self {
+    pub(crate) fn from_setup(setup: SessionSetup, owns_application: bool) -> Self {
+        let shutdown_application = owns_application.then(|| setup.owner()).flatten();
+        let join_retirements = owns_application || !setup.has_shared_retirements();
         let (observations, receiver) = broadcast::channel(OBSERVATION_CAPACITY);
         let owner = uuid::Uuid::now_v7();
         let completions = crate::completion::CompletionReceiver::new(setup.session.id());
@@ -213,6 +213,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             closed: false,
             cleanup_errors: Vec::new(),
             shutdown_application,
+            join_retirements,
             owner,
             question_changes,
             question_seen,
@@ -735,6 +736,33 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
     }
 
+    /// Consume control and start joining it. An exclusive owner also joins
+    /// native database retirement after dropping the live binding. For a
+    /// shared retirement scope its outer owner still joins native resources,
+    /// including writers retained by transferred work. Release external live
+    /// Session, reader or IO handles before joining an exclusive close. If
+    /// queued metadata itself holds live handles, take the borrowed shutdown
+    /// report first and release those handles before beginning close.
+    pub fn begin_close(mut self) -> SessionClose<M> {
+        self.request_shutdown();
+        SessionClose {
+            work: crate::preparation::Preparation::start(
+                CancellationToken::new(),
+                move |_| async move {
+                    let mut report = self.shutdown().await;
+                    let retirements = self.join_retirements.then(|| self.retirements());
+                    drop(self);
+                    if let Some(retirements) = retirements
+                        && let Err(error) = retirements.join().await
+                    {
+                        report.cleanup_errors.push(ShutdownError::Retirement(error));
+                    }
+                    Ok(report)
+                },
+            ),
+        }
+    }
+
     /// Join, then explicitly transfer all remaining recovery results to the caller.
     pub async fn shutdown(&mut self) -> ShutdownReport<M> {
         self.join_shutdown().await;
@@ -746,6 +774,19 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             updates,
             cleanup_errors: std::mem::take(&mut self.cleanup_errors),
         }
+    }
+}
+
+/// Retained close operation. Abandoning a borrowed wait does not interrupt
+/// cleanup or discard the shutdown report.
+#[must_use = "retain close custody until the shutdown report is joined"]
+pub struct SessionClose<M> {
+    work: crate::preparation::Preparation<ShutdownReport<M>>,
+}
+
+impl<M: Send + 'static> SessionClose<M> {
+    pub async fn join(&mut self) -> Result<ShutdownReport<M>> {
+        self.work.join().await
     }
 }
 

@@ -16,13 +16,14 @@ use ion_ai::{
 };
 use ion_app::{
     Application, ApplicationRuntime, ControlUpdate, OperationOutcome, RequestAdmission, Resources,
-    SessionCatalog, SessionSetup,
+    SessionCatalog, SessionControl, SessionOptions, SessionSetup, SessionTarget,
 };
 use ion_core::{
-    Agent, AuthorityScope, RequestKey, Session, SessionEntry, ToolDefinition, ToolExecutor,
-    ToolOutcome, ToolOutput, ToolRegistration, ToolSource, TurnEndReason,
+    Agent, AuthorityScope, RequestKey, SessionEntry, ToolDefinition, ToolExecutor, ToolOutcome,
+    ToolOutput, ToolRegistration, ToolSource, TurnEndReason,
 };
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 const INSTRUCTIONS: &str =
     "Count the characters using count_chars. No workspace or native tools are available.";
@@ -156,17 +157,29 @@ async fn main() -> Result<()> {
         counter: counter.clone(),
     });
     let catalog = SessionCatalog::new(root.clone(), None);
-    let session = Arc::new(if resume {
-        Session::open(catalog.latest()?)?
+    let target = if resume {
+        SessionTarget::Open {
+            path: catalog.latest()?,
+            expected_id: None,
+        }
     } else {
-        Session::create(catalog.new_path()?, None)?
-    });
-    let path = session.path().to_owned();
-    let session_id = session.id();
+        SessionTarget::Create(catalog.new_path()?)
+    };
     let key = RequestKey::new("counter-app".into(), "delivery-1".into())?;
     let literal = Message::user_input("Count 🦀e".into(), []);
-    let mut control = SessionSetup::new(session, catalog, application.clone(), None, None, None)?
-        .into_control::<()>();
+    let mut control = SessionSetup::open(
+        target,
+        catalog.clone(),
+        application.clone(),
+        None,
+        SessionOptions::default(),
+        CancellationToken::new(),
+    )
+    .join()
+    .await?
+    .into_control::<()>();
+    let path = control.session().path().to_owned();
+    let session_id = control.session().id();
     let result: Result<()> = async {
         if resume {
             let state = control.session().recovery_state()?.context("no recoverable Turn")?;
@@ -242,49 +255,38 @@ async fn main() -> Result<()> {
         Ok(())
     }
     .await;
-    let report = control.shutdown().await;
-    let retirements = control.retirements();
-    drop(control);
-    let resources = retirements.join().await;
-    if !report.cleanup_errors.is_empty() {
-        return Err(anyhow!(
-            "shared shutdown failed: {:?}; run result: {result:?}",
-            report.cleanup_errors
-        ));
-    }
-    result?;
-    resources?;
-    let reopened = Arc::new(Session::open(path)?);
-    ensure!(reopened.id() == session_id, "logical identity changed");
-    let mut control = SessionSetup::new(
-        reopened,
-        SessionCatalog::new(root, None),
+    close(control, result).await?;
+    let mut control = SessionSetup::open(
+        SessionTarget::Open {
+            path,
+            expected_id: Some(session_id),
+        },
+        catalog,
         application,
         None,
-        None,
-        None,
-    )?
+        SessionOptions::default(),
+        CancellationToken::new(),
+    )
+    .join()
+    .await?
     .into_control::<()>();
-    let admission = control
-        .submit_request(&key, literal, ())
-        .await
-        .map_err(|input| input.reason)?;
-    ensure!(
-        matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.session == session_id && receipt.turn == 1 && receipt.end == Some(TurnEndReason::Completed)),
-        "reopen did not reconcile the completed delivery"
-    );
-    ensure!(
-        counter.effects.load(Ordering::SeqCst) == usize::from(!resume)
-            && service.requests().len() == if resume { 1 } else { 2 },
-        "redelivery executed model/tool work"
-    );
-    ensure!(
-        control.shutdown().await.cleanup_errors.is_empty(),
-        "reopened shutdown failed"
-    );
-    let retirements = control.retirements();
-    drop(control);
-    retirements.join().await?;
+    let result = async {
+        let admission = control
+            .submit_request(&key, literal, ())
+            .await
+            .map_err(|input| input.reason)?;
+        ensure!(
+            matches!(admission, RequestAdmission::Existing { receipt, .. } if receipt.session == session_id && receipt.turn == 1 && receipt.end == Some(TurnEndReason::Completed)),
+            "reopen did not reconcile the completed delivery"
+        );
+        ensure!(
+            counter.effects.load(Ordering::SeqCst) == usize::from(!resume)
+                && service.requests().len() == if resume { 1 } else { 2 },
+            "redelivery executed model/tool work"
+        );
+        Ok(())
+    }.await;
+    close(control, result).await?;
     if resume {
         println!(
             "restricted application: explicit continuation completed the original Turn without old tool dispatch"
@@ -295,4 +297,24 @@ async fn main() -> Result<()> {
         );
     }
     Ok(())
+}
+
+async fn close(control: SessionControl, mut result: Result<()>) -> Result<()> {
+    let mut closing = control.begin_close();
+    match closing.join().await {
+        Ok(report) => {
+            for error in report.cleanup_errors {
+                result = close_error(result, error.into());
+            }
+        }
+        Err(error) => result = close_error(result, error),
+    }
+    result
+}
+
+fn close_error(result: Result<()>, error: anyhow::Error) -> Result<()> {
+    match result {
+        Ok(()) => Err(error),
+        Err(primary) => Err(primary.context(format!("shutdown also failed: {error:#}"))),
+    }
 }

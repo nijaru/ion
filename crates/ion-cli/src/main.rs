@@ -691,36 +691,20 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 validate_launch_size(&ion_ai::Message::user_input(instructions.clone(), []))?;
             }
             ensure!(!stop.is_cancelled(), "application startup interrupted");
-            let session = Arc::new(if existing.is_some() {
-                Session::open(&path)?
-            } else {
-                Session::create(&path, Some(&cwd))?
-            });
-            if let Some(view) = &existing {
-                ensure!(
-                    session.id() == view.id && session.cwd() == view.cwd.as_deref(),
-                    "saved Session identity or working directory changed during startup; reopen it explicitly"
-                );
-            }
-            // Preserve preflight's default SIGINT disposition, then keep this
-            // single stream through MCP startup and the client. Registration
-            // failure still owns and must close the opened Session.
-            let mut interrupt = match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()) {
-                Ok(interrupt) => interrupt,
-                Err(error) => return match session.shutdown().await {
-                    Ok(()) => Err(error.into()),
-                    Err(cleanup) => Err(anyhow::Error::new(error).context(format!("Session shutdown also failed: {cleanup}"))),
-                },
+            let target = match &existing {
+                Some(view) => ion_app::SessionTarget::Open { path, expected_id: Some(view.id) },
+                None => ion_app::SessionTarget::Create(path),
             };
+            // Preserve preflight's default SIGINT disposition, then keep one
+            // stream through MCP startup, writer acquisition and the client.
+            let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
             let mut application = application.expect("non-coding commands returned before runtime setup");
             let mut interrupted = false;
             let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
                 ion_app::McpStartup::default()
             } else {
                 let preparation = host.external_tools(
-                    session
-                        .cwd()
-                        .context("coding requires a working directory")?,
+                    session_cwd,
                     stop.clone(),
                 );
                 tokio::pin!(preparation);
@@ -737,7 +721,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             };
             interrupted |= stop.is_cancelled();
             let external_mcp = startup.tools;
-            let mut preflight_session = Some(session);
+            let mut handed_off = false;
             // Terminal and bidirectional RPC own a live question responder.
             // One-shot headless, compaction and managed children have no answer
             // channel and therefore no declared question tool.
@@ -752,18 +736,17 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // Every fallible setup step after MCP startup belongs to the same
             // exit scope as the client, so preflight errors still join cleanup.
             let result = async {
-                retirements.register(preflight_session.as_ref().expect("unbound Session"))?;
                 ensure!(!interrupted, "MCP startup interrupted");
                 let mut startup_diagnostics = startup
                     .diagnostics
                     .into_iter()
                     .map(|diagnostic| format!("[mcp: {}]", metadata_field(&diagnostic)))
                     .collect::<Vec<_>>();
-                let mut preparation = application.prepare_setup(
-                    preflight_session.as_ref().expect("unbound Session").clone(),
+                let mut preparation = application.open_session(
+                    target,
+                    session_cwd.to_path_buf(),
                     selected,
-                    cli.reasoning,
-                    questions,
+                    ion_app::SessionOptions { reasoning: cli.reasoning, questions },
                     resources,
                     stop.child_token(),
                 );
@@ -807,10 +790,8 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                         print_stderr(format_args!("{diagnostic}"))?;
                     }
                 }
-                // Each client immediately owns shared control and always joins it.
-                // Keeping the original Arc here would pin its exclusive writer
-                // lock after a client switches to a different Session.
-                drop(preflight_session.take());
+                // Each client takes the only binding and joins its control.
+                handed_off = true;
                 let setup = setup.with_completion_delivery(cli.completion_delivery);
                 match client {
                     Client::Headless(request, json) => {
@@ -841,7 +822,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             .await;
             // After handoff the client control owns application shutdown. Before
             // handoff, join here before releasing the captured MCP environment.
-            let result = if preflight_session.is_some() && let Some(owner) = &application_owner {
+            let result = if !handed_off && let Some(owner) = &application_owner {
                 match (result, owner.join_shutdown().await) {
                     (result, Ok(())) => result,
                     (Ok(()), Err(error)) => Err(error),
@@ -851,19 +832,6 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 }
             } else {
                 result
-            };
-            // Preflight failures still own the original Session. After handoff,
-            // the client alone owns current-session cleanup, including replacement.
-            let shutdown = match preflight_session {
-                Some(session) => session.shutdown().await,
-                None => Ok(()),
-            };
-            let result = match (result, shutdown) {
-                (result, Ok(())) => result,
-                (Ok(()), Err(error)) => Err(error.into()),
-                (Err(error), Err(shutdown)) => {
-                    Err(error.context(format!("Session shutdown also failed: {shutdown}")))
-                }
             };
             let result = match (result, retirements.join().await) {
                 (result, Ok(())) => result,

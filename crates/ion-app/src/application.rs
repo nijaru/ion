@@ -7,7 +7,8 @@ use ion_core::{Agent, Session, ToolOutput, ToolSelection, ToolSource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    CommandCatalog, Host, LocalTools, QuestionCustody, Resources, Selection, SessionSetup,
+    CommandCatalog, Host, LocalTools, QuestionCustody, Resources, Selection, SessionOptions,
+    SessionSetup, SessionTarget,
 };
 
 mod owner;
@@ -212,22 +213,29 @@ impl CodingApplication {
         self
     }
 
-    /// Prepare an owned initial binding off-executor. Retain the handle through
+    /// Acquire the writer and prepare the initial binding off-executor. Retain the handle through
     /// Stop and join: abandoning a borrowed wait does not discard native work or
     /// an already committed preference.
-    pub fn prepare_setup(
+    pub fn open_session(
         &self,
-        session: Arc<Session>,
+        target: SessionTarget,
+        cwd: std::path::PathBuf,
         selected: Selection,
-        reasoning: Option<ion_ai::Reasoning>,
-        questions: Option<QuestionCustody>,
+        options: SessionOptions,
         resources: Resources,
         stop: tokio_util::sync::CancellationToken,
     ) -> crate::binding::SetupPreparation {
         let application = self.clone();
-        crate::binding::SetupPreparation::start(stop, move |_| {
-            application.session_retirements.register(&session)?;
-            application.setup(session, selected, reasoning, questions, resources)
+        crate::binding::SetupPreparation::start(stop, move |stop| {
+            let session = target.acquire(Some(&cwd))?;
+            anyhow::ensure!(!stop.is_cancelled(), "binding preparation stopped");
+            application.setup(
+                session,
+                selected,
+                options.reasoning,
+                options.questions,
+                resources,
+            )
         })
     }
 

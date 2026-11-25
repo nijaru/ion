@@ -81,6 +81,119 @@ impl Application for Restricted {
     }
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn owned_close_releases_writer_without_stopping_a_sibling_or_losing_history() {
+    use crate::{SessionOptions, SessionTarget};
+    use std::time::Duration;
+    use tokio_util::sync::CancellationToken;
+
+    let root = std::env::temp_dir().join(format!("ion-owned-close-{}", uuid::Uuid::now_v7()));
+    let catalog = SessionCatalog::new(root.clone(), None);
+    let application = Arc::new(Restricted {
+        service: Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("first".into())]),
+            response(vec![Content::Text("sibling".into())]),
+        ])),
+        instructions: RwLock::new(Some("Explicit instructions".into())),
+        commands: None,
+    });
+    let open = |target, model| {
+        SessionSetup::open(
+            target,
+            catalog.clone(),
+            application.clone(),
+            model,
+            SessionOptions::default(),
+            CancellationToken::new(),
+        )
+    };
+    let path = catalog.new_path().unwrap();
+    assert!(
+        open(SessionTarget::Create(path.clone()), Some(model("missing")))
+            .join()
+            .await
+            .is_err()
+    );
+    let mut first = open(
+        SessionTarget::Open {
+            path: path.clone(),
+            expected_id: None,
+        },
+        None,
+    )
+    .join()
+    .await
+    .unwrap()
+    .into_control::<()>();
+    let mut sibling = open(SessionTarget::Create(catalog.new_path().unwrap()), None)
+        .join()
+        .await
+        .unwrap()
+        .into_control::<()>();
+    let key = ion_core::RequestKey::new("scope".into(), "first".into()).unwrap();
+    let input = Message::user_input("first".into(), []);
+    first.submit_request(&key, input, ()).await.unwrap();
+    loop {
+        match first.next().await {
+            ControlUpdate::Settled(settlement) => {
+                assert!(
+                    matches!(settlement.outcome, OperationOutcome::Turn(Ok(answer)) if answer == "first")
+                );
+                break;
+            }
+            ControlUpdate::Idle => panic!("first request never settled"),
+            _ => {}
+        }
+    }
+    let history = first.session().history();
+    let live = first.session().clone();
+    let mut close = first.begin_close();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), close.join())
+            .await
+            .is_err()
+    );
+    drop(live);
+    let report = tokio::time::timeout(Duration::from_secs(5), close.join())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(report.cleanup_errors.is_empty());
+    let reopened = Session::open(path).unwrap();
+    assert_eq!(
+        history.request_receipt(&key).await.unwrap().unwrap().end,
+        Some(ion_core::TurnEndReason::Completed)
+    );
+    let sibling_key = ion_core::RequestKey::new("scope".into(), "sibling".into()).unwrap();
+    sibling
+        .submit_request(&sibling_key, Message::user_input("sibling".into(), []), ())
+        .await
+        .unwrap();
+    loop {
+        match sibling.next().await {
+            ControlUpdate::Settled(settlement) => {
+                assert!(
+                    matches!(settlement.outcome, OperationOutcome::Turn(Ok(answer)) if answer == "sibling")
+                );
+                break;
+            }
+            ControlUpdate::Idle => panic!("sibling never settled"),
+            _ => {}
+        }
+    }
+    assert!(
+        sibling
+            .begin_close()
+            .join()
+            .await
+            .unwrap()
+            .cleanup_errors
+            .is_empty()
+    );
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn identified_admission_requires_execution_custody_before_commit() {
     let root = std::env::temp_dir().join(format!("ion-request-runtime-{}", uuid::Uuid::now_v7()));

@@ -1,17 +1,14 @@
 //! A single-prompt SDK client using Ion's shared session-control owner.
 
-use std::{
-    io::Write,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{io::Write, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use clap::Parser;
 use ion_app::{
-    ControlUpdate, Delivery, Host, OperationOutcome, ReturnReason, SessionControl, UserInput,
+    CodingApplication, ControlUpdate, Delivery, Host, OperationOutcome, ReturnReason,
+    SessionControl, SessionOptions, SessionTarget, UserInput,
 };
-use ion_core::Session;
+use tokio_util::sync::CancellationToken;
 
 #[derive(Parser)]
 #[command(about = "Submit one prompt through Ion's embedded SDK; Ctrl-C stops and joins")]
@@ -34,91 +31,48 @@ async fn main() -> Result<()> {
         .cwd
         .canonicalize()
         .context("resolve working directory")?;
-    let session = Arc::new(if args.session.try_exists()? {
-        Session::open(&args.session)?
-    } else {
-        Session::create(&args.session, Some(&cwd))?
-    });
-
-    // Keep every fallible step after opening the Session inside this outcome.
-    // `?` must not destroy the runtime before shutdown joins retained work.
-    let retirement = session.retirement();
-    let outcome = submit(args, &cwd, session.clone()).await;
-    let shutdown = session.shutdown().await;
-    drop(session);
-    let resources = retirement.join().await;
-    let outcome = match (outcome, shutdown) {
-        (Ok(answer), Ok(())) => Ok(answer),
-        (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Err(shutdown)) => {
-            Err(error.context(format!("Session shutdown also failed: {shutdown}")))
+    let host = Arc::new(Host::from_environment()?);
+    let selected = host.models().choose(
+        Some(ion_ai::ModelRef {
+            provider: args.provider,
+            model: args.model,
+        }),
+        None,
+        host.credentials(),
+    )?;
+    let resources = host.resources(&cwd)?;
+    let application = CodingApplication::new(host, None);
+    let mut preparation = application.open_session(
+        SessionTarget::OpenOrCreate(args.session),
+        cwd,
+        selected,
+        SessionOptions::default(),
+        resources,
+        CancellationToken::new(),
+    );
+    let setup = preparation.join().await?;
+    let mut control = setup.into_application_control::<()>();
+    let mut outcome = prompt(&mut control, args.prompt).await;
+    match control.begin_close().join().await {
+        Ok(report) => {
+            for error in report.cleanup_errors {
+                outcome = cleanup(outcome, error.into());
+            }
         }
-    };
-    let answer = match (outcome, resources) {
-        (outcome, Ok(())) => outcome,
-        (Ok(_), Err(error)) => Err(error.into()),
-        (Err(error), Err(cleanup)) => {
-            Err(error.context(format!("Session resource cleanup also failed: {cleanup}")))
-        }
-    }?;
+        Err(error) => outcome = cleanup(outcome, error),
+    }
+    let answer = outcome?;
     // A blocking publisher cannot delay joining application-owned work.
     let mut output = std::io::stdout().lock();
     writeln!(output, "{answer}").context("publish committed answer")?;
     output.flush().context("flush committed answer")
 }
 
-async fn submit(args: Args, cwd: &Path, session: Arc<Session>) -> Result<String> {
-    ensure!(
-        session.cwd() == Some(cwd),
-        "Session belongs to a different working directory"
-    );
-    let io = session.io()?;
-    let (host, selected, resources) = io
-        .run(move |session| {
-            let result: Result<_> = (|| {
-                let host = Arc::new(Host::from_environment()?);
-                let selected = host.models().choose(
-                    Some(ion_ai::ModelRef {
-                        provider: args.provider,
-                        model: args.model,
-                    }),
-                    None,
-                    host.credentials(),
-                )?;
-                let resources = host.resources(
-                    session
-                        .cwd()
-                        .context("coding requires a working directory")?,
-                )?;
-                Ok((host, selected, resources))
-            })();
-            Ok(result)
-        })
-        .await??;
-    // Setup may retain this Session, so its worker/outcome live outside that
-    // Session's storage registry. There is no client-owned agent loop.
-    let mut preparation = ion_app::CodingApplication::new(host, None).prepare_setup(
-        session,
-        selected,
-        None,
-        None,
-        resources,
-        tokio_util::sync::CancellationToken::new(),
-    );
-    let setup = preparation.join().await?;
-    let mut control = setup.into_application_control::<()>();
-    let mut outcome = prompt(&mut control, args.prompt).await;
-    let report = control.shutdown().await;
-    for error in report.cleanup_errors {
-        outcome = match outcome {
-            Ok(_) => Err(error.into()),
-            Err(primary) => Err(primary.context(format!("control shutdown also failed: {error}"))),
-        };
+fn cleanup<T>(outcome: Result<T>, error: anyhow::Error) -> Result<T> {
+    match outcome {
+        Ok(_) => Err(error),
+        Err(primary) => Err(primary.context(format!("shutdown also failed: {error:#}"))),
     }
-    drop(control);
-    drop(io);
-    outcome
 }
 
 async fn prompt(control: &mut SessionControl, text: String) -> Result<String> {

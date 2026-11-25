@@ -506,4 +506,6 @@ pub enum ShutdownError {
     Session(#[source] SessionError),
     #[error("application shutdown failed: {0}")]
     Application(#[source] anyhow::Error),
+    #[error("Session resource retirement failed: {0}")]
+    Retirement(#[source] SessionError),
 }

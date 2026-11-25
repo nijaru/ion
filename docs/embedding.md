@@ -38,11 +38,11 @@ Anonymous and synthetic services may use the default access preflight. Forwardin
 
 Core execution APIs treat a caller's cancellation token as a parent scope. Cancelling it stops all operations beneath it. Stopping or dropping one `Operation` stops only that operation and its descendants, not the parent or sibling Sessions. Dropping an operation handle requests stop but does not join it. Retain and await the handle, or join through Session shutdown, before releasing host resources its work uses.
 
-`Session::create/open` and `SessionSetup::new` are blocking factory operations. Async coding clients use retained `CodingApplication::prepare_setup`, Session I/O and reader capabilities. Keep `setup.retirements()` outside the controller. After controller shutdown, drain reliable updates, release every Session/read capability, then await the retirement scope's `join()`.
+Async clients use `CodingApplication::open_session` or `SessionSetup::open`. The retained setup handle acquires the writer and builds the binding off the executor. `request_stop()` is cooperative; join the handle even after requesting stop.
 
 Use `setup.into_control()` when the application is shared: shutdown stops only that controller's Session. A standalone client uses `setup.into_application_control()`. Its shutdown also closes and joins application-owned subagents and processes. Both return pending control updates and cleanup errors; a cleanup failure does not replace an earlier operation failure.
 
-Shutdown preserves read-only access. Retirement separately joins native SQLite close and writer-lease release after the last reader drops. Cancelling a borrowed wait does not abandon native work.
+Use `control.begin_close()` and join its retained handle when the client no longer needs the live binding. A standalone close returns after SQLite closes and releases the writer lease. Drop live Session, reader and I/O handles first; a passive `SessionHistory` receipt handle can stay alive. For a shared application, the outer owner still joins its retirement scope after shutting down all controls and transferred work. Clients that need final live reads can first use borrowed `shutdown()`, then close. Cancelling a borrowed wait does not abandon native work.
 
 
 ## Tool schemas

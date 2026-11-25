@@ -68,8 +68,8 @@ pub use application::{
 };
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::{
-    BindingChange, BindingFinished, BindingOperationId, BindingResult, SessionSetup,
-    SetupPreparation,
+    BindingChange, BindingFinished, BindingOperationId, BindingResult, SessionOptions,
+    SessionSetup, SessionTarget, SetupPreparation,
 };
 pub use command_args::parse_args as parse_command_args;
 pub use command_environment::CommandEnvironment;
@@ -80,9 +80,9 @@ pub use control::{
     OperationId, OperationKind, OperationOutcome, OperationState, OutcomeSnapshot, QueuedInput,
     RecoveryAdmission, RecoveryDecision, RecoveryFailure, RejectedBatch, RejectedInput,
     RequestAdmission, RequestDecision, RequestLaunch, RequestPlan, ReturnReason, ReturnSnapshot,
-    ReturnedInput, SessionControl, Settlement, ShutdownError, ShutdownReport, SnapshotCursor,
-    SteeringReceipt, SteeringStatus, StopTarget, TurnSteering, UnresolvedInput, UnresolvedRequest,
-    UpdateSnapshot, UserInput, preflight_messages,
+    ReturnedInput, SessionClose, SessionControl, Settlement, ShutdownError, ShutdownReport,
+    SnapshotCursor, SteeringReceipt, SteeringStatus, StopTarget, TurnSteering, UnresolvedInput,
+    UnresolvedRequest, UpdateSnapshot, UserInput, preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{
