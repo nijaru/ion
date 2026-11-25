@@ -38,10 +38,10 @@ impl Control {
     ) -> Result<()> {
         fields(value, &["type", "id", "key"])?;
         let key = request_key(value)?;
-        let reader = self.host.session().reader()?;
+        let history = self.host.session().history();
         self.queue_access(id, "get_request", credit, async move {
             Ok(AccessData::Json(
-                json!({"receipt":reader.request_receipt(&key).await?}),
+                json!({"receipt":history.request_receipt(&key).await?}),
             ))
         });
         Ok(())

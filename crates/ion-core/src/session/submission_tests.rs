@@ -14,6 +14,38 @@ fn root() -> PathBuf {
     std::env::temp_dir().join(format!("ion-request-{}", uuid::Uuid::now_v7()))
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn committed_receipt_handle_outlives_the_writer_but_not_its_identity() {
+    let root = root();
+    let path = root.join("session.db");
+    let session = Session::create(&path, None).unwrap();
+    let key = RequestKey::new("history".into(), "persisted".into()).unwrap();
+    let history = session.history();
+    assert!(history.request_receipt(&key).await.unwrap().is_none());
+    session
+        .admit_turn(input("accepted"), model(), Some(key.clone()), None)
+        .unwrap();
+    let receipt = history.request_receipt(&key).await.unwrap().unwrap();
+    let retirement = session.retirement();
+    session.shutdown().await.unwrap();
+    drop(session);
+    tokio::time::timeout(std::time::Duration::from_secs(5), retirement.join())
+        .await
+        .expect("passive history must not own the writer lease")
+        .unwrap();
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(history.request_receipt(&key).await.unwrap(), Some(receipt));
+    drop(reopened);
+    std::fs::remove_file(&path).unwrap();
+    let replacement = Session::create(&path, None).unwrap();
+    assert!(matches!(
+        history.request_receipt(&key).await,
+        Err(SessionError::InvalidHistory)
+    ));
+    drop(replacement);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn failed_request_commit_preserves_interrupted_work_and_retry_authority() {
     let root = root();

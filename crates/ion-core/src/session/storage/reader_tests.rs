@@ -141,7 +141,8 @@ async fn completed_shutdown_allows_typed_reads_but_never_reopens_write_lanes() {
     let status = reader.status().await.unwrap();
     assert_eq!(status.name.as_deref(), Some("final snapshot"));
     assert_eq!(status.entries, 1);
-    let receipt = reader.request_receipt(&key).await.unwrap().unwrap();
+    let history = session.history();
+    let receipt = history.request_receipt(&key).await.unwrap().unwrap();
     assert_eq!(receipt.session, session.id());
     assert_eq!(receipt.turn, 1);
     assert_eq!(
@@ -155,7 +156,7 @@ async fn completed_shutdown_allows_typed_reads_but_never_reopens_write_lanes() {
         Err(SessionError::RequestConflict)
     ));
     let missing = RequestKey::new("reader-test".into(), "not accepted".into()).unwrap();
-    assert!(reader.request_receipt(&missing).await.unwrap().is_none());
+    assert!(history.request_receipt(&missing).await.unwrap().is_none());
     assert!(matches!(
         io.run::<()>(|_| panic!("write-capable callback admitted after shutdown"))
             .await,

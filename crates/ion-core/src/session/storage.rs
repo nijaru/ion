@@ -168,12 +168,8 @@ impl SessionReader {
         self.run(Session::status).await
     }
 
-    pub async fn request_receipt(
-        &self,
-        key: &RequestKey,
-    ) -> Result<Option<RequestReceipt>, SessionError> {
-        let key = key.clone();
-        self.run(move |session| session.request_receipt(&key)).await
+    pub async fn context_position(&self) -> Result<super::ContextPosition, SessionError> {
+        self.run(Session::context_position).await
     }
 
     pub async fn reconcile_request(

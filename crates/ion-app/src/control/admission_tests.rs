@@ -236,8 +236,7 @@ async fn abandoned_keyed_wait_shutdown_delivers_positive_receipt_and_exact_metad
     let receipt = fixture
         .control
         .session()
-        .reader()
-        .unwrap()
+        .history()
         .request_receipt(&key())
         .await
         .unwrap()

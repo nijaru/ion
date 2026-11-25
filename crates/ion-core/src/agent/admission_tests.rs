@@ -475,10 +475,10 @@ async fn abandoned_keyed_admission_still_commits_and_retry_does_not_restart_it()
     let (lock, changed) = &*gate;
     *lock.lock().unwrap() = true;
     changed.notify_one();
-    let reader = session.reader().unwrap();
+    let history = session.history();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            if reader
+            if history
                 .request_receipt(&request().key)
                 .await
                 .unwrap()
@@ -513,7 +513,6 @@ async fn abandoned_keyed_admission_still_commits_and_retry_does_not_restart_it()
             .count(),
         1
     );
-    drop(reader);
     drop(session);
     std::fs::remove_dir_all(root).unwrap();
 }

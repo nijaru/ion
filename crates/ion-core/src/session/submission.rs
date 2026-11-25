@@ -70,7 +70,56 @@ pub(crate) enum TurnAdmission {
     Existing(RequestReceipt),
 }
 
+/// A read-only handle to committed Session facts. It does not own the writer
+/// or keep its lease alive, and remains usable after the writer is closed.
+#[derive(Clone, Debug)]
+pub struct SessionHistory {
+    path: std::path::PathBuf,
+    session: uuid::Uuid,
+    provider_session: uuid::Uuid,
+}
+
+impl SessionHistory {
+    /// Read the committed receipt, including any terminal outcome. Unlike a
+    /// live admission preflight, this consults only the on-disk snapshot.
+    pub async fn request_receipt(
+        &self,
+        key: &RequestKey,
+    ) -> Result<Option<RequestReceipt>, SessionError> {
+        let history = self.clone();
+        let key = key.clone();
+        // Abandoning this wait can leave a short read running, but no write or
+        // application work is retained and no writer lease is held.
+        tokio::task::spawn_blocking(move || {
+            let path = super::store::database_path(&history.path)?;
+            let connection =
+                Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            super::store::configure_connection(&connection)?;
+            let snapshot = connection.unchecked_transaction()?;
+            let header = super::store::read_header(&snapshot)?;
+            if header.id != history.session
+                || header.provider_session_id != history.provider_session
+            {
+                return Err(SessionError::InvalidHistory);
+            }
+            request_receipt(&snapshot, history.session, &key, None)
+        })
+        .await
+        .map_err(|error| {
+            SessionError::Storage(format!("read committed request receipt: {error}"))
+        })?
+    }
+}
+
 impl Session {
+    pub fn history(&self) -> SessionHistory {
+        SessionHistory {
+            path: self.path().to_owned(),
+            session: self.id(),
+            provider_session: self.provider_session_id(),
+        }
+    }
+
     /// Inspect acceptance without repairing history, requiring an idle Session,
     /// or reconstructing execution services. No pending queue is promised.
     pub fn request_receipt(

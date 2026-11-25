@@ -99,9 +99,10 @@ pub use session::{
     ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter, AuthorityScope, ContextPoint,
     ContextPosition, ForkPoint, ModelContextSnapshot, ModelUsagePurpose, PreparedNavigation,
     RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt, Session,
-    SessionEntry, SessionError, SessionInputPreview, SessionIo, SessionMetadata, SessionReader,
-    SessionRetirement, SessionRetirements, SessionStatus, SessionView, StoredToolActivity,
-    SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
+    SessionEntry, SessionError, SessionHistory, SessionInputPreview, SessionIo, SessionMetadata,
+    SessionReader, SessionRetirement, SessionRetirements, SessionStatus, SessionView,
+    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
+    UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};

@@ -390,9 +390,7 @@ pub(super) fn handle_builtin(
                 let agent = runtime.agent().clone();
                 ui.session_io.start(runtime.session(), async move {
                     Ok(super::session_io::ReadOutput::Picker(Box::new(
-                        reader
-                            .map_view(move |view| Picker::reasoning_for(&agent, view.reasoning))
-                            .await??,
+                        Picker::reasoning_for(&agent, reader.status().await?.reasoning)?,
                     )))
                 })?;
             } else {
@@ -546,13 +544,10 @@ pub(super) fn handle_builtin(
             if args.is_empty() {
                 let reader = runtime.session().reader()?;
                 ui.session_io.start(runtime.session(), async move {
-                    Ok(reader
-                        .map_view(|view| {
-                            super::session_io::ReadOutput::Notice(
-                                view.name.unwrap_or_else(|| "Session has no name".into()),
-                            )
-                        })
-                        .await?)
+                    let name = reader.status().await?.name;
+                    Ok(super::session_io::ReadOutput::Notice(
+                        name.unwrap_or_else(|| "Session has no name".into()),
+                    ))
                 })?;
             } else {
                 super::session_io::start_binding(

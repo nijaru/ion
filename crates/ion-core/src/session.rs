@@ -81,7 +81,7 @@ use store::{
     read_header,
 };
 pub(crate) use submission::TurnAdmission;
-pub use submission::{RequestKey, RequestReceipt, SubmissionRequest};
+pub use submission::{RequestKey, RequestReceipt, SessionHistory, SubmissionRequest};
 
 fn completed_termination() -> ResponseTermination {
     ResponseTermination::Completed

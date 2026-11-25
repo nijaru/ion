@@ -76,7 +76,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         })();
         async move {
             let (reader, mut plan) = prepared?;
-            plan.anchor = reader.view().await?.context_position().head_entry;
+            plan.anchor = reader.context_position().await?.head_entry;
             Ok(plan)
         }
     }
