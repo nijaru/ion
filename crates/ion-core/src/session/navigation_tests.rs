@@ -163,6 +163,73 @@ fn status_tracks_renaming_reasoning_selection_and_reopen() {
 }
 
 #[test]
+fn terminal_snapshot_streams_selected_facts_but_keeps_global_recall_and_usage() {
+    use crate::{TranscriptItem, TranscriptProjection};
+
+    let (root, path, session) = fixture();
+    let verify = |session: &Session, prompts: &[&str], selection| {
+        let snapshot = session.presentation().unwrap();
+        let view = session.view().unwrap();
+        assert_eq!(
+            snapshot.transcript,
+            TranscriptProjection::from_session(&view)
+        );
+        assert_eq!(snapshot.id, view.id);
+        assert_eq!(snapshot.selection, selection);
+        assert_eq!(snapshot.head_entry, view.context_position().head_entry);
+        assert_eq!(snapshot.revision, view.entries.len() as u64);
+        assert_eq!(snapshot.name.as_deref(), Some("branches"));
+        assert_eq!(snapshot.reasoning, view.reasoning);
+        assert_eq!(snapshot.prompts, prompts);
+        assert_eq!(snapshot.usage, view.usage().total());
+        snapshot
+    };
+
+    session.set_name(Some("branches")).unwrap();
+    finish(&session, "base", "root reply");
+    let base = session.entry_count().unwrap();
+    finish(&session, "inactive prompt", "inactive reply");
+    let selection = select(&session, base).revision;
+    let admission = session
+        .admit_user_shell("printf selected".into(), true)
+        .unwrap();
+    let pending = verify(&session, &["base", "inactive prompt"], selection);
+    assert!(pending.unfinished);
+    assert!(
+        matches!(pending.transcript.items.last(), Some(TranscriptItem::UserShell(shell))
+        if shell.source.entry == admission && shell.outcome.is_none())
+    );
+    session
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(serde_json::json!({"stdout": "selected"})),
+        )
+        .unwrap();
+    finish(&session, "selected prompt", "selected reply");
+    let prompts = ["base", "inactive prompt", "selected prompt"];
+    let selected = verify(&session, &prompts, selection);
+    assert!(!selected.unfinished);
+    assert_eq!(selected.usage.observations, 3);
+    assert_eq!(selected.transcript.items.len(), 5);
+    assert!(
+        matches!(&selected.transcript.items[2], TranscriptItem::UserShell(shell)
+        if shell.source.entry == admission && shell.outcome.is_some())
+    );
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    verify(&reopened, &prompts, selection);
+    let cleared = select(&reopened, 0).revision;
+    assert!(
+        verify(&reopened, &prompts, cleared)
+            .transcript
+            .items
+            .is_empty()
+    );
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
     let (root, path, session) = fixture();
     let key = RequestKey::new("navigation".into(), "original".into()).unwrap();

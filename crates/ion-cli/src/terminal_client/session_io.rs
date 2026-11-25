@@ -3,7 +3,9 @@ use std::{future::Future, path::PathBuf, pin::Pin};
 
 use anyhow::{Context, Result};
 use ion_app::{BindingChange, BindingFinished, BindingOperationId, BindingResult, SessionControl};
-use ion_core::{Session, SessionView};
+#[cfg(test)]
+use ion_core::SessionView;
+use ion_core::{Session, SessionPresentation};
 
 use super::{EditorDraft, Frontend, conversation};
 
@@ -60,6 +62,25 @@ pub(super) struct History {
 }
 
 impl History {
+    fn committed(snapshot: SessionPresentation) -> Self {
+        Self {
+            projection: conversation::Prepared::committed(
+                snapshot.transcript,
+                snapshot.id,
+                snapshot.selection,
+                snapshot.head_entry,
+            ),
+            prompts: snapshot.prompts,
+            prompt_history_through: snapshot.revision,
+            label: label(snapshot.id, snapshot.name),
+            reasoning: snapshot.reasoning,
+            context: None,
+            usage_totals: snapshot.usage,
+            unfinished: snapshot.unfinished,
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn prepare(view: SessionView) -> Self {
         let projection = conversation::Prepared::new(&view);
         let usage_totals = view.usage().total();
@@ -80,10 +101,7 @@ impl History {
                 })
             })
             .collect();
-        let label = view
-            .name
-            .filter(|name| !name.is_empty())
-            .unwrap_or_else(|| format!("Session {}", &view.id.to_string()[..8]));
+        let label = label(view.id, view.name);
         let unfinished = view.unfinished_turn.is_some() || view.unfinished_user_shell.is_some();
         Self {
             projection,
@@ -96,6 +114,11 @@ impl History {
             unfinished,
         }
     }
+}
+
+fn label(id: uuid::Uuid, name: Option<String>) -> String {
+    name.filter(|name| !name.is_empty())
+        .unwrap_or_else(|| format!("Session {}", &id.to_string()[..8]))
 }
 
 struct Read {
@@ -246,10 +269,10 @@ impl SessionIo {
         self.start(session, async move {
             Ok(ReadOutput::History(
                 io.run(move |session| {
-                    let view = session.view()?;
-                    let revision = view.entries.len() as u64;
+                    let snapshot = session.presentation()?;
+                    let revision = snapshot.revision;
                     let context = agent.context_report(session, &instructions);
-                    let mut history = History::prepare(view);
+                    let mut history = History::committed(snapshot);
                     // A concurrent append can separate these read-only cuts. Never
                     // attach another revision's estimate to the displayed history.
                     if !context
@@ -707,7 +730,10 @@ pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut R
 }
 
 pub(super) async fn final_history(session: &std::sync::Arc<Session>) -> Result<History> {
-    Ok(session.reader()?.map_view(History::prepare).await?)
+    Ok(session
+        .reader()?
+        .map_presentation(History::committed)
+        .await?)
 }
 
 impl Frontend {

@@ -5,6 +5,7 @@ use ion_ai::{ModelRef, Usage};
 use serde::Serialize;
 
 use crate::{SessionEntry, SessionView};
+use ion_ai::ModelExecution;
 
 /// A known subtotal, not an estimate for observations with missing measurements.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -41,6 +42,12 @@ pub struct UsageTotals {
 }
 
 impl UsageTotals {
+    pub(crate) fn observe(&mut self, entry: &SessionEntry) {
+        if let Some((_, usage, _)) = observation(entry) {
+            self.add(usage);
+        }
+    }
+
     fn add(&mut self, usage: Usage) {
         self.observations += 1;
         self.input_tokens.add(usage.input_tokens);
@@ -120,26 +127,35 @@ impl SessionView {
     }
 }
 
+type Subtotal = fn(&mut SessionUsage) -> &mut UsageTotals;
+
+fn observation(entry: &SessionEntry) -> Option<(&ModelExecution, Usage, Subtotal)> {
+    let (execution, usage, subtotal): (_, _, Subtotal) = match entry {
+        SessionEntry::Assistant {
+            execution, usage, ..
+        } => (execution, usage, |total| &mut total.assistant),
+        SessionEntry::Compacted {
+            execution, usage, ..
+        } => (execution, usage, |total| &mut total.compaction),
+        SessionEntry::CacheWarm {
+            execution, usage, ..
+        } => (execution, usage, |total| &mut total.cache_warm),
+        SessionEntry::UncommittedUsage {
+            execution, usage, ..
+        } => (execution, usage, |total| &mut total.uncommitted),
+        _ => return None,
+    };
+    Some((execution, *usage, subtotal))
+}
+
 fn collect(entries: &[SessionEntry]) -> SessionUsage {
     let mut result = SessionUsage::default();
     let mut models = BTreeMap::new();
     for entry in entries {
-        let (execution, usage, kind) = match entry {
-            SessionEntry::UncommittedUsage {
-                execution, usage, ..
-            } => (execution, usage, &mut result.uncommitted),
-            SessionEntry::Assistant {
-                execution, usage, ..
-            } => (execution, usage, &mut result.assistant),
-            SessionEntry::Compacted {
-                execution, usage, ..
-            } => (execution, usage, &mut result.compaction),
-            SessionEntry::CacheWarm {
-                execution, usage, ..
-            } => (execution, usage, &mut result.cache_warm),
-            _ => continue,
+        let Some((execution, usage, subtotal)) = observation(entry) else {
+            continue;
         };
-        kind.add(*usage);
+        subtotal(&mut result).add(usage);
         let route = &execution.route;
         let key = (
             route.logical.provider.as_str(),
@@ -151,7 +167,7 @@ fn collect(entries: &[SessionEntry]) -> SessionUsage {
         models
             .entry(key)
             .or_insert_with(UsageTotals::default)
-            .add(*usage);
+            .add(usage);
     }
     result.models = models
         .into_iter()

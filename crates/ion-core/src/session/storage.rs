@@ -164,6 +164,15 @@ impl SessionReader {
         self.run(move |session| Ok(project(session.view()?))).await
     }
 
+    /// Project terminal history in a retained read, without a full SessionView.
+    pub async fn map_presentation<T: Send + 'static>(
+        &self,
+        project: impl FnOnce(super::SessionPresentation) -> T + Send + 'static,
+    ) -> Result<T, SessionError> {
+        self.run(move |session| Ok(project(session.presentation()?)))
+            .await
+    }
+
     pub async fn status(&self) -> Result<SessionStatus, SessionError> {
         self.run(Session::status).await
     }

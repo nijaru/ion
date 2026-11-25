@@ -100,9 +100,9 @@ pub use session::{
     ContextPosition, ForkPoint, ModelContextSnapshot, ModelUsagePurpose, PreparedNavigation,
     RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt, Session,
     SessionEntry, SessionError, SessionHistory, SessionInputPreview, SessionIo, SessionMetadata,
-    SessionReader, SessionRetirement, SessionRetirements, SessionStatus, SessionView,
-    StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary, UnobservedUserShell,
-    UserShellOutcome,
+    SessionPresentation, SessionReader, SessionRetirement, SessionRetirements, SessionStatus,
+    SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
+    UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};

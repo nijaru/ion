@@ -6,6 +6,9 @@ pub(super) struct ContextIndex {
     nodes: Vec<Node>,
     contexts: Vec<ContextRefs>,
     head: u64,
+    pub(super) selection: u64,
+    pub(super) prompts: Vec<u64>,
+    pub(super) usage: crate::UsageTotals,
     pending: usize,
     shell: bool,
     admitted: BTreeMap<uuid::Uuid, crate::DelegationSite>,
@@ -14,7 +17,9 @@ pub(super) struct ContextIndex {
 
 struct Node {
     parent: u64,
+    transcript_parent: u64,
     context: usize,
+    transcript_fact: bool,
     projection: ProjectionKind,
     selectable: bool,
     settled: bool,
@@ -60,6 +65,29 @@ impl ContextIndex {
         while head != 0 {
             path.push(head);
             head = self.nodes[(head - 1) as usize].parent;
+        }
+        path.reverse();
+        path
+    }
+
+    fn transcript_head(&self, head: u64) -> u64 {
+        if head == 0 {
+            return 0;
+        }
+        let node = &self.nodes[(head - 1) as usize];
+        if node.transcript_fact {
+            head
+        } else {
+            node.transcript_parent
+        }
+    }
+
+    pub(super) fn transcript_path(&self) -> Vec<u64> {
+        let mut head = self.transcript_head(self.head);
+        let mut path = Vec::new();
+        while head != 0 {
+            path.push(head);
+            head = self.nodes[(head - 1) as usize].transcript_parent;
         }
         path.reverse();
         path
@@ -210,8 +238,27 @@ impl ContextIndex {
             SessionEntry::ModelContextChanged { .. } => ProjectionKind::ModelContext,
             _ => ProjectionKind::Other,
         };
+        let transcript_fact = matches!(
+            entry,
+            SessionEntry::TurnStarted { .. }
+                | SessionEntry::Steering { .. }
+                | SessionEntry::Completion { .. }
+                | SessionEntry::Assistant { .. }
+                | SessionEntry::ChildToolAdmitted { .. }
+                | SessionEntry::ChildToolResult { .. }
+                | SessionEntry::ToolResult { .. }
+                | SessionEntry::UserShellAdmitted { .. }
+                | SessionEntry::UserShellSettled { .. }
+                | SessionEntry::TurnEnded { .. }
+        );
+        if super::presentation::prompt(entry).is_some() {
+            self.prompts.push(coordinate);
+        }
+        self.usage.observe(entry);
         self.nodes.push(Node {
             parent,
+            transcript_parent: self.transcript_head(parent),
+            transcript_fact,
             context,
             projection,
             selectable: selection.is_none()
@@ -221,6 +268,7 @@ impl ContextIndex {
             settled,
         });
         if let Some(head) = selection {
+            self.selection = coordinate;
             self.head = head;
         } else if detached.is_none() {
             self.head = coordinate;

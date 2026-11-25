@@ -45,6 +45,8 @@ mod delegation_resume_tests;
 #[cfg(test)]
 mod delegation_tests;
 pub(crate) mod history;
+mod presentation;
+pub use presentation::SessionPresentation;
 mod projection;
 mod records;
 mod recovery;

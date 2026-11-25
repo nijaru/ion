@@ -3,12 +3,11 @@ use std::{collections::HashMap, path::PathBuf};
 
 use ion_app::OperationId;
 use ion_core::{
-    AgentEvent, LiveTranscript, SessionEntry, SessionView, TranscriptItem, TranscriptProjection,
-    TranscriptSource,
+    AgentEvent, LiveTranscript, TranscriptItem, TranscriptProjection, TranscriptSource,
 };
 
 #[cfg(test)]
-use ion_core::Session;
+use ion_core::{Session, SessionEntry, SessionView};
 
 pub(super) struct Prepared {
     canonical: TranscriptProjection,
@@ -20,8 +19,25 @@ pub(super) struct Prepared {
 }
 
 impl Prepared {
+    #[cfg(test)]
     pub(super) fn new(view: &SessionView) -> Self {
-        let canonical = TranscriptProjection::from_session(view);
+        Self::committed(
+            TranscriptProjection::from_session(view),
+            view.id,
+            view.entries
+                .iter()
+                .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
+                .map_or(0, |index| index as u64 + 1),
+            view.context_position().head_entry,
+        )
+    }
+
+    pub(super) fn committed(
+        canonical: TranscriptProjection,
+        session: uuid::Uuid,
+        selection: u64,
+        head_entry: u64,
+    ) -> Self {
         let positions = canonical
             .items
             .iter()
@@ -43,13 +59,9 @@ impl Prepared {
         Self {
             canonical,
             positions,
-            session: view.id,
-            selection: view
-                .entries
-                .iter()
-                .rposition(|entry| matches!(entry, SessionEntry::ContextSelected { .. }))
-                .map_or(0, |index| index as u64 + 1),
-            head_entry: view.context_position().head_entry,
+            session,
+            selection,
+            head_entry,
             tail,
         }
     }

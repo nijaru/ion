@@ -179,14 +179,25 @@ impl TranscriptProjection {
     }
 
     pub fn from_session(view: &SessionView) -> Self {
+        Self::from_selected(view.context_path.iter().copied().map(|coordinate| {
+            Ok::<_, std::convert::Infallible>((
+                coordinate,
+                &view.entries[(coordinate - 1) as usize],
+            ))
+        }))
+        .unwrap()
+    }
+
+    /// Consume selected transcript facts in ancestry order. Callers that read
+    /// from SQLite can release each journal record after projecting it.
+    pub(crate) fn from_selected<E>(
+        entries: impl IntoIterator<Item = Result<(u64, impl std::borrow::Borrow<SessionEntry>), E>>,
+    ) -> Result<Self, E> {
         let mut builder = TranscriptBuilder::default();
         let mut shells = HashMap::new();
-        let selected: std::collections::BTreeSet<_> = view.context_path.iter().copied().collect();
-        for (entry_index, entry) in view.entries.iter().enumerate() {
-            if !selected.contains(&(entry_index as u64 + 1)) {
-                continue;
-            }
-            let entry_coordinate = entry_index as u64 + 1;
+        for entry in entries {
+            let (entry_coordinate, entry) = entry?;
+            let entry = entry.borrow();
             let source = TranscriptSource {
                 entry: entry_coordinate,
                 part: 0,
@@ -305,7 +316,7 @@ impl TranscriptProjection {
                 }
             }
         }
-        builder.projection
+        Ok(builder.projection)
     }
 }
 
