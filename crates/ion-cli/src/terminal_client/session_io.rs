@@ -53,7 +53,6 @@ pub(super) enum ReadOutput {
 pub(super) struct History {
     projection: conversation::Prepared,
     prompts: Vec<String>,
-    prompt_history_through: u64,
     label: String,
     reasoning: ion_ai::Reasoning,
     context: Option<Result<ion_core::ContextReport, ion_core::AgentError>>,
@@ -71,7 +70,6 @@ impl History {
                 snapshot.head_entry,
             ),
             prompts: snapshot.prompts,
-            prompt_history_through: snapshot.revision,
             label: label(snapshot.id, snapshot.name),
             reasoning: snapshot.reasoning,
             context: None,
@@ -106,7 +104,6 @@ impl History {
         Self {
             projection,
             prompts,
-            prompt_history_through: view.entries.len() as u64,
             label,
             reasoning: view.reasoning,
             context: None,
@@ -741,7 +738,6 @@ impl Frontend {
         let History {
             projection,
             prompts,
-            prompt_history_through,
             label,
             reasoning,
             context,
@@ -769,7 +765,6 @@ impl Frontend {
             details.invalidate();
         }
         self.editor.replace_prompt_history(prompts, same_session);
-        self.editor.prompt_history_through = prompt_history_through;
         self.session_label = label;
         self.reasoning_preference = Some(reasoning);
         self.context_estimate = context;

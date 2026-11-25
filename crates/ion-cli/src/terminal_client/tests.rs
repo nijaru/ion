@@ -789,7 +789,7 @@ fn oversized_history_preserves_the_draft_and_can_be_traversed_without_loading_it
 fn returned_draft_ends_history_browsing_without_losing_unsent_input() {
     let mut ui = Frontend {
         editor: Editor {
-            prompt_history: vec!["older".into()],
+            prompt_history: vec!["older".into()].into(),
             draft: "unsent".into(),
             cursor: 2,
             ..Editor::default()

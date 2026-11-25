@@ -1,6 +1,6 @@
 //! Literal editor state, local recovery, completion and visual navigation.
 //! Host input custody starts only when a draft is handed off.
-use std::collections::VecDeque;
+use std::{collections::VecDeque, sync::Arc};
 
 use super::editor_recovery::EditorRecovery;
 use crate::{terminal_completion::Completion, terminal_input::EditorVisualMap};
@@ -16,8 +16,7 @@ pub(super) struct Editor {
     pub(super) attachments: Vec<AttachmentSource>,
     pub(super) completion: Completion,
     pub(super) recovered: VecDeque<RecoveredDraft>,
-    pub(super) prompt_history: Vec<String>,
-    pub(super) prompt_history_through: u64,
+    pub(super) prompt_history: Arc<[String]>,
     pub(super) browsing: Option<PromptBrowse>,
     pub(super) recovery: EditorRecovery,
     pub(super) editor_width: Option<usize>,
@@ -40,7 +39,7 @@ impl std::fmt::Display for Limit {
 
 pub(super) struct PromptBrowse {
     pub(super) index: usize,
-    pub(super) end: usize,
+    pub(super) window: Arc<[String]>,
     pub(super) draft: String,
     pub(super) cursor: usize,
 }

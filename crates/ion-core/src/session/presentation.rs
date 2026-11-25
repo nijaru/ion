@@ -1,5 +1,5 @@
 //! Display snapshot. Unlike SessionView, this does not hydrate model messages or
-//! decode inactive branches (except their user prompts for editor recall).
+//! decode inactive branches. Editor recall is indexed separately at commit.
 use super::*;
 use crate::{TranscriptItem, TranscriptProjection, TranscriptSource, UsageTotals};
 
@@ -29,7 +29,7 @@ struct DisplayBundle {
 }
 
 /// The selected transcript and session-wide display metadata at one committed cut.
-/// Prompts and usage deliberately include inactive branches.
+/// Recent editor prompts and cumulative usage deliberately include inactive branches.
 pub struct SessionPresentation {
     pub id: uuid::Uuid,
     pub revision: u64,
@@ -41,20 +41,6 @@ pub struct SessionPresentation {
     pub transcript: TranscriptProjection,
     pub prompts: Vec<String>,
     pub usage: UsageTotals,
-}
-
-pub(super) fn prompt(entry: &SessionEntry) -> Option<&str> {
-    let input = match entry {
-        SessionEntry::TurnStarted {
-            input, completion, ..
-        } if completion.is_empty() => input,
-        SessionEntry::Steering { input, .. } => input,
-        _ => return None,
-    };
-    input.content.iter().find_map(|part| match part {
-        Content::Text(text) => Some(text.as_str()),
-        _ => None,
-    })
 }
 
 impl Session {
@@ -197,6 +183,11 @@ impl Session {
         }))
     }
 
+    /// Bounded editable text observed from committed inputs across all branches.
+    pub fn recent_prompts(&self) -> Result<Vec<String>, SessionError> {
+        Ok(self.lock_store()?.context_index.prompt_recall.snapshot())
+    }
+
     pub fn presentation(&self) -> Result<SessionPresentation, SessionError> {
         let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
@@ -210,7 +201,7 @@ impl Session {
             unfinished,
             usage,
             selected,
-            recall,
+            prompts,
         ) = {
             let store = self.lock_store()?;
             let snapshot = connection.unchecked_transaction()?;
@@ -227,7 +218,7 @@ impl Session {
                 store.state.active.is_some() || store.state.pending_shell.is_some(),
                 index.usage,
                 index.transcript_path(),
-                index.prompts.clone(),
+                index.prompt_recall.snapshot(),
             )
         };
         let transcript = TranscriptProjection::from_selected(
@@ -235,14 +226,6 @@ impl Session {
                 .into_iter()
                 .map(|entry| Ok::<_, SessionError>((entry, read_entry(&snapshot, entry)?))),
         )?;
-        let prompts = recall
-            .into_iter()
-            .map(|entry| {
-                prompt(&read_entry(&snapshot, entry)?)
-                    .map(str::to_owned)
-                    .ok_or(SessionError::InvalidHistory)
-            })
-            .collect::<Result<_, _>>()?;
         Ok(SessionPresentation {
             id: header.id,
             revision,

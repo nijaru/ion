@@ -97,12 +97,12 @@ pub use invocation::{
 pub use request::{ContextCapacity, ContextEstimateBasis, ContextReport};
 pub use session::{
     ArtifactPage, ArtifactRef, ArtifactSink, ArtifactWriter, AuthorityScope, ContextPoint,
-    ContextPosition, ForkPoint, ModelContextSnapshot, ModelUsagePurpose, PreparedNavigation,
-    RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt, Session,
-    SessionEntry, SessionError, SessionHistory, SessionInputPreview, SessionIo, SessionMetadata,
-    SessionPresentation, SessionReader, SessionRetirement, SessionRetirements, SessionStatus,
-    SessionView, StoredToolActivity, SubmissionRequest, TranscriptCursor, TranscriptPage,
-    TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
+    ContextPosition, ForkPoint, MAX_RECALL_PROMPT_BYTES, ModelContextSnapshot, ModelUsagePurpose,
+    PreparedNavigation, RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt,
+    Session, SessionEntry, SessionError, SessionHistory, SessionInputPreview, SessionIo,
+    SessionMetadata, SessionPresentation, SessionReader, SessionRetirement, SessionRetirements,
+    SessionStatus, SessionView, StoredToolActivity, SubmissionRequest, TranscriptCursor,
+    TranscriptPage, TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};

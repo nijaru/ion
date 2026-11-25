@@ -686,7 +686,7 @@ fn prompt_history_collapses_adjacent_duplicates_without_trimming() {
 fn history_refresh_preserves_browsed_draft_and_cursor() {
     let mut ui = Frontend {
         editor: Editor {
-            prompt_history: vec!["older".into()],
+            prompt_history: vec!["older".into()].into(),
             draft: "unsent 🦀 draft".into(),
             cursor: "unsent ".len(),
             ..Editor::default()
@@ -695,13 +695,16 @@ fn history_refresh_preserves_browsed_draft_and_cursor() {
     };
     ui.editor.history_previous();
     assert_eq!(ui.editor.draft, "older");
-    // Completion/model refresh updates history, not ownership of the editor.
+    // A sliding recall window can evict the prompt being browsed. Finish
+    // navigating the original window before exposing the new one.
     ui.editor
-        .replace_prompt_history(vec!["older".into(), "newly committed".into()], true);
+        .replace_prompt_history(vec!["newly committed".into()], true);
+    assert_eq!(ui.editor.draft, "older");
     ui.editor.history_next();
     assert_eq!(ui.editor.draft, "unsent 🦀 draft");
     assert_eq!(ui.editor.cursor, "unsent ".len());
     ui.editor.history_previous();
+    assert_eq!(ui.editor.draft, "newly committed");
     ui.editor
         .replace_prompt_history(vec!["different session".into()], false);
     assert_eq!(ui.editor.draft, "unsent 🦀 draft");
@@ -993,7 +996,7 @@ async fn returned_input_does_not_move_a_pending_paste_out_of_browsed_history() {
     let (release, held) = tokio::sync::oneshot::channel();
     let mut ui = Frontend {
         editor: Editor {
-            prompt_history: vec!["history target".into()],
+            prompt_history: vec!["history target".into()].into(),
             ..Editor::default()
         },
         clipboard_job: Some(ClipboardJob {
@@ -1046,7 +1049,7 @@ fn empty_recovery_preserves_browsed_prompt_and_unsent_draft() {
     let mut ui = Frontend::default();
     ui.insert("unsent 雪");
     ui.editor.cursor = 2;
-    ui.editor.prompt_history = vec!["prior prompt".into()];
+    ui.editor.prompt_history = vec!["prior prompt".into()].into();
     ui.editor.history_previous();
     let before = (ui.editor.draft.clone(), ui.editor.cursor);
     ui.status = "Existing feedback".into();
@@ -1065,7 +1068,7 @@ fn returned_command_text_preserves_the_unsent_draft_under_browsed_history() {
     let mut ui = Frontend::default();
     ui.insert("new unsent 雪");
     ui.editor.cursor = "new ".len();
-    ui.editor.prompt_history = vec!["history target".into()];
+    ui.editor.prompt_history = vec!["history target".into()].into();
     ui.editor.history_previous();
     ui.return_command_source(EditorDraft::at_end("/session".into()));
     assert_eq!(
@@ -1403,7 +1406,7 @@ fn command_completion_preserves_arguments_and_requires_visible_selection() {
 fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
     let mut ui = Frontend {
         editor: Editor {
-            prompt_history: vec!["first".into(), "second\nline".into()],
+            prompt_history: vec!["first".into(), "second\nline".into()].into(),
             ..Editor::default()
         },
         ..Frontend::default()

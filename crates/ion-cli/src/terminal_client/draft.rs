@@ -41,24 +41,12 @@ impl Editor {
         // Like Pi, collapse consecutive duplicates in arrow history. Keep
         // Ion's exact text: whitespace can be significant in a prompt.
         prompts.dedup();
-        if self.browsing.as_ref().is_some_and(|browse| {
-            !same_session || !prompts.starts_with(&self.prompt_history[..browse.end])
-        }) {
+        // A browse owns its original bounded window. New commits can evict
+        // old prompts without moving the selection or the displaced draft.
+        if !same_session {
             self.restore_browsed_draft();
         }
-        self.prompt_history = prompts;
-    }
-
-    // A settled live projection can supply committed inputs before the next
-    // full snapshot. Do not change the bounds of an in-progress browse.
-    pub(super) fn append_prompt_history(&mut self, entry: u64, text: &str) {
-        if entry <= self.prompt_history_through {
-            return;
-        }
-        self.prompt_history_through = entry;
-        if recallable(text) && self.prompt_history.last().is_none_or(|last| last != text) {
-            self.prompt_history.push(text.to_owned());
-        }
+        self.prompt_history = prompts.into();
     }
 
     /// Editing or submitting a recalled prompt replaces the visible draft,
@@ -91,12 +79,14 @@ impl Editor {
     pub(super) fn history_previous(&mut self) {
         // Arrow recall loads only historical text. An attachment belongs
         // to the current draft, not to a different prompt reached by Up.
-        if !self.attachments.is_empty() || self.prompt_history.is_empty() {
+        if !self.attachments.is_empty()
+            || (self.browsing.is_none() && self.prompt_history.is_empty())
+        {
             return;
         }
         let browse = self.browsing.get_or_insert_with(|| PromptBrowse {
             index: self.prompt_history.len(),
-            end: self.prompt_history.len(),
+            window: self.prompt_history.clone(),
             draft: self.draft.clone(),
             cursor: self.cursor,
         });
@@ -104,7 +94,8 @@ impl Editor {
             return;
         };
         browse.index = index;
-        self.recall_history_entry(index);
+        let text = browse.window[index].clone();
+        self.set_editor_baseline(EditorDraft::at_end(text));
     }
 
     pub(super) fn history_next(&mut self) {
@@ -114,18 +105,13 @@ impl Editor {
         let Some(browse) = &mut self.browsing else {
             return;
         };
-        if browse.index + 1 < browse.end {
+        if browse.index + 1 < browse.window.len() {
             browse.index += 1;
-            let index = browse.index;
-            self.recall_history_entry(index);
+            let text = browse.window[browse.index].clone();
+            self.set_editor_baseline(EditorDraft::at_end(text));
         } else {
             self.restore_browsed_draft();
         }
-    }
-
-    fn recall_history_entry(&mut self, index: usize) {
-        let draft = self.prompt_history[index].clone();
-        self.set_editor_baseline(EditorDraft::at_end(draft));
     }
 
     /// Direct-command metadata owns the vacated text slot, never attachments.

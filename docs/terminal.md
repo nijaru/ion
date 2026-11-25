@@ -16,6 +16,8 @@ Use `/file PATH` to attach a UTF-8 text file or image to the next input. An unqu
 
 Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use Shift-Tab to cycle the current route's supported levels, or `/reasoning` to choose one directly. The cached `context ~input/window` display is a planning estimate, not recorded token usage or an exact tokenizer count; see [context and compaction](sessions.md#context-and-compaction).
 
+Up and Down at the edges of the composer recall recent submitted prompts from the current Session, including prompts on other branches. Recall keeps up to 96 recent editable prompts within a 256 KiB text budget. It recalls the prompt text, not its attachments. Alt-T can still show the older transcript.
+
 ## Steering and queued input
 
 Enter submits normally while idle and steers the current model Turn while it is running. During a shell command or compaction it queues a follow-up instead. Alt-Enter queues a follow-up while work is pending, but behaves like Enter while idle, including after a stopped or failed Turn and for local commands.

@@ -7,7 +7,7 @@ pub(super) struct ContextIndex {
     contexts: Vec<ContextRefs>,
     head: u64,
     pub(super) selection: u64,
-    pub(super) prompts: Vec<u64>,
+    pub(super) prompt_recall: super::prompt_recall::PromptRecall,
     pub(super) usage: crate::UsageTotals,
     display_dependents: BTreeMap<u64, Vec<u64>>,
     pending: usize,
@@ -311,9 +311,7 @@ impl ContextIndex {
                 | SessionEntry::UserShellSettled { .. }
                 | SessionEntry::TurnEnded { .. }
         );
-        if super::presentation::prompt(entry).is_some() {
-            self.prompts.push(coordinate);
-        }
+        self.prompt_recall.observe(entry);
         self.usage.observe(entry);
         self.nodes.push(Node {
             parent,

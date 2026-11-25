@@ -163,6 +163,51 @@ fn status_tracks_renaming_reasoning_selection_and_reopen() {
 }
 
 #[test]
+fn editor_recall_bounds_recent_input_count_and_bytes_across_branches() {
+    let (root, path, session) = fixture();
+    for n in 0..100 {
+        finish(&session, &format!("input {n:03}"), "answer");
+    }
+    // All these inputs become inactive; their text is still useful for recall.
+    select(&session, 0);
+    assert_eq!(
+        session.presentation().unwrap().prompts,
+        (4..100)
+            .map(|n| format!("input {n:03}"))
+            .collect::<Vec<_>>()
+    );
+
+    let wide = ['a', 'b', 'c', 'd'].map(|c| c.to_string().repeat(MAX_RECALL_PROMPT_BYTES));
+    for input in &wide {
+        finish(&session, input, "answer");
+        select(&session, 0);
+    }
+    finish(&session, &"x".repeat(MAX_RECALL_PROMPT_BYTES + 1), "answer");
+    select(&session, 0);
+    finish(&session, " exact latest ", "answer");
+    let snapshot = session.presentation().unwrap();
+    let expected = [wide[1].as_str(), &wide[2], &wide[3], " exact latest "];
+    assert_eq!(snapshot.prompts, expected);
+    assert_eq!(session.recent_prompts().unwrap(), expected);
+    assert_eq!(snapshot.transcript.items.len(), 2);
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert_eq!(reopened.presentation().unwrap().prompts, snapshot.prompts);
+    assert_eq!(
+        reopened
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .filter(|entry| matches!(entry, SessionEntry::TurnStarted { .. }))
+            .count(),
+        106
+    );
+    drop(reopened);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn terminal_snapshot_streams_selected_facts_but_keeps_global_recall_and_usage() {
     use crate::{TranscriptItem, TranscriptProjection};
 

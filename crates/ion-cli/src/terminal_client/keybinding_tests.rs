@@ -7,7 +7,7 @@ fn wrapped_editor_navigation_keeps_history_and_sticky_column_at_visual_boundarie
         editor: Editor {
             draft: "one two three".into(),
             cursor: 4,
-            prompt_history: vec!["older input".into()],
+            prompt_history: vec!["older input".into()].into(),
             ..Editor::default()
         },
         ..Frontend::default()

@@ -72,7 +72,7 @@ use picker::{Picker, PickerItem, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
 pub use setup::{choose_session, setup_model};
 
-pub(crate) const MAX_DRAFT: usize = 64 * 1024;
+pub(crate) const MAX_DRAFT: usize = ion_core::MAX_RECALL_PROMPT_BYTES;
 const RESUME_TURN_LIMIT: usize = 6;
 const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
