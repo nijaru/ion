@@ -204,6 +204,15 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             time.sleep(0.02)
         detail = tmux("capture-pane", "-p", "-t", "ion")
         assert "-observed data" in detail and "+UPDATED_SNAPSHOT" in detail, detail
+        tmux("send-keys", "-t", "ion", "Left")
+        while "Tool 1: read" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"previous committed tool did not open:\n{pane}"
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "Right")
+        while "Tool 2: edit" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"next committed tool did not open:\n{pane}"
+            time.sleep(0.02)
+        assert "Recorded edit diff" in pane
         tmux("send-keys", "-t", "ion", "Escape")
         time.sleep(0.1)
         check_history()

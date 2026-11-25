@@ -454,6 +454,13 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                 }
                             }
                         },
+                        Action::InspectAdjacent(later) => {
+                            if !ui.session_io.command_slot_occupied()
+                                && let Err(error) = evidence::adjacent(&mut ui, runtime.session(), later)
+                            {
+                                ui.status = format!("{error:#}");
+                            }
+                        },
                         Action::SaveOutput => {
                             match output::start(&mut ui, runtime.session()) {
                                 Ok(()) => ui.status = "Saving output…".into(),
@@ -975,6 +982,7 @@ enum Action {
     Recover,
     PasteClipboard,
     CopyDetail,
+    InspectAdjacent(bool),
     SaveOutput,
     Command(CommandInput),
     Pick(PickerValue),
@@ -1434,6 +1442,15 @@ impl Frontend {
                 if self.pickers.active().is_none() {
                     self.status = "Details closed".into();
                 }
+            }
+            Some(action @ (KeyAction::Earlier | KeyAction::Later))
+                if self
+                    .details
+                    .as_ref()
+                    .and_then(evidence::Inspection::position)
+                    .is_some() =>
+            {
+                return Action::InspectAdjacent(action == KeyAction::Later);
             }
             Some(KeyAction::SaveOutput) => return Action::SaveOutput,
             Some(KeyAction::Copy) => {
@@ -1954,6 +1971,11 @@ fn modal_rows(
             width,
             ui.themes.theme(),
         ),
+        evidence::Source::Recorded(tool) => {
+            inspector
+                .view
+                .prepare_recorded(tool, width, ui.themes.theme())
+        }
         evidence::Source::Committed(document) => {
             inspector
                 .view

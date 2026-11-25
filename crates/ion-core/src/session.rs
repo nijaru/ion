@@ -46,7 +46,10 @@ mod delegation_resume_tests;
 mod delegation_tests;
 pub(crate) mod history;
 mod presentation;
-pub use presentation::{PresentationCursor, SessionPresentation, TranscriptCursor, TranscriptPage};
+pub use presentation::{
+    PresentationCursor, SessionPresentation, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget,
+    TranscriptCursor, TranscriptPage,
+};
 mod projection;
 mod prompt_recall;
 pub use prompt_recall::MAX_RECALL_PROMPT_BYTES;

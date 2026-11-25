@@ -526,6 +526,133 @@ fn transcript_pages_attach_results_to_repeated_call_occurrences() {
         })
         .collect::<Vec<_>>();
     assert_eq!(results, ["first result", "second result"]);
+    let second = session
+        .tool_evidence(None, ToolEvidenceTarget::Latest)
+        .unwrap()
+        .unwrap();
+    assert_eq!((second.number.get(), second.total), (2, 2));
+    assert_eq!(
+        second.activity.result.unwrap().value["value"],
+        "second result"
+    );
+    let first = session
+        .tool_evidence(
+            Some(second.cursor),
+            ToolEvidenceTarget::Number(std::num::NonZeroUsize::MIN),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first.activity.result.as_ref().unwrap().value["value"],
+        "first result"
+    );
+    assert_ne!(first.activity.identity, second.activity.identity);
+    select(&session, 0);
+    assert!(
+        session
+            .tool_evidence(Some(second.cursor), ToolEvidenceTarget::Latest)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        session
+            .tool_evidence(None, ToolEvidenceTarget::Latest)
+            .unwrap()
+            .is_none()
+    );
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn focused_tool_read_does_not_decode_sibling_outcomes() {
+    let (root, path, session) = fixture();
+    let (turn, _) = session.begin_turn("tools".into(), model("one")).unwrap();
+    session
+        .record_assistant(
+            turn,
+            Message {
+                role: Role::Assistant,
+                content: ["first", "second"]
+                    .into_iter()
+                    .map(|id| {
+                        Content::ToolCall(ToolCall {
+                            id: id.into(),
+                            name: "read".into(),
+                            arguments: serde_json::json!({}),
+                            raw_arguments: None,
+                        })
+                    })
+                    .collect(),
+                provider_replay: None,
+            },
+            Usage::unknown(),
+            true,
+        )
+        .unwrap();
+    let pending = session
+        .tool_evidence(None, ToolEvidenceTarget::Latest)
+        .unwrap()
+        .unwrap();
+    assert!(pending.activity.result.is_none());
+    for id in ["first", "second"] {
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: id.into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"value":id}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
+            )
+            .unwrap();
+    }
+    let pinned = session
+        .tool_evidence(Some(pending.cursor), ToolEvidenceTarget::Latest)
+        .unwrap()
+        .unwrap();
+    assert!(
+        pinned.activity.result.is_none(),
+        "cursor must not gain later observations"
+    );
+    let first = session
+        .tool_evidence(
+            None,
+            ToolEvidenceTarget::Number(std::num::NonZeroUsize::MIN),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        first.activity.result.as_ref().unwrap().value["value"],
+        "first"
+    );
+    let sibling = session.entry_count().unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=?2",
+            params![
+                br#"{"kind":"unreadable_fixture","data":{}}"#.as_slice(),
+                i64::try_from(sibling).unwrap()
+            ],
+        )
+        .unwrap();
+    let crate::TranscriptActivityIdentity::Tool(first_occurrence) = first.activity.identity else {
+        panic!("top-level tool")
+    };
+    let focused = session
+        .tool_evidence(None, ToolEvidenceTarget::Occurrence(first_occurrence))
+        .unwrap()
+        .unwrap();
+    assert_eq!(focused.activity, first.activity);
+    assert!(
+        session
+            .tool_evidence(None, ToolEvidenceTarget::Latest)
+            .is_err()
+    );
+    drop(connection);
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }

@@ -1,7 +1,11 @@
 //! Display snapshot. Unlike SessionView, this does not hydrate model messages or
 //! decode inactive branches. Editor recall is indexed separately at commit.
 use super::*;
-use crate::{TranscriptItem, TranscriptProjection, TranscriptSource, UsageTotals};
+use crate::{
+    ToolOccurrence, TranscriptActivity, TranscriptActivityIdentity, TranscriptItem,
+    TranscriptProjection, TranscriptSource, UsageTotals,
+};
+use std::num::NonZeroUsize;
 
 const PAGE_RECORDS: usize = 96;
 const PAGE_BYTES: usize = 256 * 1024;
@@ -16,6 +20,28 @@ pub struct TranscriptCursor {
     selection: u64,
     cut: u64,
     root: u64,
+}
+
+/// A stable tool ordering and journal cut for one selected conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolEvidenceCursor {
+    session: uuid::Uuid,
+    selection: u64,
+    cut: u64,
+    head: u64,
+}
+
+pub enum ToolEvidenceTarget {
+    Latest,
+    Number(NonZeroUsize),
+    Occurrence(ToolOccurrence),
+}
+
+pub struct ToolEvidence {
+    pub cursor: ToolEvidenceCursor,
+    pub number: NonZeroUsize,
+    pub total: usize,
+    pub activity: TranscriptActivity,
 }
 
 pub struct TranscriptPage {
@@ -52,6 +78,20 @@ fn read_display_bundle(
         }
     }
     Ok(projection)
+}
+
+fn read_bounded_evidence(
+    snapshot: &Connection,
+    records: Vec<u64>,
+) -> Result<TranscriptProjection, SessionError> {
+    let mut remaining = EVIDENCE_BYTES;
+    let mut size = snapshot.prepare_cached("SELECT length(body) FROM entries WHERE seq=?1")?;
+    for &record in &records {
+        remaining = remaining
+            .checked_sub(encoded_len(&mut size, record)?)
+            .ok_or(SessionError::EntryTooLarge)?;
+    }
+    read_display_bundle(snapshot, records)
 }
 
 /// A committed cut at an idle boundary. No transcript group or unresolved
@@ -154,7 +194,7 @@ impl Session {
                 }
                 if dependents.len() < PAGE_RECORDS {
                     records.push(root);
-                    records.extend_from_slice(dependents);
+                    records.extend(dependents.iter().map(|fact| fact.entry));
                 }
                 available -= count;
                 let parent = index.display_parent(root);
@@ -248,18 +288,81 @@ impl Session {
             (
                 snapshot,
                 std::iter::once(root)
-                    .chain(dependents.iter().copied())
+                    .chain(dependents.iter().map(|fact| fact.entry))
                     .collect::<Vec<_>>(),
             )
         };
-        let mut remaining = EVIDENCE_BYTES;
-        let mut size = snapshot.prepare_cached("SELECT length(body) FROM entries WHERE seq=?1")?;
-        for &record in &records {
-            remaining = remaining
-                .checked_sub(encoded_len(&mut size, record)?)
-                .ok_or(SessionError::EntryTooLarge)?;
-        }
-        Ok(Some(read_display_bundle(&snapshot, records)?))
+        Ok(Some(read_bounded_evidence(&snapshot, records)?))
+    }
+
+    /// Read one top-level tool (including its children), using global numbering
+    /// on the selected branch. Adjacent reads can reuse the same committed cut.
+    pub fn tool_evidence(
+        &self,
+        cursor: Option<ToolEvidenceCursor>,
+        target: ToolEvidenceTarget,
+    ) -> Result<Option<ToolEvidence>, SessionError> {
+        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        let (snapshot, cursor, number, total, occurrence, records) = {
+            let store = self.lock_store()?;
+            let index = &store.context_index;
+            let cursor = cursor.unwrap_or_else(|| ToolEvidenceCursor {
+                session: self.id(),
+                selection: index.selection,
+                cut: store.state.sequence,
+                head: index.tool_head(),
+            });
+            if cursor.session != self.id()
+                || cursor.selection != index.selection
+                || cursor.cut > store.state.sequence
+            {
+                return Ok(None);
+            }
+            let total = index.tool_count(cursor.head);
+            let number = match target {
+                ToolEvidenceTarget::Latest => NonZeroUsize::new(total),
+                ToolEvidenceTarget::Number(number) => Some(number),
+                ToolEvidenceTarget::Occurrence(occurrence) => index
+                    .tool_number(cursor.head, occurrence)
+                    .and_then(NonZeroUsize::new),
+            };
+            let Some(number) = number else {
+                return Ok(None);
+            };
+            let Some(occurrence) = index.tool_at(cursor.head, number.get()) else {
+                return Ok(None);
+            };
+            let mut records = vec![occurrence.assistant_entry];
+            for fact in index
+                .display_bundle(occurrence.assistant_entry, cursor.cut)
+                .iter()
+                .filter(|fact| fact.ordinal == Some(occurrence.ordinal))
+            {
+                if records.len() == EVIDENCE_RECORDS {
+                    return Err(SessionError::EntryTooLarge);
+                }
+                records.push(fact.entry);
+            }
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            (snapshot, cursor, number, total, occurrence, records)
+        };
+        let activity = read_bounded_evidence(&snapshot, records)?
+            .items
+            .into_iter()
+            .flat_map(|item| match item {
+                TranscriptItem::ActivityGroup(group) => group.activities.into_iter(),
+                _ => Vec::new().into_iter(),
+            })
+            .find(|activity| activity.identity == TranscriptActivityIdentity::Tool(occurrence))
+            .ok_or(SessionError::InvalidHistory)?;
+        Ok(Some(ToolEvidence {
+            cursor,
+            number,
+            total,
+            activity,
+        }))
     }
 
     /// Bounded editable text observed from committed inputs across all branches.

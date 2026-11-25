@@ -9,7 +9,8 @@ pub(super) struct ContextIndex {
     pub(super) selection: u64,
     pub(super) prompt_recall: super::prompt_recall::PromptRecall,
     pub(super) usage: crate::UsageTotals,
-    display_dependents: BTreeMap<u64, Vec<u64>>,
+    display_dependents: BTreeMap<u64, Vec<DisplayDependent>>,
+    tool_batches: BTreeMap<u64, ToolBatch>,
     pending: usize,
     shell: bool,
     admitted: BTreeMap<uuid::Uuid, crate::DelegationSite>,
@@ -20,6 +21,7 @@ struct Node {
     parent: u64,
     transcript_parent: u64,
     display_parent: u64,
+    tool_head: u64,
     context: usize,
     transcript_fact: bool,
     transcript_boundary: bool,
@@ -27,6 +29,17 @@ struct Node {
     projection: ProjectionKind,
     selectable: bool,
     settled: bool,
+}
+
+pub(super) struct DisplayDependent {
+    pub(super) entry: u64,
+    pub(super) ordinal: Option<usize>,
+}
+
+struct ToolBatch {
+    previous: u64,
+    first: usize,
+    count: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -109,12 +122,57 @@ impl ContextIndex {
         self.nodes[(entry - 1) as usize].transcript_parent
     }
 
-    pub(super) fn display_bundle(&self, entry: u64, cut: u64) -> &[u64] {
+    pub(super) fn display_bundle(&self, entry: u64, cut: u64) -> &[DisplayDependent] {
         let dependents = self
             .display_dependents
             .get(&entry)
             .map_or(&[][..], Vec::as_slice);
-        &dependents[..dependents.partition_point(|&coordinate| coordinate <= cut)]
+        &dependents[..dependents.partition_point(|fact| fact.entry <= cut)]
+    }
+
+    fn tool_ancestor(&self, entry: u64) -> u64 {
+        if entry == 0 {
+            0
+        } else {
+            self.nodes[(entry - 1) as usize].tool_head
+        }
+    }
+
+    pub(super) fn tool_head(&self) -> u64 {
+        self.tool_ancestor(self.head)
+    }
+
+    pub(super) fn tool_count(&self, head: u64) -> usize {
+        self.tool_batches
+            .get(&head)
+            .map_or(0, |batch| batch.first - 1 + batch.count)
+    }
+
+    pub(super) fn tool_at(&self, mut head: u64, number: usize) -> Option<crate::ToolOccurrence> {
+        while head != 0 && number != 0 {
+            let batch = &self.tool_batches[&head];
+            if let Some(ordinal) = number.checked_sub(batch.first) {
+                return (ordinal < batch.count).then_some(crate::ToolOccurrence {
+                    assistant_entry: head,
+                    ordinal,
+                });
+            }
+            head = batch.previous;
+        }
+        None
+    }
+
+    pub(super) fn tool_number(
+        &self,
+        mut head: u64,
+        occurrence: crate::ToolOccurrence,
+    ) -> Option<usize> {
+        while head > occurrence.assistant_entry {
+            head = self.tool_batches[&head].previous;
+        }
+        let batch = self.tool_batches.get(&head)?;
+        (head == occurrence.assistant_entry && occurrence.ordinal < batch.count)
+            .then(|| batch.first + occurrence.ordinal)
     }
 
     pub(super) fn display_head(&self) -> u64 {
@@ -145,21 +203,29 @@ impl ContextIndex {
         entry: &SessionEntry,
         resolved: Option<crate::ToolOccurrence>,
     ) {
-        let root = match entry {
+        let (root, ordinal) = match entry {
             SessionEntry::ToolResult { .. } => {
-                resolved.expect("validated tool result").assistant_entry
+                let tool = resolved.expect("validated tool result");
+                (tool.assistant_entry, Some(tool.ordinal))
             }
-            SessionEntry::ChildToolAdmitted { intent, .. } => intent.parent.assistant_entry,
-            SessionEntry::ChildToolResult { parent, .. } => parent.assistant_entry,
+            SessionEntry::ChildToolAdmitted { intent, .. } => {
+                (intent.parent.assistant_entry, Some(intent.parent.ordinal))
+            }
+            SessionEntry::ChildToolResult { parent, .. } => {
+                (parent.assistant_entry, Some(parent.ordinal))
+            }
             SessionEntry::UserShellSettled {
                 admission_entry, ..
-            } => *admission_entry,
+            } => (*admission_entry, None),
             _ => return,
         };
         self.display_dependents
             .entry(root)
             .or_default()
-            .push(self.nodes.len() as u64);
+            .push(DisplayDependent {
+                entry: self.nodes.len() as u64,
+                ordinal,
+            });
     }
 
     pub(super) fn is_settled(&self, target: u64) -> bool {
@@ -272,6 +338,24 @@ impl ContextIndex {
             None
         };
         let parent = detached.or(selection).unwrap_or(self.head);
+        let previous = self.tool_ancestor(parent);
+        let tool_head = if let SessionEntry::Assistant {
+            tool_activities, ..
+        } = entry
+            && !tool_activities.is_empty()
+        {
+            self.tool_batches.insert(
+                coordinate,
+                ToolBatch {
+                    previous,
+                    first: self.tool_count(previous) + 1,
+                    count: tool_activities.len(),
+                },
+            );
+            coordinate
+        } else {
+            previous
+        };
         let prior_context = self.context_key(parent);
         let mut refs = self.context_refs(prior_context);
         match entry {
@@ -326,6 +410,7 @@ impl ContextIndex {
             parent,
             transcript_parent: self.transcript_head(parent),
             display_parent: self.display_ancestor(parent),
+            tool_head,
             transcript_fact,
             transcript_boundary: matches!(
                 entry,

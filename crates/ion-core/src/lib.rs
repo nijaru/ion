@@ -102,8 +102,8 @@ pub use session::{
     RequestKey, RequestReceipt, Session, SessionEntry, SessionError, SessionHistory,
     SessionInputPreview, SessionIo, SessionMetadata, SessionPresentation, SessionReader,
     SessionRetirement, SessionRetirements, SessionStatus, SessionView, StoredToolActivity,
-    SubmissionRequest, TranscriptCursor, TranscriptPage, TurnEndReason, TurnSummary,
-    UnobservedUserShell, UserShellOutcome,
+    SubmissionRequest, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget, TranscriptCursor,
+    TranscriptPage, TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};

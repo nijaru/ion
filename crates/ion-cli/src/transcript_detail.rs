@@ -123,6 +123,39 @@ impl DetailView {
         Self::new(latest)
     }
 
+    /// Prepare one committed result without enumerating the surrounding transcript.
+    pub(crate) fn prepare_recorded(
+        &mut self,
+        evidence: &ion_core::ToolEvidence,
+        width: usize,
+        theme: &Theme,
+    ) {
+        let width = width.max(1);
+        if self
+            .page
+            .as_ref()
+            .is_some_and(|page| page.width == width && &page.theme == theme)
+        {
+            return;
+        }
+        let mut document = Document::new(theme);
+        let number = evidence.number.to_string();
+        document.activity(&evidence.activity, &number, width);
+        self.page = Some(Page {
+            revision: 0,
+            width,
+            theme: theme.clone(),
+            end: 1,
+            total: 1,
+            before: None,
+            later: None,
+            last: None,
+            document,
+            evidence: Some(format_activity(&number, &evidence.activity)),
+            adjacent_tools: [None, None],
+        });
+    }
+
     /// Canonical refresh invalidates measurement, not the reader's source point.
     pub fn invalidate(&mut self) {
         self.page = None;

@@ -182,6 +182,15 @@ impl SessionReader {
             .await
     }
 
+    pub async fn tool_evidence(
+        &self,
+        cursor: Option<super::ToolEvidenceCursor>,
+        target: super::ToolEvidenceTarget,
+    ) -> Result<Option<super::ToolEvidence>, SessionError> {
+        self.run(move |session| session.tool_evidence(cursor, target))
+            .await
+    }
+
     pub async fn transcript_evidence(
         &self,
         page: super::TranscriptCursor,

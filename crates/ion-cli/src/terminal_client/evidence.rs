@@ -4,7 +4,10 @@ use std::{num::NonZeroUsize, path::Path};
 
 use anyhow::Result;
 use ion_app::SessionControl;
-use ion_core::{Session, TranscriptActivityIdentity, TranscriptItem, TranscriptProjection};
+use ion_core::{
+    Session, SessionError, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget,
+    TranscriptActivityIdentity, TranscriptItem, TranscriptProjection,
+};
 
 use super::{EditorDraft, Frontend, Picker, PickerItem, PickerValue, session_io::ReadOutput};
 use crate::{
@@ -21,6 +24,7 @@ pub(super) enum Source {
     Live,
     HistoryPage,
     Committed(TranscriptProjection),
+    Recorded(Box<ToolEvidence>),
 }
 
 impl Inspection {
@@ -35,6 +39,24 @@ impl Inspection {
         Self {
             view,
             source: Source::HistoryPage,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) struct Position {
+    cursor: ToolEvidenceCursor,
+    number: NonZeroUsize,
+}
+
+impl Inspection {
+    pub(super) fn position(&self) -> Option<Position> {
+        match &self.source {
+            Source::Recorded(tool) => Some(Position {
+                cursor: tool.cursor,
+                number: tool.number,
+            }),
+            _ => None,
         }
     }
 }
@@ -89,20 +111,94 @@ pub(super) fn open_committed(
     ui: &mut Frontend,
     selection: Select,
 ) -> Result<()> {
+    let target = match selection {
+        Select::Conversation => {
+            let reader = session.reader()?;
+            return ui.session_io.start(session, async move {
+                Ok(reader
+                    .map_presentation(None, |snapshot| ReadOutput::Inspection {
+                        inspection: Box::new(Inspection {
+                            view: DetailView::new(None),
+                            source: Source::Committed(snapshot.transcript),
+                        }),
+                        from: None,
+                    })
+                    .await?)
+            });
+        }
+        Select::Latest => Some(ToolEvidenceTarget::Latest),
+        Select::Number(number) => NonZeroUsize::new(number).map(ToolEvidenceTarget::Number),
+        Select::Identity(TranscriptActivityIdentity::Tool(occurrence)) => {
+            Some(ToolEvidenceTarget::Occurrence(occurrence))
+        }
+        Select::Identity(TranscriptActivityIdentity::Child { .. }) => None,
+    };
+    if let Some(target) = target {
+        read_tool(ui, session, target, None)
+    } else {
+        ui.status = "Tool result not found; use /tools to list tools".into();
+        Ok(())
+    }
+}
+
+pub(super) fn adjacent(
+    ui: &mut Frontend,
+    session: &std::sync::Arc<Session>,
+    later: bool,
+) -> Result<()> {
+    let Some(inspection) = &ui.details else {
+        return Ok(());
+    };
+    let Source::Recorded(tool) = &inspection.source else {
+        return Ok(());
+    };
+    let neighbor = if later {
+        tool.number
+            .get()
+            .checked_add(1)
+            .filter(|number| *number <= tool.total)
+    } else {
+        tool.number.get().checked_sub(1)
+    };
+    let Some(neighbor) = neighbor.and_then(NonZeroUsize::new) else {
+        return Ok(());
+    };
+    let from = inspection.position();
+    read_tool(ui, session, ToolEvidenceTarget::Number(neighbor), from)
+}
+
+fn read_tool(
+    ui: &mut Frontend,
+    session: &std::sync::Arc<Session>,
+    target: ToolEvidenceTarget,
+    from: Option<Position>,
+) -> Result<()> {
     let reader = session.reader()?;
     ui.session_io.start(session, async move {
-        Ok(reader
-            .map_presentation(None, move |snapshot| {
-                let document = snapshot.transcript;
-                match selection.view(document.items.iter()) {
-                    Ok(view) => ReadOutput::Inspection(Box::new(Inspection {
-                        view,
-                        source: Source::Committed(document),
-                    })),
-                    Err(status) => ReadOutput::Status(status.into()),
-                }
-            })
-            .await?)
+        let tool = match reader
+            .tool_evidence(from.map(|pos| pos.cursor), target)
+            .await
+        {
+            Ok(Some(tool)) => tool,
+            Ok(None) => {
+                return Ok(ReadOutput::Status(
+                    "Tool result not found; use /tools to list tools".into(),
+                ));
+            }
+            Err(SessionError::EntryTooLarge) => {
+                return Ok(ReadOutput::Status(
+                    "Tool evidence exceeds inspection limit; use /export".into(),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(ReadOutput::Inspection {
+            inspection: Box::new(Inspection {
+                view: DetailView::new(Some((tool.number, tool.activity.identity))),
+                source: Source::Recorded(Box::new(tool)),
+            }),
+            from,
+        })
     })
 }
 

@@ -16,7 +16,10 @@ type ReadFuture = Pin<Box<dyn Future<Output = Result<ReadOutput>> + Send>>;
 
 pub(super) enum ReadOutput {
     History(Box<History>),
-    Inspection(Box<super::evidence::Inspection>),
+    Inspection {
+        inspection: Box<super::evidence::Inspection>,
+        from: Option<super::evidence::Position>,
+    },
     Status(String),
     Notice(String),
     CredentialRemoved(String),
@@ -565,7 +568,17 @@ pub(super) fn apply(
                 }
             }
         }
-        Ok(ReadOutput::Inspection(inspection)) => ui.details = Some(*inspection),
+        Ok(ReadOutput::Inspection { inspection, from }) => {
+            if from.is_none()
+                || from
+                    == ui
+                        .details
+                        .as_ref()
+                        .and_then(super::evidence::Inspection::position)
+            {
+                ui.details = Some(*inspection);
+            }
+        }
         Ok(ReadOutput::Status(status)) => ui.status = status,
         Ok(ReadOutput::Notice(notice)) => ui.print(notice),
         Ok(ReadOutput::CredentialRemoved(provider)) => {
