@@ -263,7 +263,7 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         {
             return Err(SessionError::InvalidHistory);
         }
-        state.apply(entry, &|coordinate| context_index.is_settled(coordinate))?;
+        let transition = state.apply(entry, &|coordinate| context_index.is_settled(coordinate))?;
         if let SessionEntry::ContextSelected { head_entry } = entry {
             if !context_index.can_select(*head_entry) {
                 return Err(SessionError::InvalidContextPoint);
@@ -272,6 +272,7 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         }
         context_index.observe(entry);
         if !matches!(mode, ProjectionMode::Metadata) {
+            context_index.link_display(entry, transition.resolved_tool);
             child_records.observe(state.sequence, entry);
         }
         if matches!(entry, SessionEntry::TurnStarted { .. }) {

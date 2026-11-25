@@ -101,8 +101,8 @@ pub use session::{
     RecoveryBinding, RecoveryPoint, RecoveryState, RequestKey, RequestReceipt, Session,
     SessionEntry, SessionError, SessionHistory, SessionInputPreview, SessionIo, SessionMetadata,
     SessionPresentation, SessionReader, SessionRetirement, SessionRetirements, SessionStatus,
-    SessionView, StoredToolActivity, SubmissionRequest, TurnEndReason, TurnSummary,
-    UnobservedUserShell, UserShellOutcome,
+    SessionView, StoredToolActivity, SubmissionRequest, TranscriptCursor, TranscriptPage,
+    TurnEndReason, TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use session_usage::{ModelUsage, SessionUsage, TokenCount, UsageTotals};
 pub use tool_policy::{ToolDecision, ToolPolicy, ToolPolicyRequest};

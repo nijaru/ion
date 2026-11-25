@@ -180,6 +180,12 @@ impl Document {
                 );
             }
             Entry::Item(item) => match item {
+                TranscriptItem::Oversized { source } => self.generated(
+                    key,
+                    Field::ResultNotice,
+                    &crate::transcript_render::oversized_text(*source),
+                    width,
+                ),
                 TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
                     let user = matches!(item, TranscriptItem::User(_));
                     let title = if user {

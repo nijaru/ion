@@ -230,6 +230,129 @@ fn terminal_snapshot_streams_selected_facts_but_keeps_global_recall_and_usage() 
 }
 
 #[test]
+fn transcript_pages_remain_on_their_committed_cut_until_selection_changes() {
+    use crate::TranscriptItem;
+    let (root, path, session) = fixture();
+    finish(&session, "ancestor", "answer");
+    let ancestor = session.context_position().unwrap().head_entry;
+    finish(&session, "abandoned", "old branch");
+    select(&session, ancestor);
+    for _ in 0..60 {
+        finish(&session, "selected", "answer");
+    }
+    // A single record cannot consume the ordinary page budget, but it must
+    // also not prevent moving backwards past it.
+    finish(&session, "large", &"a".repeat(270 * 1024));
+    let admission = session.admit_user_shell("shell".into(), true).unwrap();
+    let first = session.transcript_page(None).unwrap().unwrap();
+    let cursor = first.older.unwrap();
+    assert!(first.projection.items.len() <= 96);
+    assert!(
+        first
+            .projection
+            .items
+            .iter()
+            .any(|item| matches!(item, TranscriptItem::Oversized { .. }))
+    );
+    assert!(
+        matches!(first.projection.items.last(), Some(TranscriptItem::UserShell(shell)) if shell.outcome.is_none())
+    );
+    session
+        .record_user_shell(
+            admission,
+            crate::ToolOutput::success(serde_json::json!({"stdout":"settled"})),
+        )
+        .unwrap();
+    let same_cut = session
+        .transcript_page(Some(first.cursor))
+        .unwrap()
+        .unwrap();
+    assert_eq!(same_cut.projection, first.projection);
+    let latest = session.transcript_page(None).unwrap().unwrap();
+    assert!(
+        matches!(latest.projection.items.last(), Some(TranscriptItem::UserShell(shell)) if shell.outcome.is_some())
+    );
+    let older = session.transcript_page(Some(cursor)).unwrap().unwrap();
+    assert!(older.older.is_none());
+    let before = older.projection.items.last().unwrap().source().unwrap();
+    let after = first.projection.items.first().unwrap().source().unwrap();
+    assert!(before.entry < after.entry);
+    assert!(older.projection.items.iter().all(|item| !matches!(item, TranscriptItem::User(message) if message.parts.iter().any(|part| matches!(part, crate::TranscriptPart::Text(text) if text == "abandoned")))));
+    drop(session);
+    let session = Session::open(&path).unwrap();
+    assert_eq!(
+        session
+            .transcript_page(Some(first.cursor))
+            .unwrap()
+            .unwrap()
+            .projection,
+        first.projection
+    );
+    select(&session, ancestor);
+    assert!(session.transcript_page(Some(cursor)).unwrap().is_none());
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn transcript_pages_attach_results_to_repeated_call_occurrences() {
+    use crate::TranscriptItem;
+    let (root, path, session) = fixture();
+    let (turn, _) = session.begin_turn("tools".into(), model("one")).unwrap();
+    for value in ["first result", "second result"] {
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "reused".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "reused".into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"value":value}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
+            )
+            .unwrap();
+    }
+    session
+        .end_turn(turn, TurnEndReason::Completed, &BTreeSet::new())
+        .unwrap();
+    drop(session);
+    let session = Session::open(&path).unwrap();
+    let page = session.transcript_page(None).unwrap().unwrap();
+    let results = page
+        .projection
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            TranscriptItem::ActivityGroup(group) => {
+                Some(&group.activities[0].result.as_ref().unwrap().value["value"])
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results, ["first result", "second result"]);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
     let (root, path, session) = fixture();
     let key = RequestKey::new("navigation".into(), "original".into()).unwrap();

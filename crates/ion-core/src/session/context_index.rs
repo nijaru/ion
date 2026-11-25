@@ -9,6 +9,7 @@ pub(super) struct ContextIndex {
     pub(super) selection: u64,
     pub(super) prompts: Vec<u64>,
     pub(super) usage: crate::UsageTotals,
+    display_dependents: BTreeMap<u64, Vec<u64>>,
     pending: usize,
     shell: bool,
     admitted: BTreeMap<uuid::Uuid, crate::DelegationSite>,
@@ -18,8 +19,10 @@ pub(super) struct ContextIndex {
 struct Node {
     parent: u64,
     transcript_parent: u64,
+    display_parent: u64,
     context: usize,
     transcript_fact: bool,
+    display_root: bool,
     projection: ProjectionKind,
     selectable: bool,
     settled: bool,
@@ -70,7 +73,7 @@ impl ContextIndex {
         path
     }
 
-    fn transcript_head(&self, head: u64) -> u64 {
+    pub(super) fn transcript_head(&self, head: u64) -> u64 {
         if head == 0 {
             return 0;
         }
@@ -87,10 +90,67 @@ impl ContextIndex {
         let mut path = Vec::new();
         while head != 0 {
             path.push(head);
-            head = self.nodes[(head - 1) as usize].transcript_parent;
+            head = self.transcript_parent(head);
         }
         path.reverse();
         path
+    }
+
+    pub(super) fn transcript_parent(&self, entry: u64) -> u64 {
+        self.nodes[(entry - 1) as usize].transcript_parent
+    }
+
+    pub(super) fn display_bundle(&self, entry: u64, cut: u64) -> &[u64] {
+        let dependents = self
+            .display_dependents
+            .get(&entry)
+            .map_or(&[][..], Vec::as_slice);
+        &dependents[..dependents.partition_point(|&coordinate| coordinate <= cut)]
+    }
+
+    pub(super) fn display_head(&self) -> u64 {
+        self.display_ancestor(self.head)
+    }
+
+    fn display_ancestor(&self, entry: u64) -> u64 {
+        if entry == 0 {
+            return 0;
+        }
+        let node = &self.nodes[(entry - 1) as usize];
+        if node.display_root {
+            entry
+        } else {
+            node.display_parent
+        }
+    }
+
+    pub(super) fn display_parent(&self, entry: u64) -> u64 {
+        self.nodes[(entry - 1) as usize].display_parent
+    }
+
+    // Branch navigation cannot select a point with pending tool or shell
+    // effects. Thus a selected admission with a dependent below the cut
+    // necessarily selects that dependent too.
+    pub(super) fn link_display(
+        &mut self,
+        entry: &SessionEntry,
+        resolved: Option<crate::ToolOccurrence>,
+    ) {
+        let root = match entry {
+            SessionEntry::ToolResult { .. } => {
+                resolved.expect("validated tool result").assistant_entry
+            }
+            SessionEntry::ChildToolAdmitted { intent, .. } => intent.parent.assistant_entry,
+            SessionEntry::ChildToolResult { parent, .. } => parent.assistant_entry,
+            SessionEntry::UserShellSettled {
+                admission_entry, ..
+            } => *admission_entry,
+            _ => return,
+        };
+        self.display_dependents
+            .entry(root)
+            .or_default()
+            .push(self.nodes.len() as u64);
     }
 
     pub(super) fn is_settled(&self, target: u64) -> bool {
@@ -258,7 +318,20 @@ impl ContextIndex {
         self.nodes.push(Node {
             parent,
             transcript_parent: self.transcript_head(parent),
+            display_parent: self.display_ancestor(parent),
             transcript_fact,
+            display_root: transcript_fact
+                && !matches!(
+                    entry,
+                    SessionEntry::ToolResult { .. }
+                        | SessionEntry::ChildToolAdmitted { .. }
+                        | SessionEntry::ChildToolResult { .. }
+                        | SessionEntry::UserShellSettled { .. }
+                        | SessionEntry::TurnEnded {
+                            reason: TurnEndReason::Completed,
+                            ..
+                        }
+                ),
             context,
             projection,
             selectable: selection.is_none()

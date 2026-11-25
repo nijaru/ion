@@ -120,6 +120,10 @@ pub enum TurnTermination {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TranscriptItem {
+    /// A committed fact and its observations exceed the ordinary page budget.
+    Oversized {
+        source: TranscriptSource,
+    },
     TurnTermination {
         source: TranscriptSource,
         turn: u64,
@@ -147,7 +151,9 @@ impl TranscriptItem {
             Self::User(message) | Self::Assistant(message) => message.source,
             Self::ActivityGroup(group) => Some(group.source),
             Self::UserShell(shell) => Some(shell.source),
-            Self::Readiness { source, .. } | Self::TurnTermination { source, .. } => Some(*source),
+            Self::Readiness { source, .. }
+            | Self::TurnTermination { source, .. }
+            | Self::Oversized { source } => Some(*source),
         }
     }
 
@@ -160,7 +166,7 @@ impl TranscriptItem {
                 !group.open && group.activities.iter().all(activity_is_settled)
             }
             Self::UserShell(shell) => shell.outcome.is_some(),
-            Self::Readiness { .. } | Self::TurnTermination { .. } => true,
+            Self::Readiness { .. } | Self::TurnTermination { .. } | Self::Oversized { .. } => true,
         }
     }
 }

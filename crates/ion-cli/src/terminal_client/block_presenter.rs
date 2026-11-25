@@ -45,6 +45,8 @@ pub(super) struct ConversationView {
     last_top: Option<Anchor>,
     movement: isize,
     scope: Option<Scope>,
+    at_start: bool,
+    at_end: bool,
 }
 
 impl ConversationView {
@@ -63,6 +65,26 @@ impl ConversationView {
         self.last_top = None;
         self.movement = 0;
     }
+    pub(super) fn start_at_top(&mut self) {
+        self.reading = true;
+        self.movement = isize::MIN + 1;
+    }
+
+    pub(super) fn top_source(&self) -> Option<TranscriptSource> {
+        match self.last_top?.key {
+            Key::Fact(source) => Some(source),
+            Key::Local(_) | Key::Provisional(_) => None,
+        }
+    }
+
+    pub(super) fn at_start(&self) -> bool {
+        self.at_start
+    }
+
+    pub(super) fn at_end(&self) -> bool {
+        self.at_end
+    }
+
     pub(super) fn is_reading(&self) -> bool {
         self.reading
     }
@@ -556,6 +578,16 @@ impl BlockPresenter {
             }
             point.row += 1;
         }
+        view.at_start = start.block == 0 && start.row == 0;
+        // If the last fitted row ends a block, trailing hidden reasoning
+        // is not another scroll step. Use the visible end for page crossing.
+        while point.block < blocks.len()
+            && point.row == self.height(&blocks[point.block], revision, width, options)
+        {
+            point.block += 1;
+            point.row = 0;
+        }
+        view.at_end = point.block == blocks.len();
         view.last_top = first;
         if view.reading && (movement != 0 || view.anchor.is_none()) {
             view.anchor = first;

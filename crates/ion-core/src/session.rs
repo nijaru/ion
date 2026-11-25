@@ -46,7 +46,7 @@ mod delegation_resume_tests;
 mod delegation_tests;
 pub(crate) mod history;
 mod presentation;
-pub use presentation::SessionPresentation;
+pub use presentation::{SessionPresentation, TranscriptCursor, TranscriptPage};
 mod projection;
 mod records;
 mod recovery;
@@ -293,6 +293,7 @@ struct State {
 struct EntryTransition {
     settled: bool,
     closed_shell: Option<PendingShell>,
+    resolved_tool: Option<crate::ToolOccurrence>,
 }
 
 impl State {
@@ -556,7 +557,7 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.pending.remove(position);
+                transition.resolved_tool = Some(self.pending.remove(position).occurrence);
                 transition.settled = self.pending.is_empty();
             }
             SessionEntry::ChildToolAdmitted { turn, intent } => {

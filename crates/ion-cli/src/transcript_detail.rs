@@ -40,6 +40,7 @@ pub struct DetailView {
     tool: Option<ToolSelection>,
     through: Option<Boundary>,
     anchor: Option<Anchor>,
+    initial_source: Option<TranscriptSource>,
     viewport: usize,
     page: Option<Page>,
 }
@@ -90,6 +91,13 @@ impl DetailView {
     pub fn new(tool: Option<ToolSelection>) -> Self {
         Self {
             tool,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn at_source(source: TranscriptSource) -> Self {
+        Self {
+            initial_source: Some(source),
             ..Self::default()
         }
     }
@@ -274,6 +282,29 @@ impl DetailView {
         // References only: Conversation remains the sole semantic transcript.
         let entries = entries(items).collect::<Vec<_>>();
         let total = entries.len();
+        if let Some(source) = self.initial_source.take() {
+            let key = entries
+                .iter()
+                .find(|entry| entry.key() == EntryKey::Fact(source))
+                .or_else(|| {
+                    entries.iter().find(|entry| match entry.key() {
+                        EntryKey::Tool(TranscriptActivityIdentity::Tool(tool)) => {
+                            tool.assistant_entry == source.entry
+                        }
+                        EntryKey::Fact(fact) => fact.entry == source.entry,
+                        _ => false,
+                    })
+                })
+                .map(Entry::key);
+            if let Some(entry) = key {
+                self.anchor = Some(Anchor {
+                    entry,
+                    field: Field::Heading,
+                    point: None,
+                    previous: None,
+                });
+            }
+        }
         if (self
             .anchor
             .as_ref()

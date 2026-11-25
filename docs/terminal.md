@@ -48,7 +48,7 @@ Unsaved recovery sources and receipt fences are lost when the process exits. Sav
 
 ## Browse the transcript
 
-Press Alt-T in the composer to open the read-only transcript. Use Up and Down, Page Up and Page Down, or the mouse wheel to browse. End resumes following the latest output. Ctrl-O opens the evidence inspector; Esc returns to the transcript. Press Esc or Alt-T from the transcript to return to your draft without changing terminal mode or rewriting scrollback.
+Press Alt-T in the composer to browse committed transcript pages. Use Up and Down, Page Up and Page Down, or the mouse wheel; keep scrolling at a page edge to load more. End returns to the latest committed page. Streaming output stays in the chat. Ctrl-O opens the evidence inspector at the top of the viewport; Esc returns to the transcript. Press Esc or Alt-T from the transcript to return to your draft without changing terminal mode or rewriting scrollback.
 
 ## Inspect tool output
 

@@ -310,9 +310,6 @@ pub(super) fn apply(
                 && let Some(live) = ui.conversation.live()
             {
                 ui.view.commit_response(live, &event);
-                if let Some(history) = &mut ui.history_view {
-                    history.view.commit_response(live, &event);
-                }
                 if let Some(details) = &mut ui.details {
                     details.commit_response(live, &event);
                 }

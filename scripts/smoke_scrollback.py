@@ -541,6 +541,72 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         assert thinking == [(0, "THINK_5"), (1, "SAFE_SUMMARY_5")], "JSONL thinking was absent or duplicated"
         assert any(event["type"] == "final" and event["text"] == "JSONL_ANSWER" for event in events), "thinking changed the final answer"
         assert "SIGNATURE_PRIVATE" not in output and "ENCRYPTED_PRIVATE" not in output, "JSONL exposed opaque replay"
+
+        # Use real committed shell records as fixtures so this exercises reopen
+        # and both directions across the reader's record limit without running
+        # dozens of shells just to make the transcript long enough to page.
+        archive = work / "paged.sqlite"
+        with sqlite3.connect(session) as source, sqlite3.connect(archive) as history:
+            source.backup(history)
+            settlement = next(entry for entry in inspected["entries"] if entry["kind"] == "user_shell_settled")
+            for index in range(58):
+                entry = {"kind": "user_shell_admitted", "data": {
+                    "command": f"PAGED_SHELL_{index:03}", "exclude_from_context": True,
+                }}
+                admission = history.execute("INSERT INTO entries(body) VALUES (?)", (json.dumps(entry).encode(),)).lastrowid
+                record = {"kind": settlement["kind"], "data": {**settlement["data"], "admission_entry": admission}}
+                history.execute("INSERT INTO entries(body) VALUES (?)", (json.dumps(record).encode(),))
+
+        for mode in ("inline", "fullscreen"):
+            target = f"paged-{mode}"
+            launch = [binary, "--session", archive, "chat", "--tui-mode", mode]
+            tmux("new-session", "-d", "-s", target, "-x", "100", "-y", "22", "-c", str(workspace), shlex.join(map(str, launch)))
+            tmux("set-option", "-w", "-t", target, "remain-on-exit", "on")
+            end = time.monotonic() + 12
+
+            def capture():
+                return tmux("capture-pane", "-p", "-t", target)
+
+            def wait_for(predicate):
+                while not predicate(pane := capture()):
+                    assert time.monotonic() < end, f"{mode}: page state did not settle:\n{pane}"
+                    time.sleep(0.02)
+                return pane
+
+            wait_for(composer_ready)
+            tmux("send-keys", "-t", target, "-l", "PAGED_UNSENT")
+            tmux("send-keys", "-t", target, "M-t")
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_057" in pane and "older history" in pane)
+            for _ in range(30):
+                if "PAGED_SHELL_009" in capture():
+                    break
+                tmux("send-keys", "-t", target, "PPage")
+                time.sleep(0.05)
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_009" in pane and "older history" not in pane)
+            tmux("resize-window", "-t", target, "-x", "72", "-y", "20")
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_009" in pane)
+            for _ in range(16):
+                if "older history" in capture():
+                    break
+                tmux("send-keys", "-t", target, "NPage")
+                time.sleep(0.05)
+            wait_for(lambda pane: "Transcript" in pane and "older history" in pane)
+            tmux("send-keys", "-t", target, "End")
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_057" in pane)
+            tmux("send-keys", "-t", target, "Escape")
+            wait_for(lambda pane: "PAGED_UNSENT" in pane and composer_ready(pane))
+            if mode == "inline":
+                assert tmux("capture-pane", "-p", "-t", target, "-S", "-").count("PAGED_SHELL_057") == 1
+            tmux("send-keys", "-t", target, "C-c", "C-c")
+            wait_for(lambda pane: "PAGED_UNSENT" not in pane and composer_ready(pane))
+            tmux("send-keys", "-t", target, "C-d", "C-d")
+            while tmux("display-message", "-p", "-t", target, "#{pane_dead}").strip() != "1":
+                assert time.monotonic() < end, f"{mode}: reopened pager did not exit"
+                time.sleep(0.02)
+            assert tmux("display-message", "-p", "-t", target, "#{pane_dead_status}").strip() == "0"
+            tmux("kill-session", "-t", target)
+            assert len(requests) == 5, "passive paging issued a model request"
+            print(f"Ion {mode} committed transcript pages: older, resize, newer, end, exact draft: OK")
     finally:
         if native_pid is not None:
             try:

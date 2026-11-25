@@ -45,6 +45,7 @@ mod editor_control;
 mod editor_recovery;
 mod file_discovery;
 mod gestures;
+mod history_view;
 mod interaction;
 mod mcp;
 mod navigation;
@@ -65,6 +66,7 @@ mod theme_selection;
 use clipboard_input::*;
 use command::{CommandInput, dispatch_command};
 use editor::{Editor, EditorDraft, RecoveredDraft};
+use history_view::HistoryViewport;
 use interaction::{apply_picker, submit_editor, submit_initial_prompts};
 use picker::{Picker, PickerItem, PickerValue, Pickers};
 use question::{QuestionAction, QuestionModal};
@@ -181,13 +183,6 @@ struct Frontend {
     provider_usage: provider_usage::UsageStatus,
 }
 
-/// Separate from the composer viewport and native publication frontier.
-#[derive(Default)]
-struct HistoryViewport {
-    view: block_presenter::ConversationView,
-    page_rows: u16,
-}
-
 pub struct ChatInit {
     pub services: std::sync::Arc<ion_app::Host>,
     pub setup: ion_app::SessionSetup,
@@ -262,6 +257,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, ui.conversation.revision()) {
                 ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
+            }
+            if let Some(history) = &mut ui.history_view {
+                history.start(runtime.session(), ui.conversation.revision(), runtime.is_busy());
             }
             ui.sync_question(questions.as_ref());
             ui.gestures.reconcile_stop(runtime.stop_target().as_ref());
@@ -342,6 +340,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 completion = ui.theme_io.complete(), if ui.theme_io.has_job() => {
                     ui.apply_theme_completion(completion?);
                     ui.theme_io.start_next(&ui.themes);
+                    continue;
+                },
+                current = async { ui.history_view.as_mut().expect("pending history").complete().await }, if ui.history_view.as_ref().is_some_and(HistoryViewport::pending) => {
+                    if !current { ui.history_view = None; }
                     continue;
                 },
                 event = terminal.next_input() => event,
@@ -899,7 +901,7 @@ fn transcript_item_turn(item: &TranscriptItem) -> Option<u64> {
         TranscriptItem::Readiness { turn, .. } | TranscriptItem::TurnTermination { turn, .. } => {
             Some(*turn)
         }
-        TranscriptItem::UserShell(_) => None,
+        TranscriptItem::UserShell(_) | TranscriptItem::Oversized { .. } => None,
     }
 }
 
@@ -1357,7 +1359,7 @@ impl Frontend {
             }
             interaction::InputTarget::History => {
                 if let Some(history) = &mut self.history_view {
-                    history.view.scroll(if down { 3 } else { -3 });
+                    history.scroll(if down { 3 } else { -3 });
                 }
             }
             interaction::InputTarget::Picker => self.pickers.move_selection(down, 1),
@@ -1383,12 +1385,19 @@ impl Frontend {
         let page = history.page_rows.max(1) as isize;
         match action {
             KeyAction::Cancel | KeyAction::Transcript => self.history_view = None,
-            KeyAction::ExpandTools => self.open_details(None),
-            KeyAction::DetailUp => history.view.scroll(-1),
-            KeyAction::DetailDown => history.view.scroll(1),
-            KeyAction::PageUp => history.view.scroll(-page),
-            KeyAction::PageDown => history.view.scroll(page),
-            KeyAction::DetailEnd => history.view.follow_end(),
+            KeyAction::ExpandTools => {
+                self.details = Some(
+                    history
+                        .view
+                        .top_source()
+                        .map_or_else(|| DetailView::new(None), DetailView::at_source),
+                );
+            }
+            KeyAction::DetailUp => history.scroll(-1),
+            KeyAction::DetailDown => history.scroll(1),
+            KeyAction::PageUp => history.scroll(-page),
+            KeyAction::PageDown => history.scroll(page),
+            KeyAction::DetailEnd => history.follow_end(),
             _ => {}
         }
         Action::None
@@ -1488,9 +1497,6 @@ impl Frontend {
 
     fn discard_provisional(&mut self) {
         self.view.discard_provisional();
-        if let Some(history) = &mut self.history_view {
-            history.view.discard_provisional();
-        }
         if let Some(details) = &mut self.details {
             details.discard_provisional();
         }
@@ -1774,20 +1780,22 @@ fn draw_history_fullscreen(
     let width = width.max(1) as usize;
     let history = ui.history_view.as_mut().expect("history viewport active");
     let body = height.max(1) - 1;
-    let mut rows = ui.presenter.window(
-        &ui.conversation,
-        &mut history.view,
-        (width, body as usize),
-        false,
-        false,
-        &crate::tool_output::RenderOptions::new(
-            ui.output_detail,
-            &ui.keys,
-            ui.themes.theme(),
-            ui.thinking_visibility,
-            &ui.cwd,
-        ),
-    );
+    let mut rows = history.page.as_ref().map_or_else(Vec::new, |page| {
+        history.presenter.window(
+            page,
+            &mut history.view,
+            (width, body as usize),
+            false,
+            false,
+            &crate::tool_output::RenderOptions::new(
+                ui.output_detail,
+                &ui.keys,
+                ui.themes.theme(),
+                ui.thinking_visibility,
+                &ui.cwd,
+            ),
+        )
+    });
     rows.resize_with(body as usize, Line::default);
     let close = ui
         .keys
@@ -1804,7 +1812,10 @@ fn draw_history_fullscreen(
         ""
     };
     rows.push(Line::styled(
-        fit_line(&format!("Transcript{close}{question}{inspect}"), width),
+        fit_line(
+            &format!("Transcript{close}{question}{inspect}{}", history.status()),
+            width,
+        ),
         ui.themes
             .theme()
             .style(crate::presentation_style::Role::Secondary),

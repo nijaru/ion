@@ -1,7 +1,32 @@
 //! Display snapshot. Unlike SessionView, this does not hydrate model messages or
 //! decode inactive branches (except their user prompts for editor recall).
 use super::*;
-use crate::{TranscriptProjection, UsageTotals};
+use crate::{TranscriptItem, TranscriptProjection, TranscriptSource, UsageTotals};
+
+const PAGE_RECORDS: usize = 96;
+const PAGE_BYTES: usize = 256 * 1024;
+
+/// An older page in the same committed selection. Appends do not change its
+/// cut, and switching away and back creates a new selection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TranscriptCursor {
+    session: uuid::Uuid,
+    selection: u64,
+    cut: u64,
+    root: u64,
+}
+
+pub struct TranscriptPage {
+    pub cursor: TranscriptCursor,
+    pub projection: TranscriptProjection,
+    pub older: Option<TranscriptCursor>,
+}
+
+struct DisplayBundle {
+    root: u64,
+    parent: u64,
+    records: Vec<u64>,
+}
 
 /// The selected transcript and session-wide display metadata at one committed cut.
 /// Prompts and usage deliberately include inactive branches.
@@ -33,6 +58,145 @@ pub(super) fn prompt(entry: &SessionEntry) -> Option<&str> {
 }
 
 impl Session {
+    fn check_display_snapshot(
+        &self,
+        snapshot: &Connection,
+        expected: u64,
+    ) -> Result<Header, SessionError> {
+        let header = read_header(snapshot)?;
+        // Separate scalar subqueries let SQLite seek either end. A row at
+        // zero is not an empty journal.
+        let (first, last): (Option<i64>, Option<i64>) = snapshot.query_row(
+            "SELECT (SELECT MIN(seq) FROM entries), (SELECT MAX(seq) FROM entries)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let revision = match (first, last) {
+            (None, None) => 0,
+            (Some(1), Some(last)) if last > 0 => last as u64,
+            _ => return Err(SessionError::InvalidHistory),
+        };
+        if header.id != self.id()
+            || header.provider_session_id != self.provider_session_id()
+            || revision != expected
+        {
+            return Err(SessionError::InvalidHistory);
+        }
+        Ok(header)
+    }
+
+    /// Read one bounded page of committed history; `None` means the cursor's
+    /// selection is no longer current, not that the page is empty. Causal
+    /// bundles can split an activity run between assistant responses, but
+    /// never show a result under another response's call with the same ID.
+    pub fn transcript_page(
+        &self,
+        before: Option<TranscriptCursor>,
+    ) -> Result<Option<TranscriptPage>, SessionError> {
+        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        let (snapshot, cursor, bundles) = {
+            let store = self.lock_store()?;
+            let index = &store.context_index;
+            let cursor = before.unwrap_or_else(|| TranscriptCursor {
+                session: self.id(),
+                selection: index.selection,
+                cut: store.state.sequence,
+                root: index.display_head(),
+            });
+            if cursor.session != self.id()
+                || cursor.selection != index.selection
+                || cursor.cut > store.state.sequence
+            {
+                return Ok(None);
+            }
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            let mut bundles = Vec::new();
+            let mut root = cursor.root;
+            let mut available = PAGE_RECORDS;
+            while root != 0 && available != 0 {
+                let dependents = index.display_bundle(root, cursor.cut);
+                let mut records = Vec::new();
+                // An empty list marks an indivisible bundle above the count
+                // limit. Do not copy a potentially huge list out of the index.
+                let count = if dependents.len() >= PAGE_RECORDS {
+                    1
+                } else {
+                    1 + dependents.len()
+                };
+                if count > available {
+                    break;
+                }
+                if dependents.len() < PAGE_RECORDS {
+                    records.push(root);
+                    records.extend_from_slice(dependents);
+                }
+                available -= count;
+                let parent = index.display_parent(root);
+                bundles.push(DisplayBundle {
+                    root,
+                    parent,
+                    records,
+                });
+                root = parent;
+            }
+            (snapshot, cursor, bundles)
+        };
+        let mut budget = PAGE_BYTES;
+        let mut older = cursor.root;
+        let mut projected = Vec::new();
+        let mut size = snapshot.prepare_cached("SELECT length(body) FROM entries WHERE seq=?1")?;
+        for bundle in bundles {
+            let mut bytes = 0usize;
+            for &record in &bundle.records {
+                let key = i64::try_from(record).map_err(|_| SessionError::InvalidHistory)?;
+                let len: i64 = size.query_row([key], |row| row.get(0))?;
+                bytes = bytes.saturating_add(
+                    usize::try_from(len).map_err(|_| SessionError::InvalidHistory)?,
+                );
+                if bytes > PAGE_BYTES {
+                    break;
+                }
+            }
+            let items = if bundle.records.is_empty() || bytes > PAGE_BYTES {
+                vec![TranscriptItem::Oversized {
+                    source: TranscriptSource {
+                        entry: bundle.root,
+                        part: 0,
+                    },
+                }]
+            } else {
+                if bytes > budget {
+                    break;
+                }
+                budget -= bytes;
+                let mut projection =
+                    TranscriptProjection::from_selected(bundle.records.into_iter().map(|entry| {
+                        Ok::<_, SessionError>((entry, read_entry(&snapshot, entry)?))
+                    }))?;
+                // Page bundles are immutable views of this cut, not live runs.
+                for item in &mut projection.items {
+                    if let TranscriptItem::ActivityGroup(group) = item {
+                        group.open = false;
+                    }
+                }
+                projection.items
+            };
+            older = bundle.parent;
+            projected.extend(items.into_iter().rev());
+        }
+        projected.reverse();
+        Ok(Some(TranscriptPage {
+            cursor,
+            projection: TranscriptProjection { items: projected },
+            older: (older != 0).then_some(TranscriptCursor {
+                root: older,
+                ..cursor
+            }),
+        }))
+    }
+
     pub fn presentation(&self) -> Result<SessionPresentation, SessionError> {
         let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
@@ -50,27 +214,8 @@ impl Session {
         ) = {
             let store = self.lock_store()?;
             let snapshot = connection.unchecked_transaction()?;
-            let header = read_header(&snapshot)?;
-            // The read must have the same committed frontier as the in-memory
-            // index, even if the selected branch and prompt list are empty.
-            // Check the first key too: a physical row at zero is not an
-            // empty journal. Separate subqueries let SQLite seek either end.
-            let (first, last): (Option<i64>, Option<i64>) = snapshot.query_row(
-                "SELECT (SELECT MIN(seq) FROM entries), (SELECT MAX(seq) FROM entries)",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            let revision = match (first, last) {
-                (None, None) => 0,
-                (Some(1), Some(last)) if last > 0 => last as u64,
-                _ => return Err(SessionError::InvalidHistory),
-            };
-            if header.id != self.id()
-                || header.provider_session_id != self.provider_session_id()
-                || revision != store.state.sequence
-            {
-                return Err(SessionError::InvalidHistory);
-            }
+            let header = self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            let revision = store.state.sequence;
             let index = &store.context_index;
             (
                 snapshot,

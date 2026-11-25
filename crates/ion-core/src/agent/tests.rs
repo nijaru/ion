@@ -3029,7 +3029,9 @@ async fn committed_transcript_survives_steering_and_response_restart() {
                                 message.turn == Some(turn)
                             }
                             TranscriptItem::ActivityGroup(group) => group.turn == turn,
-                            TranscriptItem::UserShell(_) => false,
+                            TranscriptItem::UserShell(_) | TranscriptItem::Oversized { .. } => {
+                                false
+                            }
                             TranscriptItem::Readiness {
                                 turn: notice_turn, ..
                             }
@@ -3077,7 +3079,7 @@ async fn committed_transcript_survives_steering_and_response_restart() {
                 message.turn == Some(turn)
             }
             TranscriptItem::ActivityGroup(group) => group.turn == turn,
-            TranscriptItem::UserShell(_) => false,
+            TranscriptItem::UserShell(_) | TranscriptItem::Oversized { .. } => false,
             TranscriptItem::Readiness {
                 turn: notice_turn, ..
             }

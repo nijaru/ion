@@ -207,6 +207,7 @@ impl Store {
         let message_start = self.messages.len() - usize::from(replace_pending_message);
         let mut new_context_changes = Vec::new();
         let mut new_settled = Vec::new();
+        let mut resolved_tools = Vec::with_capacity(entries.len());
         let encoded = entries
             .iter()
             .enumerate()
@@ -217,6 +218,7 @@ impl Store {
                 let transition = candidate.apply(entry, &|coordinate| {
                     self.settled.contains(&coordinate) || new_settled.contains(&coordinate)
                 })?;
+                resolved_tools.push(transition.resolved_tool);
                 if transition.settled {
                     new_settled.push(candidate.sequence);
                 }
@@ -266,10 +268,11 @@ impl Store {
             Ok(())
         })?;
         let mut sequence = self.state.sequence;
-        for entry in entries {
+        for (entry, resolved) in entries.iter().zip(resolved_tools) {
             sequence += 1;
             self.child_records.observe(sequence, entry);
             self.context_index.observe(entry);
+            self.context_index.link_display(entry, resolved);
             if let SessionEntry::DelegationSettled { run, .. } = entry {
                 self.live_backgrounds.remove(run);
             }

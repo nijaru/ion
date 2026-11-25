@@ -316,6 +316,9 @@ pub(super) fn layout(
         return block;
     }
     match item {
+        TranscriptItem::Oversized { source } => {
+            block.append_literal("", &oversized_text(*source), width);
+        }
         TranscriptItem::TurnTermination { turn, reason, .. } => {
             block.extend(
                 ContentRoot::Block,
@@ -379,6 +382,13 @@ pub fn rows(
         rows.extend(block.rows);
     }
     rows
+}
+
+pub(super) fn oversized_text(source: ion_core::TranscriptSource) -> String {
+    format!(
+        "History entry {} exceeds the page limit · open inspector or /export",
+        source.entry
+    )
 }
 
 pub(super) fn turn_termination_text(turn: u64, reason: &ion_core::TurnTermination) -> String {

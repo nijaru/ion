@@ -173,6 +173,14 @@ impl SessionReader {
             .await
     }
 
+    pub async fn transcript_page(
+        &self,
+        cursor: Option<super::TranscriptCursor>,
+    ) -> Result<Option<super::TranscriptPage>, SessionError> {
+        self.run(move |session| session.transcript_page(cursor))
+            .await
+    }
+
     pub async fn status(&self) -> Result<SessionStatus, SessionError> {
         self.run(Session::status).await
     }

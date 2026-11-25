@@ -9,6 +9,27 @@ use ion_core::{
 #[cfg(test)]
 use ion_core::{Session, SessionEntry, SessionView};
 
+fn source_positions(canonical: &TranscriptProjection) -> HashMap<TranscriptSource, usize> {
+    let positions = canonical
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            (
+                item.source()
+                    .expect("canonical facts have source coordinates"),
+                index,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    assert_eq!(
+        positions.len(),
+        canonical.items.len(),
+        "canonical item sources are unique"
+    );
+    positions
+}
+
 pub(super) struct Prepared {
     canonical: TranscriptProjection,
     positions: HashMap<TranscriptSource, usize>,
@@ -38,23 +59,7 @@ impl Prepared {
         selection: u64,
         head_entry: u64,
     ) -> Self {
-        let positions = canonical
-            .items
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                (
-                    item.source()
-                        .expect("canonical facts have source coordinates"),
-                    index,
-                )
-            })
-            .collect::<HashMap<_, _>>();
-        assert_eq!(
-            positions.len(),
-            canonical.items.len(),
-            "canonical item sources are unique"
-        );
+        let positions = source_positions(&canonical);
         let tail = super::resume_history_tail(&canonical.items);
         Self {
             canonical,
@@ -136,6 +141,15 @@ pub(super) struct Conversation {
 }
 
 impl Conversation {
+    /// A read page has no publication custody or local notices.
+    pub(super) fn history_page(canonical: TranscriptProjection) -> Self {
+        Self {
+            positions: source_positions(&canonical),
+            canonical,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn scope(&self) -> Option<&Scope> {
         self.scope.as_ref()
     }
