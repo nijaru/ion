@@ -811,14 +811,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
                     "steering target is no longer active"
                 );
                 ensure!(
-                    self.starting.is_some()
-                        || self
-                            .active
-                            .as_ref()
-                            .is_some_and(|active| match &active.work {
-                                Work::Turn(operation) => !operation.fence().is_finished(),
-                                _ => false,
-                            }),
+                    self.steering_operation() == Some(target),
                     "steering requires a model Turn"
                 );
             }

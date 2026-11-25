@@ -48,15 +48,14 @@ pub(super) fn editor_delivery(
     intent: EditorIntent,
 ) -> Delivery {
     let state = runtime.state();
-    match state.operation {
-        Some(operation)
-            if intent == EditorIntent::Submit && operation.kind == ion_app::OperationKind::Turn =>
-        {
-            Delivery::Steer(operation.id)
-        }
-        Some(_) => Delivery::FollowUp,
-        None if state.busy => Delivery::FollowUp,
-        None => Delivery::Start,
+    if intent == EditorIntent::Submit
+        && let Some(operation) = runtime.steering_operation()
+    {
+        Delivery::Steer(operation)
+    } else if state.busy {
+        Delivery::FollowUp
+    } else {
+        Delivery::Start
     }
 }
 

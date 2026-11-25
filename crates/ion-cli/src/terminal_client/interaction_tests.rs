@@ -41,6 +41,39 @@ async fn editor_delivery_and_idle_queue_commands_share_normal_submission() {
 }
 
 #[tokio::test]
+async fn editor_queues_while_linked_turn_is_still_being_admitted() {
+    use interaction::{EditorIntent, editor_delivery};
+    let mut fixture = tests::Fixture::new();
+    let plan = fixture
+        .control
+        .prepare_request(
+            ion_core::RequestKey::new("test".into(), "root".into()).unwrap(),
+            Message::user_input("root".into(), []),
+        )
+        .await
+        .unwrap();
+    fixture
+        .control
+        .launch_request(plan, EditorDraft::at_end("root".into()))
+        .unwrap();
+    let state = fixture.control.state();
+    assert!(state.preparing_input && state.operation.is_some());
+    let delivery = editor_delivery(&fixture.control, EditorIntent::Submit);
+    assert_eq!(delivery, Delivery::FollowUp);
+    let mut ui = Frontend::default();
+    submit_editor(
+        &mut fixture.control,
+        &mut ui,
+        delivery,
+        EditorDraft::at_end("follow-up while admitting".into()),
+    );
+    let queued = fixture.control.queued_inputs(80);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].preview, "follow-up while admitting");
+    fixture.control.shutdown().await;
+}
+
+#[tokio::test]
 async fn withdrawing_all_preserves_each_caret_attachment_owner_and_current_composer() {
     let mut fixture = tests::Fixture::new();
     let mut ui = Frontend::default();

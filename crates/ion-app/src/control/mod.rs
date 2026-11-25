@@ -236,6 +236,21 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
             .or_else(|| self.admitting.as_ref().map(|admission| admission.operation))
             .or(self.starting.map(|(_, id)| id))
     }
+    /// The current operation eligible for local steering.
+    /// A pending durable admission has a stop identity but no steering target.
+    pub fn steering_operation(&self) -> Option<OperationId> {
+        if self.closed || self.stop_requested {
+            return None;
+        }
+        if let Some(active) = &self.active {
+            return match &active.work {
+                Work::Turn(operation) if !operation.fence().is_finished() => Some(active.id),
+                _ => None,
+            };
+        }
+        self.starting.map(|(_, operation)| operation)
+    }
+
     pub fn is_busy(&self) -> bool {
         self.state().busy
     }
