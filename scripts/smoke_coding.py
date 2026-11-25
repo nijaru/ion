@@ -245,10 +245,12 @@ def inspect_session(workspace, env, session):
     return json.loads(inspected.stdout)
 
 
-def terminal_turn(workspace, env, resume, prompt, expected):
-    command = [str(BINARY), "--cwd", str(workspace)]
-    if resume:
-        command.append("--continue")
+def terminal_turn(workspace, env, session_id, prompt, expected):
+    command = [str(BINARY)]
+    launch_directory = workspace
+    if session_id is not None:
+        command.extend(["--session", session_id])
+        launch_directory = workspace.parent
     command.append("chat")
     state = Path(env["TMPDIR"])
     receipt = state / "terminal-exit"
@@ -264,7 +266,7 @@ def terminal_turn(workspace, env, resume, prompt, expected):
     launcher = f"{shlex.join(command)}; printf '%s\\n' \"$?\" > {shlex.quote(str(receipt))}"
     try:
         tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "28",
-             "-c", str(workspace), "sh", "-c", launcher)
+             "-c", str(launch_directory), "sh", "-c", launcher)
         deadline = time.monotonic() + 30
         while "›" not in (pane := tmux("capture-pane", "-p", "-t", "ion", check=False)):
             assert not receipt.exists() and time.monotonic() < deadline, pane
@@ -370,9 +372,9 @@ def qualify(client):
                 ]
                 initial_command = [*coding, PROMPT]
                 followup_command = [*coding, FOLLOWUP]
-            def run_turn(command, prompt, expected, resume=False):
+            def run_turn(command, prompt, expected, session_id=None):
                 if client == "terminal":
-                    terminal_turn(workspace, env, resume, prompt, expected)
+                    terminal_turn(workspace, env, session_id, prompt, expected)
                 else:
                     result = subprocess.run(
                         command, env=env, check=False, capture_output=True,
@@ -387,7 +389,7 @@ def qualify(client):
             assert first_view["unfinished_turn"] is None, first_view
             assert first_view["entries"][-1]["kind"] == "turn_ended", first_view["entries"][-1]
             assert first_view["entries"][-1]["data"]["reason"] == "completed", first_view["entries"][-1]
-            run_turn(followup_command, FOLLOWUP, "CODING_FOLLOWUP_OK", resume=True)
+            run_turn(followup_command, FOLLOWUP, "CODING_FOLLOWUP_OK", first_view["id"])
         finally:
             server.shutdown()
             server.server_close()

@@ -8,7 +8,7 @@ use std::{
     time::SystemTime,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use ion_ai::ModelRef;
 use ion_core::{Session, SessionInputPreview};
 use sha2::{Digest, Sha256};
@@ -81,6 +81,12 @@ impl SessionCatalog {
             .map(|sessions| sessions.expect("an uncancelled scan completes"))
     }
 
+    /// Whether a saved database belongs to this catalog's workspace bucket.
+    pub fn is_managed_path(&self, path: &Path) -> bool {
+        path.extension().is_some_and(|ext| ext == "sqlite")
+            && self.directory().canonicalize().ok().as_deref() == path.parent()
+    }
+
     /// Scan while retaining cancellation as a distinct outcome. Checks occur
     /// between directory entries and Session metadata reads; in-flight filesystem
     /// calls remain uninterruptible.
@@ -95,6 +101,13 @@ impl SessionCatalog {
     /// applications and nested managed children. This never changes the catalog's
     /// namespace or grants authority to execute in a discovered directory.
     pub fn scan_all(&self, stop: &CancellationToken) -> Result<Option<Vec<SessionSummary>>> {
+        let Some(paths) = self.workspace_paths(stop)? else {
+            return Ok(None);
+        };
+        self.scan_paths(paths, true, stop)
+    }
+
+    fn workspace_paths(&self, stop: &CancellationToken) -> Result<Option<Vec<PathBuf>>> {
         if stop.is_cancelled() {
             return Ok(None);
         }
@@ -102,7 +115,7 @@ impl SessionCatalog {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                return self.scan_paths(Vec::new(), true, stop);
+                return Ok(Some(paths));
             }
             Err(error) => return Err(error).context("cannot list Session workspaces"),
         };
@@ -124,7 +137,7 @@ impl SessionCatalog {
             };
             paths.extend(workspace_paths);
         }
-        self.scan_paths(paths, true, stop)
+        Ok(Some(paths))
     }
 
     fn scan_paths(
@@ -201,12 +214,48 @@ impl SessionCatalog {
     }
 
     pub fn resolve_explicit(&self, value: PathBuf) -> Result<PathBuf> {
-        if value.exists() || value.components().count() > 1 || value.extension().is_some() {
+        if is_session_path(&value) {
             Ok(value)
         } else {
             self.by_id(&value.to_string_lossy())
         }
     }
+
+    /// Startup can bind the saved workspace. Unlike in-session switching, it
+    /// allows a full UUID across workspaces; prefixes remain local.
+    pub fn resolve_launch(&self, value: PathBuf, stop: &CancellationToken) -> Result<PathBuf> {
+        // A bare UUID is an ID even if cwd contains a same-named file.
+        // Explicit paths (including ./UUID) still bypass the catalog.
+        let Some(id) = value
+            .to_str()
+            .and_then(|value| uuid::Uuid::parse_str(value).ok())
+        else {
+            return self.resolve_explicit(value);
+        };
+        let Some(paths) = self.workspace_paths(stop)? else {
+            bail!("Session lookup interrupted");
+        };
+        let mut matched = None;
+        for path in paths {
+            if stop.is_cancelled() {
+                bail!("Session lookup interrupted");
+            }
+            if Session::inspect_id(&path).ok() == Some(id)
+                && Session::inspect_metadata(&path).is_ok_and(|view| view.cwd.is_some())
+            {
+                ensure!(
+                    matched.is_none(),
+                    "session ID matches multiple saved databases; use an explicit path"
+                );
+                matched = Some(path);
+            }
+        }
+        matched.context("session ID was not found")
+    }
+}
+
+fn is_session_path(value: &Path) -> bool {
+    value.exists() || value.components().count() > 1 || value.extension().is_some()
 }
 
 fn paths_in(directory: &Path, stop: Option<&CancellationToken>) -> Result<Option<Vec<PathBuf>>> {
@@ -371,7 +420,10 @@ mod tests {
             )
             .await
             .unwrap();
+        let retirement = session.retirement();
+        session.shutdown().await.unwrap();
         drop(session);
+        retirement.join().await.unwrap();
         let session = Session::create(&second, catalog.cwd.as_deref()).unwrap();
         session.set_name(Some("Second task")).unwrap();
         drop(session);
@@ -379,6 +431,20 @@ mod tests {
         assert_eq!(listed.len(), 1);
         let id = &listed[0].id;
         assert_eq!(catalog.by_id(id).unwrap(), listed[0].path);
+        let elsewhere = SessionCatalog::new(catalog.root.clone(), Some(root.join("elsewhere")));
+        let stop = CancellationToken::new();
+        assert_eq!(
+            elsewhere.resolve_launch(PathBuf::from(id), &stop).unwrap(),
+            first
+        );
+        assert!(elsewhere.by_id(id).is_err());
+        let duplicate = first.with_file_name("duplicate.sqlite");
+        fs::copy(&first, &duplicate).unwrap();
+        let error = elsewhere
+            .resolve_launch(PathBuf::from(id), &stop)
+            .unwrap_err();
+        assert!(error.to_string().contains("multiple saved databases"));
+        fs::remove_file(duplicate).unwrap();
         assert_eq!(catalog.latest().unwrap(), listed[0].path);
         assert_eq!(listed[0].name.as_deref(), Some("First task"));
         fs::write(first.with_file_name("damaged.sqlite"), b"partial database").unwrap();

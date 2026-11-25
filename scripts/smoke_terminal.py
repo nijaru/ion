@@ -626,9 +626,19 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             saved = next(path for path in (work / "ion").rglob("*.sqlite") if logical_id(path) == session_id)
             resume = re.findall(rb"To resume: ([^\r\n]+)", plain_output)
             assert len(resume) == 1, plain_output[-1000:]
-            assert shlex.split(resume[0].decode()) == ["ion", "--session", str(saved.resolve()), "chat"]
+            assert shlex.split(resume[0].decode()) == ["ion", "--session", session_id, "chat"], resume
             renamed = saved.with_name("01234567890🦀.sqlite")
             saved.rename(renamed)
+            elsewhere = work / "elsewhere"
+            elsewhere.mkdir()
+            (elsewhere / session_id).write_text("not a Session")
+            selector = [binary, "--session", session_id, "inspect"]
+            by_id = subprocess.run(selector, cwd=elsewhere, env=env, check=True, capture_output=True)
+            assert json.loads(by_id.stdout) == json.loads(inspected.stdout)
+            mismatch = subprocess.run([*selector, "--cwd", elsewhere], env=env, capture_output=True)
+            assert mismatch.returncode != 0 and b"--cwd does not match" in mismatch.stderr
+            short = subprocess.run([binary, "--session", session_id[:12], "inspect"], cwd=elsewhere, env=env, capture_output=True)
+            assert short.returncode != 0 and b"not found" in short.stderr
             unicode_listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
             assert f"{session_id}\t" in unicode_listing, unicode_listing
             assert all(line.split("\t", 1)[0] != "01234567890🦀" for line in unicode_listing.splitlines()), "filename became execution identity"

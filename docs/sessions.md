@@ -4,7 +4,7 @@ Ion saves conversations in SQLite. Reopening a Session restores history; it does
 
 ## Find and reopen
 
-When you leave a nonempty chat normally, Ion prints the command to reopen that exact Session, even from another directory.
+When you leave a nonempty chat normally, Ion prints a resume command. A full UUID works from any directory and reuses the saved working directory. Short IDs only match the current workspace. Sessions saved outside Ion’s catalog use their database path instead.
 
 From a terminal:
 

@@ -406,7 +406,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 };
                 path
             } else if let Some(explicit) = cli.session {
-                catalog.resolve_explicit(explicit)?
+                catalog.resolve_launch(explicit, &stop)?
             } else if cli.continue_session {
                 catalog.latest()?
             } else if matches!(

@@ -553,17 +553,22 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     if outcome.is_ok()
         && std::io::stdout().is_terminal()
         && ui.conversation.items().next().is_some()
-        && let Some(command) = resume_command(runtime.session().path())
+        && let Some(command) = resume_command(runtime.catalog(), runtime.session())
     {
         crate::print_stdout(format_args!("To resume: {command}"))?;
     }
     outcome
 }
 
-fn resume_command(path: &Path) -> Option<String> {
-    // The absolute database path also identifies custom saves and can reopen
-    // from another directory. Never print misleading or control-bearing paths.
-    let path = path.to_str()?;
+fn resume_command(
+    catalog: &ion_app::SessionCatalog,
+    session: &ion_core::Session,
+) -> Option<String> {
+    if catalog.is_managed_path(session.path()) {
+        return Some(format!("ion --session {} chat", session.id()));
+    }
+    // Custom saves outside the catalog still need the explicit database path.
+    let path = session.path().to_str()?;
     if path.chars().any(char::is_control) {
         return None;
     }
