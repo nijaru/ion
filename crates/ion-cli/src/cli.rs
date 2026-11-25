@@ -141,10 +141,8 @@ pub(crate) enum Action {
     Export { path: Option<PathBuf> },
     /// Write a retained capture's exact bytes to redirected stdout.
     Artifact {
-        /// One-based journal entry of the recorded result (see inspect).
-        entry: std::num::NonZeroU64,
-        /// Zero-based index in that result's artifacts.
-        index: usize,
+        /// Artifact UUID from the result inspector.
+        id: uuid::Uuid,
     },
     /// List numbered Turns in a saved Session.
     Turns,

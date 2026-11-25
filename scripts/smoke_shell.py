@@ -4,6 +4,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import select
 import signal
 import sqlite3
@@ -272,9 +273,11 @@ for mode in ("inline", "fullscreen"):
                     segment_start = len(output)
                     os.write(master, b"\x0f" if mode == "inline" else b"/tool all\r")
                     step = 5
-                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"Session artifact 0" in segment:
-                    os.write(master, b"\x0f")
-                    step = 6
+                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment:
+                    if match := re.search(rb"Artifact ID: ([0-9a-f-]{36})", segment):
+                        artifact_id = match[1].decode()
+                        os.write(master, b"\x0f")
+                        step = 6
                 if step == 6 and b"Details closed" in segment:
                     os.write(master, b"/export session.txt\r")
                     step = 7
@@ -299,8 +302,7 @@ for mode in ("inline", "fullscreen"):
             assert output_path.parent == work and output_path.read_bytes() == b"PRIVATE_OUTPUT\n\xff"
             assert output_path.stat().st_mode & 0o777 == 0o600
             output_path.unlink()
-            settlement = max(entry["entry"] for entry in view["entries"] if entry["kind"] == "user_shell_settled")
-            fallback = subprocess.check_output([binary, "--cwd", workspace, "--session", session_id, "artifact", str(settlement), "0"], env=env)
+            fallback = subprocess.check_output([binary, "--cwd", workspace, "--session", session_id, "artifact", artifact_id], env=env)
             assert fallback == b"PRIVATE_OUTPUT\n\xff"
             transcript = (workspace / "session.txt").read_text()
             assert "VISIBLE_OUTPUT" in transcript and "PRIVATE_OUTPUT" in transcript and "not shared with model" in transcript

@@ -1948,8 +1948,8 @@ pub enum SessionError {
     InvalidWorkingDirectory,
     #[error("artifact offset or page limit is out of range")]
     InvalidArtifactRange,
-    #[error("entry {entry} does not reference artifact {index}")]
-    ArtifactNotReferenced { entry: u64, index: usize },
+    #[error("no committed result references artifact {0}")]
+    ArtifactNotReferenced(uuid::Uuid),
     #[error("Session storage failed: {0}")]
     Storage(String),
     #[error("Session resource admission is closed")]

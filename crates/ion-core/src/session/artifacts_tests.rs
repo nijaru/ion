@@ -60,18 +60,11 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
     assert_eq!(reference.sha256, format!("{:x}", Sha256::digest(&expected)));
     assert_eq!(bytes(&session, &reference), expected);
     let mut exported = Vec::new();
-    let settlement = std::num::NonZeroU64::new(2).unwrap();
     assert_eq!(
-        Session::export_artifact(&path, settlement, 0, &mut exported).unwrap(),
+        Session::export_artifact(&path, reference.id, &mut exported).unwrap(),
         reference,
     );
     assert_eq!(exported, expected);
-    exported.clear();
-    assert!(matches!(
-        Session::export_artifact(&path, settlement, 1, &mut exported),
-        Err(SessionError::ArtifactNotReferenced { entry: 2, index: 1 })
-    ));
-    assert!(exported.is_empty());
     let origin: Vec<u8> = session
         .store()
         .lock()
@@ -129,6 +122,25 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
         .artifact_sink()
         .capture("unclaimed", b"not an observed tool result")
         .unwrap();
+    let fake = unclaimed.clone();
+    session
+        .run_user_shell(
+            "opaque imitation".into(),
+            false,
+            CancellationToken::new(),
+            move |_, _, _| async move { crate::ToolOutput::success(json!({"artifacts": [fake]})) },
+        )
+        .await
+        .unwrap();
+    exported.clear();
+    assert!(matches!(
+        Session::export_artifact(&path, unclaimed.id, &mut exported),
+        Err(SessionError::ArtifactNotReferenced(id)) if id == unclaimed.id
+    ));
+    assert!(
+        exported.is_empty(),
+        "an opaque reference must not export unclaimed bytes"
+    );
     let copy = session.clone_to(root.join("copy.sqlite")).unwrap();
     assert!(copy.read_artifact(&unclaimed, 0, 1).is_err());
     assert_eq!(bytes(&fork, &reference), expected);
@@ -139,9 +151,11 @@ async fn originals_survive_reopen_and_prefix_copies_without_the_source_database(
     assert_eq!(bytes(&reopened, &reference), expected);
     drop(reopened);
     fs::remove_file(&path).unwrap();
-    let copy = Session::open(root.join("copy.sqlite")).unwrap();
-    assert_eq!(bytes(&copy, &reference), expected);
-    drop(copy);
+    assert_eq!(
+        Session::export_artifact(root.join("copy.sqlite"), reference.id, &mut exported).unwrap(),
+        reference,
+    );
+    assert_eq!(exported, expected);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -351,9 +365,8 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
     let reference = &output.artifacts[0];
     assert!(!reference.complete);
     assert_eq!(bytes(&session, reference), b"prefix");
-    let settlement = std::num::NonZeroU64::new(2).unwrap();
     let mut exported = Vec::new();
-    let receipt = Session::export_artifact(&path, settlement, 0, &mut exported).unwrap();
+    let receipt = Session::export_artifact(&path, reference.id, &mut exported).unwrap();
     assert_eq!(&receipt, reference);
     assert_eq!(exported, b"prefix");
     session
@@ -369,7 +382,7 @@ async fn failed_flush_and_corrupt_chunks_never_become_successful_evidence() {
     assert!(session.read_artifact(reference, 0, 1).is_err());
     exported.clear();
     assert!(matches!(
-        Session::export_artifact(&path, settlement, 0, &mut exported),
+        Session::export_artifact(&path, reference.id, &mut exported),
         Err(SessionError::InvalidHistory)
     ));
     assert!(exported.is_empty(), "do not emit a corrupt chunk");

@@ -68,26 +68,34 @@ pub struct ArtifactWriter {
 impl Session {
     /// Stream the exact captured bytes from a committed result in a saved
     /// Session, without opening it for writing or repairing history. This
-    /// operator API uses the result's journal entry, not a model history grant.
+    /// operator API does not grant model history access.
     pub fn export_artifact(
         path: impl AsRef<std::path::Path>,
-        entry: std::num::NonZeroU64,
-        index: usize,
+        id: uuid::Uuid,
         mut output: impl Write,
     ) -> Result<ArtifactRef, SessionError> {
         let connection = open_export_source(path.as_ref())?;
         let snapshot = connection.unchecked_transaction()?;
         super::read_header(&snapshot)?;
-        let result = super::read_entry(&snapshot, entry.get())?;
-        let reference =
-            references(&result)
-                .get(index)
-                .ok_or(SessionError::ArtifactNotReferenced {
-                    entry: entry.get(),
-                    index,
-                })?;
-        stream_capture(&snapshot, reference, &mut output)?;
-        Ok(reference.clone())
+        // A bounded-memory journal scan avoids a second index to maintain.
+        // The UUID string only prefilters candidates; only a typed committed
+        // result can vouch for the capture, never arbitrary JSON or a receipt.
+        let mut candidates =
+            snapshot.prepare("SELECT seq FROM entries WHERE instr(body, ?1) > 0")?;
+        let mut rows = candidates.query([id.to_string().as_bytes()])?;
+        while let Some(row) = rows.next()? {
+            let entry =
+                u64::try_from(row.get::<_, i64>(0)?).map_err(|_| SessionError::InvalidHistory)?;
+            let result = super::read_entry(&snapshot, entry)?;
+            if let Some(reference) = references(&result)
+                .iter()
+                .find(|reference| reference.id == id)
+            {
+                stream_capture(&snapshot, reference, &mut output)?;
+                return Ok(reference.clone());
+            }
+        }
+        Err(SessionError::ArtifactNotReferenced(id))
     }
 
     // Read through a separate snapshot, without holding the writer mutex.

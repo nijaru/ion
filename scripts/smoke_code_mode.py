@@ -182,17 +182,12 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         binary_child = next(record for record in binary_records if record["type"] == "child_tool_finished")
         assert artifact_bytes(work, binary_child["artifacts"][0]) == bytes(range(256)) * 300
         before_export = len(requests)
-        saved = json.loads(run(env, workspace, "--session", binary_session, "inspect").stdout)
-        entry = next(
-            n for n, item in enumerate(saved["entries"], 1)
-            if item["kind"] == "child_tool_result"
-            and binary_child["artifacts"][0] in item["data"]["outcome"]["output"]["artifacts"]
-        )
-        artifact = [binary, "--cwd", workspace, "--session", binary_session, "artifact", str(entry)]
-        exported = subprocess.run([*artifact, "0"], env=env, capture_output=True, timeout=10, check=True)
+        artifact = [binary, "--cwd", workspace, "--session", binary_session, "artifact"]
+        artifact_id = binary_child["artifacts"][0]["id"]
+        exported = subprocess.run([*artifact, artifact_id], env=env, capture_output=True, timeout=10, check=True)
         assert exported.stdout == bytes(range(256)) * 300 and not exported.stderr
-        missing = subprocess.run([*artifact, "1"], env=env, capture_output=True, timeout=10)
-        assert missing.returncode != 0 and not missing.stdout and b"does not reference artifact 1" in missing.stderr
+        missing = subprocess.run([*artifact, "00000000-0000-0000-0000-000000000000"], env=env, capture_output=True, timeout=10)
+        assert missing.returncode != 0 and not missing.stdout and b"no committed result references artifact" in missing.stderr
         assert len(requests) == before_export
         # The guard must cover unread lines, not just this first-line page.
         (workspace / "guarded").write_text("PRIVATE_GUARD_\n" * 4000)

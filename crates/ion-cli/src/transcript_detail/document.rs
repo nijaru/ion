@@ -54,6 +54,7 @@ pub(super) enum Field {
     DiffLabel,
     Diff,
     Artifact(usize),
+    ArtifactId(usize),
     Image(usize),
     ChildLabel,
     Readiness,
@@ -467,6 +468,12 @@ impl Document {
         for (index, artifact) in artifacts.iter().enumerate() {
             let summary = crate::tool_output::artifact_summary(index, artifact);
             self.generated(key, Field::Artifact(index), &summary, width);
+            self.generated(
+                key,
+                Field::ArtifactId(index),
+                &format!("Artifact ID: {}", artifact.id),
+                width,
+            );
         }
     }
 
