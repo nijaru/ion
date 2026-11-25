@@ -429,18 +429,24 @@ pub(crate) fn render_command(
 pub(crate) fn artifact_metadata(artifacts: &[ArtifactRef]) -> impl Iterator<Item = String> + '_ {
     artifacts.iter().enumerate().map(|(index, artifact)| {
         format!(
-            "Session artifact {index} · {} · {} bytes · {} · id {} · sha256 {}",
-            artifact.label,
-            artifact.bytes,
-            if artifact.complete {
-                "complete"
-            } else {
-                "incomplete"
-            },
+            "{} · id {} · sha256 {}",
+            artifact_summary(index, artifact),
             artifact.id,
             artifact.sha256,
         )
     })
+}
+
+pub(crate) fn artifact_summary(index: usize, artifact: &ArtifactRef) -> String {
+    let state = if artifact.complete {
+        "complete"
+    } else {
+        "incomplete"
+    };
+    format!(
+        "Session artifact {index} · {} · {} bytes · {state}",
+        artifact.label, artifact.bytes
+    )
 }
 
 pub(crate) fn render_artifacts(

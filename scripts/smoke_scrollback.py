@@ -246,6 +246,16 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert time.monotonic() < deadline, f"Ctrl-O did not show recorded output:\n{pane}"
             time.sleep(0.02)
         assert tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip() == "1"
+        tmux("send-keys", "-t", "ion", "End")
+        while "Call ID: call-2" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"End did not reach the bottom of recorded output:\n{pane}"
+            time.sleep(0.02)
+        assert "FIRST_HIDDEN" not in pane, pane
+        tmux("send-keys", "-t", "ion", "Home")
+        while "FIRST_HIDDEN" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"Home did not return to the start of recorded output:\n{pane}"
+            time.sleep(0.02)
+        assert "Tool 3: exec" in pane, pane
         tmux("send-keys", "-t", "ion", "C-o")
         while True:
             pane = tmux("capture-pane", "-p", "-t", "ion")

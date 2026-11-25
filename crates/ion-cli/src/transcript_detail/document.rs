@@ -236,11 +236,17 @@ impl Document {
                                 width,
                             );
                             if let Some(fields) = command_fields(&output.value) {
-                                self.command_result(key, fields, output.is_error, width);
+                                self.command_result(
+                                    key,
+                                    fields,
+                                    &output.artifacts,
+                                    output.is_error,
+                                    width,
+                                );
                             } else {
                                 self.json(key, JsonField::Result, &output.value, width);
+                                self.artifacts(key, &output.artifacts, width);
                             }
-                            self.artifacts(key, &output.artifacts, width);
                             for (index, image) in output.images.iter().enumerate() {
                                 self.generated(
                                     key,
@@ -324,11 +330,13 @@ impl Document {
                     width,
                 );
             } else if let Some(fields) = command {
-                self.command_result(key, fields, result.is_error, width);
+                self.command_result(key, fields, &result.artifacts, result.is_error, width);
             } else {
                 self.json(key, JsonField::Result, &result.value, width);
             }
-            self.artifacts(key, &result.artifacts, width);
+            if command.is_none() {
+                self.artifacts(key, &result.artifacts, width);
+            }
             for (index, mime) in result.image_mime_types.iter().enumerate() {
                 self.generated(key, Field::Image(index), &format!("[image: {mime}]"), width);
             }
@@ -359,6 +367,7 @@ impl Document {
         &mut self,
         key: EntryKey,
         fields: &serde_json::Map<String, Value>,
+        artifacts: &[ion_core::ArtifactRef],
         failed: bool,
         width: usize,
     ) {
@@ -367,17 +376,30 @@ impl Document {
         } else {
             ["stdout", "stderr"]
         };
-        let priority = [
+        let outcome = [
             "exit_code",
             "signal",
             "timed_out",
             "cancelled",
             "wait_error",
-            streams[0],
-            streams[1],
         ];
+        let capture = |name: &str, value: &Value| {
+            let Some((stream, field)) = name.split_once('_') else {
+                return false;
+            };
+            streams.contains(&stream)
+                && match field {
+                    "file" | "file_error" | "artifact_error" => {
+                        value.as_str().is_some_and(|text| !text.is_empty())
+                    }
+                    "omitted_bytes" => value.as_u64().is_some_and(|bytes| bytes > 0),
+                    "complete" => value == &Value::Bool(false),
+                    "truncated" | "lossy" => value == &Value::Bool(true),
+                    _ => false,
+                }
+        };
         let important = |name: &str, value: &Value| {
-            priority.contains(&name)
+            (outcome.contains(&name) || streams.contains(&name))
                 && match value {
                     Value::Null => false,
                     Value::Bool(value) => *value,
@@ -385,7 +407,19 @@ impl Document {
                     _ => true,
                 }
         };
-        for name in priority {
+        for name in outcome {
+            if let Some((name, value)) = fields
+                .get_key_value(name)
+                .filter(|(name, value)| important(name, value))
+            {
+                self.result_field(key, name, value, width);
+            }
+        }
+        for (name, value) in fields.iter().filter(|(name, value)| capture(name, value)) {
+            self.result_field(key, name, value, width);
+        }
+        self.artifacts(key, artifacts, width);
+        for name in streams {
             if let Some((name, value)) = fields
                 .get_key_value(name)
                 .filter(|(name, value)| important(name, value))
@@ -397,7 +431,7 @@ impl Document {
             key,
             fields
                 .iter()
-                .filter(|(name, value)| !important(name, value)),
+                .filter(|(name, value)| !important(name, value) && !capture(name, value)),
             width,
         );
     }
@@ -430,8 +464,9 @@ impl Document {
     }
 
     fn artifacts(&mut self, key: EntryKey, artifacts: &[ion_core::ArtifactRef], width: usize) {
-        for (index, metadata) in crate::tool_output::artifact_metadata(artifacts).enumerate() {
-            self.generated(key, Field::Artifact(index), &metadata, width);
+        for (index, artifact) in artifacts.iter().enumerate() {
+            let summary = crate::tool_output::artifact_summary(index, artifact);
+            self.generated(key, Field::Artifact(index), &summary, width);
         }
     }
 

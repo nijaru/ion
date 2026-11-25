@@ -81,6 +81,8 @@ actions! {
     PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview/review down";
     DetailUp, "app.details.up", DETAILS, ["up"], "Scroll details up one row";
     DetailDown, "app.details.down", DETAILS, ["down"], "Scroll details down one row";
+    DetailStart, "app.details.start", DETAILS, ["home"], "Jump to the start of the current detail page";
+    DetailEnd, "app.details.end", DETAILS, ["end"], "Jump to the end of the current detail page";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";
     Later, "app.details.nextPage", DETAILS, ["right"], "Show later detail page";
 }

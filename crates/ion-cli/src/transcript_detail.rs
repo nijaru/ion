@@ -181,20 +181,12 @@ impl DetailView {
     pub(crate) fn navigate(&mut self, action: KeyAction) {
         let Some(page) = &self.page else { return };
         match action {
-            KeyAction::DetailUp | KeyAction::PageUp => {
-                self.scroll_by(if action == KeyAction::DetailUp {
-                    -1
-                } else {
-                    -12
-                });
-            }
-            KeyAction::DetailDown | KeyAction::PageDown => {
-                self.scroll_by(if action == KeyAction::DetailDown {
-                    1
-                } else {
-                    12
-                });
-            }
+            KeyAction::DetailUp => self.scroll_by(-1),
+            KeyAction::DetailDown => self.scroll_by(1),
+            KeyAction::PageUp => self.scroll_by(-(self.viewport.saturating_sub(2).max(1) as isize)),
+            KeyAction::PageDown => self.scroll_by(self.viewport.saturating_sub(2).max(1) as isize),
+            KeyAction::DetailStart => self.scroll_by(isize::MIN),
+            KeyAction::DetailEnd => self.scroll_by(isize::MAX),
             KeyAction::Earlier | KeyAction::Later if self.tool.is_some() => {
                 if let Some(tool) = page.adjacent_tools[usize::from(action == KeyAction::Later)] {
                     *self = Self::new(Some(tool));
@@ -665,11 +657,22 @@ mod tests {
         let mut view = DetailView::new(Some((NonZeroUsize::MIN, identity)));
         view.prepare(history.items.iter(), &[], 0, 30);
         assert!(view.window(8)[0].starts_with("Tool 1: exec"));
-        view.scroll_by(isize::MAX);
+        for height in [8, 20] {
+            view.window(height);
+            let step = height - 2;
+            view.navigate(KeyAction::PageDown);
+            assert_eq!(view.window(height)[0], view.rows()[step]);
+            view.navigate(KeyAction::PageUp);
+            assert!(view.window(height)[0].starts_with("Tool 1: exec"));
+        }
+        view.window(8);
+        view.navigate(KeyAction::DetailEnd);
         assert!(view.window(8).join("\n").contains("line 60"));
         let bottom = view.anchor.clone();
         view.prepare(history.items.iter(), &[], 0, 24);
         assert_eq!(view.anchor, bottom);
+        view.navigate(KeyAction::DetailStart);
+        assert!(view.window(8)[0].starts_with("Tool 1: exec"));
         view.navigate(KeyAction::Later);
         view.prepare(history.items.iter(), &[], 0, 24);
         assert!(view.window(8)[0].starts_with("Tool 2: exec"));
@@ -927,8 +930,11 @@ mod tests {
         let mut tool = activity(0);
         let identity = tool.identity;
         let stderr = "Traceback (most recent call last):\n  File \"test_calculator.py\", line 7\n    path = r\"C:\\temp\\n\"\n\u{1b}]52;c;Zm9v\u{7}\nAssertionError: 😀 != 5\n";
-        let value =
-            serde_json::json!({"exit_code":1,"stderr":stderr,"stdout":"","cancelled":false});
+        let value = serde_json::json!({
+            "exit_code": 1, "stderr": stderr, "stdout": "", "cancelled": false,
+            "stderr_file": "/tmp/diagnostics", "stderr_truncated": true,
+            "stderr_omitted_bytes": 4096
+        });
         tool.state = ion_core::ActivityState::Failed;
         let result = tool.result.as_mut().unwrap();
         result.is_error = true;
@@ -950,7 +956,15 @@ mod tests {
         }
         assert!(rows.iter().all(|row| !row.contains(['\u{1b}', '\u{7}'])));
         let first_row = |needle: &str| rows.iter().position(|row| row.contains(needle)).unwrap();
-        assert!(first_row("\"exit_code\": 1") < first_row("Traceback"));
+        assert!(first_row("\"exit_code\": 1") < first_row("/tmp/diagnostics"));
+        for marker in [
+            "/tmp/diagnostics",
+            "\"stderr_truncated\": true",
+            "\"stderr_omitted_bytes\": 4096",
+        ] {
+            assert!(first_row(marker) < first_row("Traceback"));
+            assert_eq!(rows.iter().filter(|row| row.contains(marker)).count(), 1);
+        }
         assert!(first_row("Traceback") < first_row("Result metadata"));
         assert!(first_row("Result metadata") < first_row("\"cancelled\": false"));
         assert!(first_row("Result metadata") < first_row("\"stdout\""));
@@ -1369,7 +1383,13 @@ mod tests {
         assert!(output.contains("run-check"));
         assert!(output.contains("Result"));
         assert!(output.contains("END_MARKER"));
-        assert!(output.contains("Session artifact 0 · stdout · 1234 bytes · complete"));
+        assert!(
+            output
+                .find("Session artifact 0 · stdout · 1234 bytes · complete")
+                .unwrap()
+                < output.find("END_MARKER").unwrap()
+        );
+        assert!(!output.contains(&"a".repeat(64)));
         let (_, evidence) = selected.copy_evidence().unwrap();
         assert!(evidence.contains("Session artifact 0 · stdout · 1234 bytes · complete"));
         assert!(evidence.contains(&"a".repeat(64)));
