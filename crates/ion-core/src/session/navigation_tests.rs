@@ -399,12 +399,22 @@ fn transcript_pages_remain_on_their_committed_cut_until_selection_changes() {
     let first = session.transcript_page(None).unwrap().unwrap();
     let cursor = first.older.unwrap();
     assert!(first.projection.items.len() <= 96);
+    let oversized = first
+        .projection
+        .items
+        .iter()
+        .find_map(|item| match item {
+            TranscriptItem::Oversized { source } => Some(*source),
+            _ => None,
+        })
+        .expect("large record has a page placeholder");
+    let evidence = session
+        .transcript_evidence(first.cursor, oversized)
+        .unwrap()
+        .unwrap();
     assert!(
-        first
-            .projection
-            .items
-            .iter()
-            .any(|item| matches!(item, TranscriptItem::Oversized { .. }))
+        matches!(&evidence.items[..], [TranscriptItem::Assistant(message)]
+        if matches!(&message.parts[..], [crate::TranscriptPart::Text(text)] if text.len() == 270 * 1024))
     );
     assert!(
         matches!(first.projection.items.last(), Some(TranscriptItem::UserShell(shell)) if shell.outcome.is_none())
@@ -420,6 +430,16 @@ fn transcript_pages_remain_on_their_committed_cut_until_selection_changes() {
         .unwrap()
         .unwrap();
     assert_eq!(same_cut.projection, first.projection);
+    let shell = session
+        .transcript_evidence(
+            first.cursor,
+            first.projection.items.last().unwrap().source().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(&shell.items[..], [TranscriptItem::UserShell(shell)] if shell.outcome.is_none())
+    );
     let latest = session.transcript_page(None).unwrap().unwrap();
     assert!(
         matches!(latest.projection.items.last(), Some(TranscriptItem::UserShell(shell)) if shell.outcome.is_some())
@@ -442,6 +462,12 @@ fn transcript_pages_remain_on_their_committed_cut_until_selection_changes() {
     );
     select(&session, ancestor);
     assert!(session.transcript_page(Some(cursor)).unwrap().is_none());
+    assert!(
+        session
+            .transcript_evidence(first.cursor, oversized)
+            .unwrap()
+            .is_none()
+    );
     drop(session);
     fs::remove_dir_all(root).unwrap();
 }

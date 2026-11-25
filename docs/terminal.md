@@ -50,7 +50,7 @@ Unsaved recovery sources and receipt fences are lost when the process exits. Sav
 
 ## Browse the transcript
 
-Press Alt-T in the composer to browse committed transcript pages. Use Up and Down, Page Up and Page Down, or the mouse wheel; keep scrolling at a page edge to load more. End returns to the latest committed page. Streaming output stays in the chat. Ctrl-O opens the evidence inspector at the top of the viewport; Esc returns to the transcript. Press Esc or Alt-T from the transcript to return to your draft without changing terminal mode or rewriting scrollback.
+Press Alt-T in the composer to browse committed transcript pages. Use Up and Down, Page Up and Page Down, or the mouse wheel; keep scrolling at a page edge to load more. End returns to the latest committed page. Streaming output stays in the chat. Ctrl-O inspects the current page, starting at the top of the viewport. To expand a record that exceeds the page limit, scroll its notice to the top and press Ctrl-O. If the record also exceeds the inspection limit, use `/export`. Esc returns to the same transcript page. Press Esc or Alt-T from the transcript to return to your draft without changing terminal mode or rewriting scrollback.
 
 ## Inspect tool output
 

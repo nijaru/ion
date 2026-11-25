@@ -182,6 +182,15 @@ impl SessionReader {
             .await
     }
 
+    pub async fn transcript_evidence(
+        &self,
+        page: super::TranscriptCursor,
+        source: crate::TranscriptSource,
+    ) -> Result<Option<crate::TranscriptProjection>, SessionError> {
+        self.run(move |session| session.transcript_evidence(page, source))
+            .await
+    }
+
     pub async fn status(&self) -> Result<SessionStatus, SessionError> {
         self.run(Session::status).await
     }

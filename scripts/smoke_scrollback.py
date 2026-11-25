@@ -560,6 +560,12 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 }}
                 admission = history.execute("INSERT INTO entries(body) VALUES (?)", (json.dumps(entry).encode(),)).lastrowid
                 record = {"kind": settlement["kind"], "data": {**settlement["data"], "admission_entry": admission}}
+                if index == 57:
+                    outcome = record["data"]["outcome"]
+                    output = outcome["output"]
+                    record["data"]["outcome"] = {**outcome, "output": {
+                        **output, "value": {**output["value"], "fixture_padding": "x" * (270 * 1024)},
+                    }}
                 history.execute("INSERT INTO entries(body) VALUES (?)", (json.dumps(record).encode(),))
 
         for mode in ("inline", "fullscreen"):
@@ -581,7 +587,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             wait_for(composer_ready)
             tmux("send-keys", "-t", target, "-l", "PAGED_UNSENT")
             tmux("send-keys", "-t", target, "M-t")
-            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_057" in pane and "older history" in pane)
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_056" in pane and "older history" in pane)
             for _ in range(30):
                 if "PAGED_SHELL_009" in capture():
                     break
@@ -590,6 +596,15 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_009" in pane and "older history" not in pane)
             tmux("resize-window", "-t", target, "-x", "72", "-y", "20")
             wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_009" in pane)
+            tmux("send-keys", "-t", target, "C-o")
+            wait_for(lambda pane: "Conversation ·" in pane and "PAGED_SHELL_00" in pane)
+            tmux("resize-window", "-t", target, "-x", "72", "-y", "46")
+            tmux("send-keys", "-t", target, "Right", "End")
+            inspected_page = wait_for(lambda pane: "Conversation ·" in pane and "PAGED_SHELL_009" in pane)
+            assert "PAGED_SHELL_056" not in inspected_page, "old page inspection jumped to the latest chat"
+            tmux("resize-window", "-t", target, "-x", "72", "-y", "20")
+            tmux("send-keys", "-t", target, "Escape")
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_009" in pane)
             for _ in range(16):
                 if "older history" in capture():
                     break
@@ -597,7 +612,17 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 time.sleep(0.05)
             wait_for(lambda pane: "Transcript" in pane and "older history" in pane)
             tmux("send-keys", "-t", target, "End")
-            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_057" in pane)
+            wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_056" in pane)
+            # Force the placeholder to rewrap, so the following assertion
+            # cannot pass on tmux's cropped copy of the old viewport.
+            tmux("resize-window", "-t", target, "-x", "40", "-y", "2")
+            wait_for(lambda pane: "Transcript" in pane and "/export" in pane and "exceeds the page limit" not in pane)
+            tmux("send-keys", "-t", target, "C-o")
+            wait_for(lambda pane: "Conversation ·" in pane)
+            tmux("resize-window", "-t", target, "-x", "100", "-y", "22")
+            wait_for(lambda pane: "Conversation ·" in pane and "PAGED_SHELL_057" in pane and "PAGED_SHELL_056" not in pane)
+            tmux("send-keys", "-t", target, "Escape")
+            wait_for(lambda pane: "Transcript" in pane and "exceeds the page limit" in pane)
             tmux("send-keys", "-t", target, "Escape")
             wait_for(lambda pane: "PAGED_UNSENT" in pane and composer_ready(pane))
             if mode == "inline":
@@ -611,7 +636,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert tmux("display-message", "-p", "-t", target, "#{pane_dead_status}").strip() == "0"
             tmux("kill-session", "-t", target)
             assert len(requests) == 5, "passive paging issued a model request"
-            print(f"Ion {mode} committed transcript pages: older, resize, newer, end, exact draft: OK")
+            print(f"Ion {mode} committed transcript pages: older, resize, page evidence, oversized evidence, newer, end, exact draft: OK")
     finally:
         if native_pid is not None:
             try:

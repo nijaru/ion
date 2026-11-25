@@ -343,7 +343,17 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     continue;
                 },
                 current = async { ui.history_view.as_mut().expect("pending history").complete().await }, if ui.history_view.as_ref().is_some_and(HistoryViewport::pending) => {
-                    if !current { ui.history_view = None; }
+                    match current {
+                        history_view::Completion::Current => {}
+                        history_view::Completion::Stale => {
+                            ui.details = None;
+                            ui.history_view = None;
+                            ui.status = "Transcript selection changed; reopen history".into();
+                        }
+                        history_view::Completion::Expanded(source) => {
+                            ui.details = Some(DetailView::at_source(source));
+                        }
+                    }
                     continue;
                 },
                 event = terminal.next_input() => event,
@@ -1393,8 +1403,7 @@ impl Frontend {
             KeyAction::ExpandTools => {
                 self.details = Some(
                     history
-                        .view
-                        .top_source()
+                        .open_inspection()
                         .map_or_else(|| DetailView::new(None), DetailView::at_source),
                 );
             }
@@ -1413,6 +1422,9 @@ impl Frontend {
             Some(KeyAction::ExpandTools) if key.repeat => {}
             Some(KeyAction::Cancel | KeyAction::ExpandTools) => {
                 self.details = None;
+                if let Some(history) = &mut self.history_view {
+                    history.close_inspection();
+                }
                 if self.pickers.active().is_none() {
                     self.status = "Details closed".into();
                 }
@@ -1987,18 +1999,26 @@ fn modal_rows(
     ui.invalidate_interaction_paint();
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    ui.details
-        .as_mut()
-        .expect("inspector owns viewport")
-        .prepare_themed(
+    let inspector = ui.details.as_mut().expect("inspector owns viewport");
+    if let Some(history) = &ui.history_view {
+        inspector.prepare_themed(history.inspection_items(), &[], 0, width, ui.themes.theme());
+    } else {
+        inspector.prepare_themed(
             ui.conversation.items(),
             ui.conversation.live().map_or(&[], LiveTranscript::notices),
             ui.conversation.revision(),
             width,
             ui.themes.theme(),
         );
+    }
     let show_controls = ui.gestures.prompt().is_none();
-    let status = visible_status(ui, operation);
+    let inspection_status = ui
+        .history_view
+        .as_ref()
+        .and_then(HistoryViewport::inspection_status);
+    let status = inspection_status
+        .map(str::to_owned)
+        .or_else(|| visible_status(ui, operation));
     let status = if ui.question.is_some() {
         Some(status.map_or_else(
             || "Question waiting · close this view to answer".into(),

@@ -5,6 +5,8 @@ use crate::{TranscriptItem, TranscriptProjection, TranscriptSource, UsageTotals}
 
 const PAGE_RECORDS: usize = 96;
 const PAGE_BYTES: usize = 256 * 1024;
+const EVIDENCE_RECORDS: usize = 256;
+const EVIDENCE_BYTES: usize = 16 * 1024 * 1024;
 
 /// An older page in the same committed selection. Appends do not change its
 /// cut, and switching away and back creates a new selection.
@@ -26,6 +28,30 @@ struct DisplayBundle {
     root: u64,
     parent: u64,
     records: Vec<u64>,
+}
+
+fn encoded_len(size: &mut rusqlite::Statement<'_>, record: u64) -> Result<usize, SessionError> {
+    let key = i64::try_from(record).map_err(|_| SessionError::InvalidHistory)?;
+    let len: i64 = size.query_row([key], |row| row.get(0))?;
+    usize::try_from(len).map_err(|_| SessionError::InvalidHistory)
+}
+
+fn read_display_bundle(
+    snapshot: &Connection,
+    records: Vec<u64>,
+) -> Result<TranscriptProjection, SessionError> {
+    let mut projection = TranscriptProjection::from_selected(
+        records
+            .into_iter()
+            .map(|entry| Ok::<_, SessionError>((entry, read_entry(snapshot, entry)?))),
+    )?;
+    // Historical bundles are immutable views of this cut, not live runs.
+    for item in &mut projection.items {
+        if let TranscriptItem::ActivityGroup(group) = item {
+            group.open = false;
+        }
+    }
+    Ok(projection)
 }
 
 /// A committed cut at an idle boundary. No transcript group or unresolved
@@ -148,11 +174,7 @@ impl Session {
         for bundle in bundles {
             let mut bytes = 0usize;
             for &record in &bundle.records {
-                let key = i64::try_from(record).map_err(|_| SessionError::InvalidHistory)?;
-                let len: i64 = size.query_row([key], |row| row.get(0))?;
-                bytes = bytes.saturating_add(
-                    usize::try_from(len).map_err(|_| SessionError::InvalidHistory)?,
-                );
+                bytes = bytes.saturating_add(encoded_len(&mut size, record)?);
                 if bytes > PAGE_BYTES {
                     break;
                 }
@@ -169,17 +191,7 @@ impl Session {
                     break;
                 }
                 budget -= bytes;
-                let mut projection =
-                    TranscriptProjection::from_selected(bundle.records.into_iter().map(|entry| {
-                        Ok::<_, SessionError>((entry, read_entry(&snapshot, entry)?))
-                    }))?;
-                // Page bundles are immutable views of this cut, not live runs.
-                for item in &mut projection.items {
-                    if let TranscriptItem::ActivityGroup(group) = item {
-                        group.open = false;
-                    }
-                }
-                projection.items
+                read_display_bundle(&snapshot, bundle.records)?.items
             };
             older = bundle.parent;
             projected.extend(items.into_iter().rev());
@@ -193,6 +205,61 @@ impl Session {
                 ..cursor
             }),
         }))
+    }
+
+    /// Expand one source omitted by a transcript page. This uses the same
+    /// committed cut as the page, with a larger, separate inspection budget.
+    /// `None` means the cursor or source no longer belongs to the selection.
+    pub fn transcript_evidence(
+        &self,
+        page: TranscriptCursor,
+        source: TranscriptSource,
+    ) -> Result<Option<TranscriptProjection>, SessionError> {
+        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        configure_connection(&connection)?;
+        let (snapshot, records) = {
+            let store = self.lock_store()?;
+            let index = &store.context_index;
+            if page.session != self.id()
+                || page.selection != index.selection
+                || page.cut > store.state.sequence
+                || source.entry == 0
+            {
+                return Ok(None);
+            }
+            // A page can contain at most this many roots. Never traverse an
+            // arbitrary prefix in response to a source supplied by a reader.
+            let mut root = page.root;
+            for _ in 1..PAGE_RECORDS {
+                if root <= source.entry {
+                    break;
+                }
+                root = index.display_parent(root);
+            }
+            if root != source.entry {
+                return Ok(None);
+            }
+            let dependents = index.display_bundle(root, page.cut);
+            if dependents.len() >= EVIDENCE_RECORDS {
+                return Err(SessionError::EntryTooLarge);
+            }
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            (
+                snapshot,
+                std::iter::once(root)
+                    .chain(dependents.iter().copied())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let mut remaining = EVIDENCE_BYTES;
+        let mut size = snapshot.prepare_cached("SELECT length(body) FROM entries WHERE seq=?1")?;
+        for &record in &records {
+            remaining = remaining
+                .checked_sub(encoded_len(&mut size, record)?)
+                .ok_or(SessionError::EntryTooLarge)?;
+        }
+        Ok(Some(read_display_bundle(&snapshot, records)?))
     }
 
     /// Bounded editable text observed from committed inputs across all branches.
