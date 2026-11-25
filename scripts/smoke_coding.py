@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
-"""Offline fail/correct/verify and saved-Session follow-up with real coding tools."""
+"""Run the same offline repo repair through the CLI and embedded Rust SDK."""
 import hashlib
 import json
 import os
+import shlex
 import stat
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 BINARY = Path(os.environ.get("ION_SMOKE_BIN", ROOT / "target/debug/ion"))
+EMBEDDED = Path(os.environ.get("ION_SMOKE_EMBEDDED_BIN", ROOT / "target/debug/examples/embedded"))
 
 SOURCE = """#!/usr/bin/env python3
 def add(a, b):
@@ -229,9 +232,10 @@ class Provider(BaseHTTPRequestHandler):
         pass
 
 
-def inspect_session(workspace, env):
+def inspect_session(workspace, env, session):
+    selection = ["--continue"] if session is None else ["--session", str(session)]
     inspected = subprocess.run(
-        [str(BINARY), "--cwd", str(workspace), "--continue", "inspect"],
+        [str(BINARY), "--cwd", str(workspace), *selection, "inspect"],
         env=env,
         check=True,
         capture_output=True,
@@ -241,11 +245,55 @@ def inspect_session(workspace, env):
     return json.loads(inspected.stdout)
 
 
-def main():
+def terminal_turn(workspace, env, resume, prompt, expected):
+    command = [str(BINARY), "--cwd", str(workspace)]
+    if resume:
+        command.append("--continue")
+    command.append("chat")
+    state = Path(env["TMPDIR"])
+    receipt = state / "terminal-exit"
+    receipt.unlink(missing_ok=True)
+    socket = workspace.parent / "terminal.sock"
+
+    def tmux(*args, check=True):
+        return subprocess.run(
+            ["tmux", "-S", str(socket), "-f", "/dev/null", *args],
+            env=env, check=check, capture_output=True, text=True, timeout=5,
+        ).stdout
+
+    launcher = f"{shlex.join(command)}; printf '%s\\n' \"$?\" > {shlex.quote(str(receipt))}"
+    try:
+        tmux("new-session", "-d", "-s", "ion", "-x", "100", "-y", "28",
+             "-c", str(workspace), "sh", "-c", launcher)
+        deadline = time.monotonic() + 30
+        while "›" not in (pane := tmux("capture-pane", "-p", "-t", "ion", check=False)):
+            assert not receipt.exists() and time.monotonic() < deadline, pane
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "-l", prompt)
+        tmux("send-keys", "-t", "ion", "Enter")
+        while True:
+            pane = tmux("capture-pane", "-p", "-S", "-", "-t", "ion", check=False)
+            if expected in pane and "›" in pane and inspect_session(workspace, env, None)["unfinished_turn"] is None:
+                break
+            assert not receipt.exists() and time.monotonic() < deadline, pane
+            time.sleep(0.02)
+        tmux("send-keys", "-t", "ion", "C-d", "C-d")
+        deadline = time.monotonic() + 5
+        while not receipt.exists() or not receipt.read_text():
+            assert time.monotonic() < deadline, pane
+            time.sleep(0.02)
+        assert receipt.read_text().strip() == "0", pane
+    finally:
+        tmux("kill-server", check=False)
+
+
+def qualify(client):
+    requests.clear()
     with tempfile.TemporaryDirectory(prefix="ion-coding-smoke-") as temporary:
         root = Path(temporary)
         workspace = root / "workspace"
         workspace.mkdir()
+        session = root / "embedded.sqlite" if client == "embedded" else None
         home = root / "home"
         home.mkdir()
         source_path = home / "calculator.py"
@@ -280,6 +328,7 @@ def main():
             TMPDIR=str(root / "tmp"),
             LANG="C.UTF-8",
             LC_ALL="C.UTF-8",
+            TERM="xterm-256color",
         )
         (root / "tmp").mkdir()
         try:
@@ -310,31 +359,35 @@ def main():
                 capture_output=True,
                 text=True,
             )
-            result = subprocess.run(
-                [str(BINARY), "--cwd", str(workspace), "run", PROMPT],
-                env=env,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            assert result.returncode == 0, (result.stdout, result.stderr)
-            assert result.stdout.strip() == "CODING_SMOKE_OK", result
+            if session is None:
+                coding = [str(BINARY), "--cwd", str(workspace)]
+                initial_command = [*coding, "run", PROMPT]
+                followup_command = [*coding, "--continue", "run", FOLLOWUP]
+            else:
+                coding = [
+                    str(EMBEDDED), "--cwd", str(workspace), "--session", str(session),
+                    "--provider", "smoke", "--model", "coding-model",
+                ]
+                initial_command = [*coding, PROMPT]
+                followup_command = [*coding, FOLLOWUP]
+            def run_turn(command, prompt, expected, resume=False):
+                if client == "terminal":
+                    terminal_turn(workspace, env, resume, prompt, expected)
+                else:
+                    result = subprocess.run(
+                        command, env=env, check=False, capture_output=True,
+                        text=True, timeout=120,
+                    )
+                    assert result.returncode == 0, (result.stdout, result.stderr)
+                    assert result.stdout.strip() == expected, result
+
+            run_turn(initial_command, PROMPT, "CODING_SMOKE_OK")
             assert stat.S_IMODE(source_path.stat().st_mode) == SOURCE_MODE
-            first_view = inspect_session(workspace, env)
+            first_view = inspect_session(workspace, env, session)
             assert first_view["unfinished_turn"] is None, first_view
             assert first_view["entries"][-1]["kind"] == "turn_ended", first_view["entries"][-1]
             assert first_view["entries"][-1]["data"]["reason"] == "completed", first_view["entries"][-1]
-            followup = subprocess.run(
-                [str(BINARY), "--cwd", str(workspace), "--continue", "run", FOLLOWUP],
-                env=env,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=120,
-            )
-            assert followup.returncode == 0, (followup.stdout, followup.stderr)
-            assert followup.stdout.strip() == "CODING_FOLLOWUP_OK", followup
+            run_turn(followup_command, FOLLOWUP, "CODING_FOLLOWUP_OK", resume=True)
         finally:
             server.shutdown()
             server.server_close()
@@ -365,7 +418,7 @@ def main():
         assert (literal / "calculator.py").read_text() == LITERAL_TRAP
         assert {path.name for path in literal.iterdir()} == {"calculator.py"}
         assert {path.name for path in home.iterdir()} == {"AGENTS.md", "calculator.py"}
-        view = inspect_session(workspace, env)
+        view = inspect_session(workspace, env, session)
         assert view["id"] == first_view["id"], (view["id"], first_view["id"])
         assert view["entries"][:len(first_view["entries"])] == first_view["entries"]
         assert view["unfinished_turn"] is None, view["unfinished_turn"]
@@ -394,8 +447,9 @@ def main():
         assert assistants[0]["termination"] == {"Incomplete": "MaxOutputTokens"}, assistants[0]
         reasons = [assistant["execution"]["route"]["reason"] for assistant in assistants]
         assert reasons == ["user_request"] + ["tool_continuation"] * 5 + ["user_request"], reasons
-        print("Ion rejected truncated mutations, reviewed home-scoped rules, repaired and directly ran ~/calculator.py without changing its mode or literal tilde neighbor, and reopened with original arguments and retained results: OK")
+        print(f"Ion {client}: rejected truncated mutations, repaired and verified the repository, and reopened with the same committed results: OK")
 
 
 if __name__ == "__main__":
-    main()
+    for client in ("headless", "embedded", "terminal"):
+        qualify(client)
