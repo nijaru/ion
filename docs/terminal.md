@@ -60,7 +60,7 @@ Command rows distinguish nonzero exits from signal termination. Recorded wait fa
 
 Use `/tools output TEXT` to find a top-level operation by a case-sensitive snippet from its recorded result, such as a test diagnostic. It searches text in the saved result, not the contents of raw captures. Open a match to inspect it without rerunning the command.
 
-When command output spills, **Full output** points to a temporary file for the stream. **Partial output** means the stream did not reach EOF. Open the file directly or copy it somewhere permanent. If it has expired, use [Session artifact export](sessions.md#read-an-artifact) to recover the retained bytes without rerunning the command.
+When command output spills, **Full output** points to a temporary file for the stream. **Partial output** means the stream did not reach EOF. Open the file directly or copy it somewhere permanent. If it’s gone, expand the result and press `s` when **save output** appears to [save the retained bytes](sessions.md#read-an-artifact) without rerunning the command.
 
 ## External editors and terminal state
 

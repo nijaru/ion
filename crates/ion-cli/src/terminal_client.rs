@@ -49,6 +49,7 @@ mod interaction;
 mod mcp;
 mod navigation;
 mod orientation;
+mod output;
 pub(crate) mod paint;
 mod picker;
 mod provider_usage;
@@ -431,6 +432,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     ui.restore_editor(source);
                                     ui.status = format!("Shell was not started: {error:#}");
                                 }
+                            }
+                        },
+                        Action::SaveOutput => {
+                            match output::start(&mut ui, runtime.session()) {
+                                Ok(()) => ui.status = "Saving output…".into(),
+                                Err(error) => ui.status = format!("Output was not saved: {error:#}"),
                             }
                         },
                         Action::CopyDetail => {
@@ -942,6 +949,7 @@ enum Action {
     Recover,
     PasteClipboard,
     CopyDetail,
+    SaveOutput,
     Command(CommandInput),
     Pick(PickerValue),
     Quit,
@@ -1351,6 +1359,7 @@ impl Frontend {
                     self.status = "Details closed".into();
                 }
             }
+            Some(KeyAction::SaveOutput) => return Action::SaveOutput,
             Some(KeyAction::Copy) => {
                 if self
                     .details
@@ -1863,11 +1872,7 @@ fn modal_rows(
             width,
             ui.themes.theme(),
         );
-    let controls = ui
-        .details
-        .as_ref()
-        .filter(|_| ui.gestures.prompt().is_none())
-        .map(|view| view.controls(&ui.keys));
+    let show_controls = ui.gestures.prompt().is_none();
     let status = visible_status(ui, operation);
     let status = if ui.question.is_some() {
         Some(status.map_or_else(
@@ -1877,8 +1882,7 @@ fn modal_rows(
     } else {
         status
     };
-    let status_height =
-        (usize::from(controls.is_some()) + usize::from(status.is_some())).min(height);
+    let status_height = (usize::from(show_controls) + usize::from(status.is_some())).min(height);
     let viewport = height.saturating_sub(status_height);
     let content = ui
         .details
@@ -1890,6 +1894,12 @@ fn modal_rows(
     rows.splice(..0, std::iter::repeat_n(Line::raw(""), padding));
     rows.resize_with(height, || Line::raw(""));
 
+    let controls = show_controls.then(|| {
+        ui.details
+            .as_ref()
+            .expect("inspector owns viewport")
+            .controls(&ui.keys)
+    });
     let mut next_row = viewport;
     for label in controls.iter().chain(status.iter()).take(status_height) {
         if next_row < height {

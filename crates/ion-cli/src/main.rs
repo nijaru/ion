@@ -414,7 +414,6 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Action::Inspect
                     | Action::Usage
                     | Action::Export { .. }
-                    | Action::Artifact { .. }
                     | Action::Turns
                     | Action::Compact { .. }
                     | Action::Clone
@@ -480,20 +479,6 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     print_stdout(format_args!("{}", target.display()))?;
                 } else {
                     io::stdout().write_all(transcript::render(&view).as_bytes())?;
-                }
-                return Ok(());
-            }
-            if let Action::Artifact { id } = action {
-                ensure!(existing.is_some(), "session does not exist");
-                let mut stdout = io::stdout().lock();
-                ensure!(
-                    !stdout.is_terminal(),
-                    "artifact output can contain binary data or terminal controls; redirect stdout to a file"
-                );
-                let receipt = Session::export_artifact(&path, id, &mut stdout)?;
-                stdout.flush()?;
-                if !receipt.complete {
-                    eprintln!("This capture is incomplete; only retained bytes were exported.");
                 }
                 return Ok(());
             }

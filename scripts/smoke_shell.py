@@ -4,7 +4,6 @@ import fcntl
 import json
 import os
 import pty
-import re
 import select
 import signal
 import sqlite3
@@ -273,11 +272,16 @@ for mode in ("inline", "fullscreen"):
                     segment_start = len(output)
                     os.write(master, b"\x0f" if mode == "inline" else b"/tool all\r")
                     step = 5
-                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment:
-                    if match := re.search(rb"Artifact ID: ([0-9a-f-]{36})", segment):
-                        artifact_id = match[1].decode()
-                        os.write(master, b"\x0f")
-                        step = 6
+                if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"save output" in segment:
+                    spills = [path for path in work.glob("ion-*") if path.is_file() and path.read_bytes() == b"PRIVATE_OUTPUT\n\xff"]
+                    assert len(spills) == 1, spills
+                    assert spills[0].stat().st_mode & 0o777 == 0o600
+                    spills[0].unlink()
+                    os.write(master, b"s")
+                    step = "save_output"
+                if step == "save_output" and b"Output saved to ion-output-" in segment:
+                    os.write(master, b"\x0f")
+                    step = 6
                 if step == 6 and b"Details closed" in segment:
                     os.write(master, b"/export session.txt\r")
                     step = 7
@@ -299,11 +303,11 @@ for mode in ("inline", "fullscreen"):
             assert entries[1][1]["output"]["value"]["stderr"] == "FAILED_STDERR\n" and entries[1][1]["output"]["value"]["exit_code"] == 7 and entries[1][1]["output"]["is_error"]
             assert entries[2][1]["output"]["value"]["stdout"] == "PRIVATE_OUTPUT\n\ufffd" and entries[2][0]["exclude_from_context"]
             output_path = Path(entries[2][1]["output"]["value"]["stdout_file"])
-            assert output_path.parent == work and output_path.read_bytes() == b"PRIVATE_OUTPUT\n\xff"
-            assert output_path.stat().st_mode & 0o777 == 0o600
-            output_path.unlink()
-            fallback = subprocess.check_output([binary, "--cwd", workspace, "--session", session_id, "artifact", artifact_id], env=env)
-            assert fallback == b"PRIVATE_OUTPUT\n\xff"
+            assert output_path.parent == work and not output_path.exists()
+            (saved,) = workspace.glob("ion-output-*/stdout-0.bin")
+            assert saved.read_bytes() == b"PRIVATE_OUTPUT\n\xff"
+            assert saved.stat().st_mode & 0o777 == 0o600
+            assert saved.parent.stat().st_mode & 0o777 == 0o700
             transcript = (workspace / "session.txt").read_text()
             assert "VISIBLE_OUTPUT" in transcript and "PRIVATE_OUTPUT" in transcript and "not shared with model" in transcript
             assert (workspace / "session.txt").stat().st_mode & 0o777 == 0o600

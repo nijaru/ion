@@ -139,11 +139,6 @@ pub(crate) enum Action {
     Usage,
     /// Print a text transcript, or save a new file (.html for offline HTML).
     Export { path: Option<PathBuf> },
-    /// Write a retained capture's exact bytes to redirected stdout.
-    Artifact {
-        /// Artifact UUID from the result inspector.
-        id: uuid::Uuid,
-    },
     /// List numbered Turns in a saved Session.
     Turns,
     /// Copy a saved conversation into an independent Session in this directory.
@@ -320,7 +315,7 @@ fn applicable(command: &str, option: &str) -> bool {
     let coding = matches!(command, "run" | "chat" | "rpc");
     let saved = matches!(
         command,
-        "inspect" | "usage" | "export" | "artifact" | "turns" | "clone" | "fork" | "compact"
+        "inspect" | "usage" | "export" | "turns" | "clone" | "fork" | "compact"
     );
     match option {
         "cwd" => {

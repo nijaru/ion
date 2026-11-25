@@ -431,6 +431,12 @@ impl DetailView {
         Some((number, self.page.as_ref()?.evidence.as_deref()?))
     }
 
+    pub(crate) fn visible_captures(&self) -> Option<&[ion_core::ArtifactRef]> {
+        let page = self.page.as_ref()?;
+        page.document
+            .visible_captures(self.top(page, self.viewport), self.viewport)
+    }
+
     pub(crate) fn controls(&self, keys: &crate::keybindings::KeyBindings) -> String {
         let title = self.tool.map_or_else(
             || {
@@ -449,8 +455,11 @@ impl DetailView {
                 )
             },
         );
+        let save = self.visible_captures().map_or_else(String::new, |_| {
+            format!("{} save output · ", keys.hint(KeyAction::SaveOutput))
+        });
         format!(
-            "{title} · {} / {} scroll · {} or {} closes",
+            "{save}{title} · {} / {} scroll · {} or {} closes",
             keys.hint(KeyAction::DetailUp),
             keys.hint(KeyAction::DetailDown),
             keys.hint(KeyAction::Cancel),

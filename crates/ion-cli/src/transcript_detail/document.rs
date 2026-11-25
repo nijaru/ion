@@ -54,7 +54,6 @@ pub(super) enum Field {
     DiffLabel,
     Diff,
     Artifact(usize),
-    ArtifactId(usize),
     Image(usize),
     ChildLabel,
     Readiness,
@@ -80,6 +79,7 @@ struct Section {
 #[derive(Default)]
 pub(super) struct Document {
     sections: Vec<Section>,
+    captures: Vec<(std::ops::Range<usize>, Vec<ion_core::ArtifactRef>)>,
     pub len: usize,
     previous: Option<EntryKey>,
     theme: Theme,
@@ -465,16 +465,26 @@ impl Document {
     }
 
     fn artifacts(&mut self, key: EntryKey, artifacts: &[ion_core::ArtifactRef], width: usize) {
+        if artifacts.is_empty() {
+            return;
+        }
+        let start = self.len;
         for (index, artifact) in artifacts.iter().enumerate() {
             let summary = crate::tool_output::artifact_summary(index, artifact);
             self.generated(key, Field::Artifact(index), &summary, width);
-            self.generated(
-                key,
-                Field::ArtifactId(index),
-                &format!("Artifact ID: {}", artifact.id),
-                width,
-            );
         }
+        self.captures.push((start..self.len, artifacts.to_vec()));
+    }
+
+    pub fn visible_captures(
+        &self,
+        start: usize,
+        height: usize,
+    ) -> Option<&[ion_core::ArtifactRef]> {
+        self.captures.iter().find_map(|(rows, captures)| {
+            (height > 0 && rows.start < start.saturating_add(height) && start < rows.end)
+                .then_some(captures.as_slice())
+        })
     }
 
     fn json(&mut self, key: EntryKey, field: JsonField, value: &Value, width: usize) {

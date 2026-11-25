@@ -92,13 +92,7 @@ The coding `history` tool searches recorded evidence without rerunning effects. 
 
 ### Read an artifact
 
-Copy the **Artifact ID** from the result inspector (`/tool N` for a tool or `/tool all` for a manual shell). From the Session’s workspace, run:
-
-```sh
-ion --session SESSION_ID artifact ARTIFACT_ID > command-output.log
-```
-
-Export only reads captures referenced by a committed result in the selected Session. It writes raw bytes, so redirect stdout rather than displaying it in a terminal. Ion warns on stderr if the capture is incomplete. Discard the output file if the command fails.
+If the **Full output** file is gone, expand the result with Ctrl-O (or use `/tool N`). Scroll until the capture summary is visible and press `s` (**save output**). Ion saves the first visible result’s retained streams as raw files in a new private `ion-output-…` directory in the workspace. It does not rerun the command. If the capture is incomplete, only the retained bytes are saved.
 
 The model can call `history` with `{"action":"artifact","entry":N,"artifact":0}` to read a referenced capture by one-based source entry and zero-based artifact index. For composed child calls, Code Mode uses `inspectSaved({kind:'artifact',parent,child,artifact:0})`, including committed children of the current invocation.
 

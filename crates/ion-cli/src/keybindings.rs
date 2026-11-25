@@ -81,6 +81,7 @@ actions! {
     PageDown, "tui.editor.pageDown", COMPOSER | DETAILS | CHOICE, ["pagedown"], "Scroll transcript/details or question preview/review down";
     DetailUp, "app.details.up", DETAILS, ["up"], "Scroll details up one row";
     DetailDown, "app.details.down", DETAILS, ["down"], "Scroll details down one row";
+    SaveOutput, "app.details.saveOutput", DETAILS, ["s"], "Save retained output from the first visible capture summary";
     DetailStart, "app.details.start", DETAILS, ["home"], "Jump to the start of the current detail page";
     DetailEnd, "app.details.end", DETAILS, ["end"], "Jump to the end of the current detail page";
     Earlier, "app.details.previousPage", DETAILS, ["left"], "Show earlier detail page";
@@ -98,6 +99,7 @@ impl KeyAction {
                 | Self::FollowUp
                 | Self::External
                 | Self::ExpandTools
+                | Self::SaveOutput
                 | Self::CycleReasoning
                 | Self::QuestionCollapse
                 | Self::Scope

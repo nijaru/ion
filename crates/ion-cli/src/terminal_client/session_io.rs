@@ -32,6 +32,10 @@ pub(super) enum ReadOutput {
     Fork(super::navigation::ForkPickerValue),
     Switch(PathBuf),
     Exported(PathBuf),
+    OutputSaved {
+        name: String,
+        incomplete: bool,
+    },
     RecoverySaved {
         id: u64,
         path: PathBuf,
@@ -588,6 +592,14 @@ pub(super) fn apply(
         }
         Ok(ReadOutput::Exported(path)) => {
             ui.status = format!("Transcript saved to {}", path.display())
+        }
+        Ok(ReadOutput::OutputSaved { name, incomplete }) => {
+            let note = if incomplete {
+                " (incomplete capture)"
+            } else {
+                ""
+            };
+            ui.status = format!("Output saved to {name}{note}");
         }
         Ok(ReadOutput::RecoverySaved { id, path }) => {
             ui.status = format!(
