@@ -343,8 +343,9 @@ impl Screen {
     /// Only the still-visible owned footprint can be erased; this transition
     /// cannot undo the emulator's earlier scrolling. Recognized coordinates
     /// include display cells, compact glyph indexes, and bottom-retaining
-    /// clipping that resets a cropped caret to top-left. Other incoherent
-    /// evidence defers primary writes: the old rows may include shell output.
+    /// clipping that resets a cropped caret to top-left. If a settled cursor
+    /// is in bounds but ownership is ambiguous, append a fresh row instead.
+    /// This can leave stale chrome in scrollback, but never erases guessed rows.
     pub fn reconcile_inline(
         &mut self,
         out: &mut impl Write,
@@ -360,13 +361,24 @@ impl Screen {
         }
         let width = width.max(1);
         let height = height.max(1);
-        let Ok(origin) = self.reflowed_origin(width, height, cursor) else {
+        if cursor.0 >= width || cursor.1 >= height {
             return Ok(false);
-        };
-        write!(out, "\x1b[0m")?;
-        for row in origin..height {
-            write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
         }
+        let origin = match self.reflowed_origin(width, height, cursor) {
+            Ok(origin) => {
+                write!(out, "\x1b[0m")?;
+                for row in origin..height {
+                    write!(out, "\x1b[{};1H\x1b[2K", row + 1)?;
+                }
+                origin
+            }
+            Err(_) => {
+                // Append at the viewport tail; CPR alone is not a license to
+                // clear its row. Keep all existing cells, including history.
+                write!(out, "\x1b[0m\x1b[{height};1H\r\n")?;
+                height - 1
+            }
+        };
         out.flush()?;
         self.width = width;
         self.screen_height = height;
@@ -380,11 +392,6 @@ impl Screen {
     }
 
     fn reflowed_origin(&self, width: u16, height: u16, cursor: (u16, u16)) -> io::Result<u16> {
-        if cursor.0 >= width || cursor.1 >= height {
-            return Err(io::Error::other(
-                "resize cursor is outside terminal geometry",
-            ));
-        }
         let offset = self
             .physical_cursor
             .0
@@ -1489,7 +1496,7 @@ mod tests {
         assert!(!screen.reconcile_inline(&mut out, 24, 7, (24, 5)).unwrap());
         assert!(out.is_empty());
         screen.resize_pending.as_mut().unwrap().after = Instant::now();
-        for cursor in [(24, 5), (5, 7), (4, 5)] {
+        for cursor in [(24, 5), (5, 7)] {
             let mut ambiguous = screen.staged();
             out.clear();
             assert!(!ambiguous.reconcile_inline(&mut out, 24, 7, cursor).unwrap());
@@ -1550,9 +1557,25 @@ mod tests {
             )
             .unwrap();
         out.clear();
-        assert!(!screen.reconcile_inline(&mut out, 2, 5, (0, 3)).unwrap());
-        assert!(out.is_empty());
-        assert_eq!(screen.origin, 3);
+        let mut terminal = vt100::Parser::new(5, 2, 16);
+        terminal.process(b"a\r\nb\r\nc\r\nd\r\ne");
+        assert!(screen.reconcile_inline(&mut out, 2, 5, (0, 3)).unwrap());
+        assert_eq!(screen.origin, 4);
+        assert!(!screen.reconciliation_pending());
+        assert_eq!(out, b"\x1b[0m\x1b[5;1H\r\n");
+        terminal.process(&out);
+        out.clear();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("ok")],
+                    cursor: Some((0, 0)),
+                },
+            )
+            .unwrap();
+        terminal.process(&out);
+        assert_eq!(all_rows(&mut terminal, 2), ["a", "b", "c", "d", "e", "ok"]);
     }
 
     #[test]
@@ -1674,12 +1697,12 @@ mod tests {
                 .unwrap();
             out.clear();
             assert!(
-                !screen
+                screen
                     .reconcile_inline(&mut out, 24, height, reported)
                     .unwrap()
             );
-            assert!(out.is_empty());
-            assert_eq!(screen.origin, 2);
+            assert_eq!(out, format!("\x1b[0m\x1b[{height};1H\r\n").as_bytes());
+            assert_eq!(screen.origin, height - 1);
         }
     }
 

@@ -392,7 +392,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         preparation_requests = None
         opened_active = closed_active = False
         sent_selected = closed_selected = False
-        active_start = tool_start = selected_start = 0
+        active_start = tool_start = selected_start = resize_start = 0
+        reported_unknown_reflow = False
         control_phase = None
         control_start = 0
         try:
@@ -407,6 +408,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                         data = b""
                     output.extend(data)
                     for reply in cursor.feed(data):
+                        if resized and not reported_unknown_reflow:
+                            # Stable geometry, but a cursor column neither of
+                            # Ion's native reflow predictions expects.
+                            reply = b"\x1b[25;99R"
+                            reported_unknown_reflow = True
                         os.write(master, reply)
                 if b"\xe2\x80\xba " in output and not sent_file_start:
                     assert b"\x1b[?1049h" not in output, "chat entered alternate screen before showing the inline composer"
@@ -452,9 +458,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
                     cursor.resize(30, 100)
                     os.kill(child.pid, signal.SIGWINCH)
+                    resize_start = len(output)
                     resized = True
-                if resized and not sent_tool:
-                    time.sleep(0.2)
+                if reported_unknown_reflow and b"\x1b[0m\x1b[30;1H\r\n" in output[resize_start:] and not sent_tool:
                     tool_start = len(output)
                     os.write(master, b"/tool all\r")
                     sent_tool = True
