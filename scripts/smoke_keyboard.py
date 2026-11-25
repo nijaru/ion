@@ -380,11 +380,14 @@ def exercise(mode, supported=True, panic=False, editor_fault=None, grapheme_mode
                 if mode == "inline":
                     checkpoint = len(output)
                     os.write(master, b"\x0f")
-                    until(lambda: b"Tool output: expanded" in output[checkpoint:])
-                    assert not terminal.alternate
+                    until(lambda: terminal.alternate and any(
+                        title in output[checkpoint:] for title in (b"Conversation", b"Tool 1:")
+                    ))
+                    assert terminal.stacks[1][-1] == expected
                     checkpoint = len(output)
                     os.write(master, b"\x0f")
-                    until(lambda: b"Tool output: compact" in output[checkpoint:])
+                    until(lambda: b"Details closed" in output[checkpoint:])
+                    assert terminal.stacks == [[4, expected], [8]], terminal.stacks
                     assert not terminal.alternate
                 # Visible answer text can precede Host settlement. Explicit
                 # quit joins either state; Ctrl-C could only request stop.

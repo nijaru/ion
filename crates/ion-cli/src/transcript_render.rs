@@ -753,7 +753,7 @@ fn render_shell(
         "  ",
         width,
         &detail.for_user_shell(),
-        4,
+        if output.is_error { 4 } else { 15 },
         !output.is_error,
     );
     crate::tool_output::render_artifacts(&mut rows, &output.artifacts, "  ", width, detail);

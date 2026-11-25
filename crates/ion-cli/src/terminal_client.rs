@@ -153,6 +153,7 @@ struct Frontend {
     theme_preview_name: Option<String>,
     theme_picker: Option<theme_selection::ThemePicker>,
     mode: TuiMode,
+    dedicated_pane: bool,
     output_detail: crate::tool_output::OutputDetail,
     inline_output_detail: Option<crate::tool_output::OutputDetail>,
     thinking_visibility: crate::transcript_render::ThinkingVisibility,
@@ -209,6 +210,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         },
         termination: init.termination,
         mode: init.tui_mode,
+        dedicated_pane: init.dedicated_pane,
         keys: init.keys,
         themes: init.themes,
         footer,
@@ -226,7 +228,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             .await
             .context("interactive chat requires a terminal")?);
         let terminal = terminal_owner.as_mut().expect("entered terminal");
-        screen_owner = Some(if init.dedicated_pane {
+        screen_owner = Some(if ui.dedicated_pane {
             let (width, height) = terminal.size()?;
             Screen::dedicated(width, height)
         } else {
@@ -1248,7 +1250,11 @@ impl Frontend {
                 Action::None
             }
             Some(KeyAction::ExpandTools) => {
-                self.toggle_tool_output();
+                if self.mode == TuiMode::Inline && !self.dedicated_pane {
+                    self.details = Some(DetailView::latest_output(self.conversation.items()));
+                } else {
+                    self.toggle_tool_output();
+                }
                 Action::None
             }
             Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
@@ -1338,6 +1344,7 @@ impl Frontend {
 
     fn detail_key(&mut self, key: KeyEvent) -> Action {
         match self.keys.action(DETAILS, key) {
+            Some(KeyAction::ExpandTools) if key.repeat => {}
             Some(KeyAction::Cancel | KeyAction::ExpandTools) => {
                 self.details = None;
                 if self.pickers.active().is_none() {

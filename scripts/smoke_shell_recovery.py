@@ -130,10 +130,6 @@ def qualify(case, excluded=False):
                            and program_ready(output))
             # Explicit NEW shell admission closes the interruption, not replays it.
             # Result-write faults recover in the same UI; crash cases reopen.
-            # Successful stdout is folded in compact mode. Exercise actual
-            # disclosure before checking the independent recorded output below.
-            os.write(master, b"/settings expanded\r")
-            wait_until(lambda: b"Tool output: expanded" in output)
             # Split the marker so only the executed output can contain it.
             os.write(master, b"!printf 'RECOVERY_%s' DONE\r")
             wait_until(lambda: b"RECOVERY_DONE" in output and b"Shell finished" in output)

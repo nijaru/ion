@@ -94,6 +94,27 @@ impl DetailView {
         }
     }
 
+    /// Open the latest recorded tool at its heading. If a manual shell run is
+    /// newer, the conversation inspector is the view that includes its output.
+    pub(crate) fn latest_output<'a>(items: impl IntoIterator<Item = &'a TranscriptItem>) -> Self {
+        let mut number = 0;
+        let mut latest = None;
+        for entry in entries(items.into_iter()) {
+            match entry {
+                Entry::Tool(activity) => {
+                    number += 1;
+                    if activity.result.is_some() {
+                        latest =
+                            NonZeroUsize::new(number).map(|number| (number, activity.identity));
+                    }
+                }
+                Entry::Item(TranscriptItem::UserShell(_)) => latest = None,
+                _ => {}
+            }
+        }
+        Self::new(latest)
+    }
+
     /// Canonical refresh invalidates measurement, not the reader's source point.
     pub fn invalidate(&mut self) {
         self.page = None;

@@ -252,13 +252,7 @@ for mode in ("inline", "fullscreen"):
                 if step == "editor_failure" and b"Editor failed" in segment and b"original draft retained" in segment and b"edited-from-editor" in segment:
                     (workspace / "editor.fail").unlink()
                     segment_start = len(output)
-                    # Compact successful stdout is intentionally folded. Select
-                    # disclosure before asserting visible output, not command echo.
-                    os.write(master, b"\x03\x03/settings expanded\r")
-                    step = "expanded"
-                if step == "expanded" and b"Tool output: expanded" in segment:
-                    segment_start = len(output)
-                    os.write(master, b"!printf '%s%s\\n' VISIBLE_ OUTPUT; while ! test -e release; do sleep 0.05; done\r")
+                    os.write(master, b"\x03\x03!printf '%s%s\\n' VISIBLE_ OUTPUT; while ! test -e release; do sleep 0.05; done\r")
                     step = "running"
                 if step == "running" and b"VISIBLE_OUTPUT" in segment and b"Running shell" in segment:
                     assert b"exit 0" not in segment, "output was not visible until settlement"
@@ -266,6 +260,7 @@ for mode in ("inline", "fullscreen"):
                     segment_start = len(output)
                     step = 2
                 if step == 2 and b"exit 0" in segment:
+                    assert b"VISIBLE_OUTPUT" in segment, "compact settlement hid short stdout"
                     segment_start = len(output)
                     os.write(master, b"!printf '%s%s\\n' FAILED_ STDERR >&2; exit 7\r")
                     step = 3
@@ -275,7 +270,7 @@ for mode in ("inline", "fullscreen"):
                     step = 4
                 if step == 4 and b"PRIVATE_OUTPUT" in segment and b"not shared with model" in segment and b"Full output (stdout):" in segment:
                     segment_start = len(output)
-                    os.write(master, b"/tool all\r")
+                    os.write(master, b"\x0f" if mode == "inline" else b"/tool all\r")
                     step = 5
                 if step == 5 and b"Conversation" in segment and b"PRIVATE_OUTPUT" in segment and b"Session artifact 0" in segment:
                     os.write(master, b"\x0f")

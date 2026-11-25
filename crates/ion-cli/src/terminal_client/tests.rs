@@ -1641,9 +1641,10 @@ fn operation_status_keeps_controls_and_stop_intent_visible() {
 
 #[test]
 fn tool_expansion_preserves_composer_and_viewport() {
-    for mode in [TuiMode::Inline, TuiMode::Fullscreen] {
+    for (mode, dedicated_pane) in [(TuiMode::Inline, true), (TuiMode::Fullscreen, false)] {
         let mut ui = Frontend {
             mode,
+            dedicated_pane,
             editor: Editor {
                 draft: "draft 🦀\nnext".into(),
                 cursor: 6,

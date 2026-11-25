@@ -1704,7 +1704,7 @@ fn grouped_tools_are_hierarchical_and_mutations_are_visually_distinct() {
                     "cargo test",
                     ActivityState::Completed,
                     Some(
-                        serde_json::json!({"stdout":"running\ntest result: ok. 148 passed","stderr":""}),
+                        serde_json::json!({"stdout":"running 148 tests\nunit tests passed\nintegration tests passed\ntest result: ok. 148 passed","stderr":""}),
                     ),
                 ),
             ],
@@ -1718,8 +1718,8 @@ fn grouped_tools_are_hierarchical_and_mutations_are_visually_distinct() {
     assert!(rendered.contains("├ Edited src/parser.rs · 2 replacements"));
     assert!(rendered.contains("└ Ran cargo test"));
     assert!(rendered.contains("  └ stdout"));
-    assert!(rendered.contains("stdout · 2 lines folded"));
-    assert!(!rendered.contains("test result: ok. 148 passed"));
+    assert!(rendered.contains("running 148 tests"));
+    assert!(rendered.contains("test result: ok. 148 passed"));
     let expanded = rows(
         &projection.items,
         100,

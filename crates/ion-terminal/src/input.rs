@@ -744,15 +744,23 @@ impl InputStream {
     }
 
     fn decode_key_bytes(&mut self, bytes: &[u8], maybe_more: bool) {
-        self.parser.parse(
-            bytes,
-            |event| {
-                if let Some(decoded) = Self::decode(event) {
-                    self.pending.push_back(decoded);
-                }
-            },
-            maybe_more,
-        );
+        let mut emit = |event| {
+            if let Some(decoded) = Self::decode(event) {
+                self.pending.push_back(decoded);
+            }
+        };
+        // Termwiz aliases raw LF and CR to Enter. Preserve legacy Ctrl-J
+        // using its CSI-u spelling before that distinction is lost. Paste
+        // bodies and terminal replies are already handled by the framers.
+        let mut segments = bytes.split(|byte| *byte == b'\n').peekable();
+        while let Some(segment) = segments.next() {
+            let followed_by_lf = segments.peek().is_some();
+            self.parser
+                .parse(segment, &mut emit, followed_by_lf || maybe_more);
+            if followed_by_lf {
+                self.parser.parse(b"\x1b[106;5u", &mut emit, true);
+            }
+        }
     }
 
     fn decode(event: term_input::InputEvent) -> Option<InputEvent> {
@@ -862,7 +870,7 @@ fn decode_code(code: term_input::KeyCode) -> KeyCode {
         term_input::KeyCode::Backspace | term_input::KeyCode::Char('\x08' | '\x7f') => {
             KeyCode::Backspace
         }
-        term_input::KeyCode::Enter | term_input::KeyCode::Char('\r' | '\n') => KeyCode::Enter,
+        term_input::KeyCode::Enter | term_input::KeyCode::Char('\r') => KeyCode::Enter,
         term_input::KeyCode::LeftArrow => KeyCode::Left,
         term_input::KeyCode::RightArrow => KeyCode::Right,
         term_input::KeyCode::UpArrow => KeyCode::Up,
@@ -1449,12 +1457,20 @@ mod tests {
         );
     }
 
-    #[test]
-    fn legacy_controls_and_extended_reports_have_explicit_aliases() {
+    #[tokio::test]
+    async fn legacy_controls_and_extended_reports_have_explicit_aliases() {
+        let (_sender, receiver) = mpsc::channel(1);
+        let mut input = stream(receiver);
         for (bytes, code, modifiers) in [
             (b"\x08".as_slice(), KeyCode::Backspace, Modifiers::NONE),
             (b"\t", KeyCode::Tab, Modifiers::NONE),
-            (b"\n", KeyCode::Enter, Modifiers::NONE),
+            (b"\n", KeyCode::Char('j'), Modifiers::CONTROL),
+            (
+                b"\x1b\n",
+                KeyCode::Char('j'),
+                Modifiers::CONTROL | Modifiers::ALT,
+            ),
+            (b"\x1b[13u", KeyCode::Enter, Modifiers::NONE),
             (b"\r", KeyCode::Enter, Modifiers::NONE),
             (b"\x1d", KeyCode::Char('\x1d'), Modifiers::NONE),
             (b"\x1b[93;5u", KeyCode::Char(']'), Modifiers::CONTROL),
@@ -1463,10 +1479,10 @@ mod tests {
             (b"\x1b[106;5u", KeyCode::Char('j'), Modifiers::CONTROL),
             (b"\x1b[109;5u", KeyCode::Char('m'), Modifiers::CONTROL),
         ] {
-            let events = InputParser::new().parse_as_vec(bytes, false);
-            assert_eq!(events.len(), 1, "{bytes:?}");
+            input.parse(bytes, false);
+            assert_eq!(input.pending.len(), 1, "{bytes:?}: {:?}", input.pending);
             assert_eq!(
-                InputStream::decode(events[0].clone()),
+                input.pending.pop_front(),
                 Some(InputEvent::Key(KeyEvent::new(code, modifiers))),
                 "{bytes:?}"
             );

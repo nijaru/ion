@@ -483,14 +483,20 @@ def exercise_slash_input(work, base_env, endpoint):
             terminal.output.clear()
             terminal.send("/slash-capture payload")
             terminal.send(b"\x0f")
-            terminal.wait(lambda: "Tool output: expanded" in terminal.text())
-            assert "Conversation ·" not in terminal.text(), "expansion stole composer input"
+            if mode == "inline":
+                terminal.wait(lambda: "Conversation ·" in terminal.text())
+                terminal.send(b"\x0f")
+                terminal.wait(lambda: "Details closed" in terminal.text())
+            else:
+                terminal.wait(lambda: "Tool output: expanded" in terminal.text())
+                assert "Conversation ·" not in terminal.text(), "expansion stole composer input"
             terminal.send("_expanded\r")
             terminal.wait(lambda: len(requests) == before + 4 and b"state=done" in terminal.output)
             assert user_text(requests[-1]) == "EXPANDED_payload_expanded", requests[-1]
             terminal.output.clear()
-            terminal.send(b"\x0f")
-            terminal.wait(lambda: "Tool output: compact" in terminal.text())
+            if mode == "fullscreen":
+                terminal.send(b"\x0f")
+                terminal.wait(lambda: "Tool output: compact" in terminal.text())
             release.clear()
             terminal.output.clear()
             terminal.send("WAIT_HISTORY\r")
@@ -511,7 +517,7 @@ def exercise_slash_input(work, base_env, endpoint):
             assert started == [*literals, "EXPANDED_payload_expanded", "WAIT_HISTORY"], started
             assert steered == [steering], steered
             terminal.output.clear()
-            terminal.send(b"\x0f")
+            terminal.send("/settings expanded\r" if mode == "inline" else b"\x0f")
             terminal.wait(lambda: "Tool output: expanded" in terminal.text())
             terminal.send("EXIT_EXPANDED\r")
             terminal.wait(lambda: len(requests) == before + 7 and b"state=done" in terminal.output)
@@ -919,10 +925,10 @@ def exercise_keybindings(work, base_env, endpoint):
             terminal.wait(lambda: (cwd / "key.ready").exists())
             pid = int((cwd / "key.pid").read_text())
             terminal.send(b"\x1bo")
-            terminal.wait(lambda: "Tool output: expanded" in terminal.text())
+            terminal.wait(lambda: ("Conversation ·" if mode == "inline" else "Tool output: expanded") in terminal.text())
             terminal.output.clear()
             terminal.send(b"\x1bo")
-            terminal.wait(lambda: "Tool output: compact" in terminal.text())
+            terminal.wait(lambda: ("Details closed" if mode == "inline" else "Tool output: compact") in terminal.text())
             terminal.send(b"/tool all\x13")
             terminal.wait(lambda: "Conversation ·" in terminal.text())
             terminal.send(b"\x03\x03")

@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                 calls = [
                     ("read", {"path": "data.txt"}),
                     ("edit", {"path": "data.txt", "base_digest": data_digest, "edits": [{"old_text": "observed data", "new_text": "UPDATED_SNAPSHOT"}]}),
-                    ("exec", {"command": "printf 'FIRST_%s\\nmid-one\\nmid-two\\nCOMMAND_OUTPUT_%s\\n' HIDDEN ONCE"}),
+                    ("exec", {"command": "printf 'FIRST_%s\\nmid-one\\nmid-two\\nmid-three\\nCOMMAND_OUTPUT_%s\\n' HIDDEN ONCE"}),
                 ] if len(requests) == 1 else [
                     ("exec", {"command": "printf 'FUTURE_%s\\nmid-one\\nmid-two\\nfuture-last\\n' FIRST"}),
                 ]
@@ -135,20 +135,27 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         while not composer_ready(pane := tmux("capture-pane", "-p", "-t", "ion")):
             assert time.monotonic() < deadline, f"inline composer did not become ready:\n{pane}"
             time.sleep(0.02)
-        tmux("send-keys", "-t", "ion", "-l", "INPUT_ONCE: read data.txt and check it")
+        tmux("send-keys", "-t", "ion", "-l", "INPUT_ONCE: read data.txt")
+        tmux("send-keys", "-t", "ion", "C-j")
+        tmux("send-keys", "-t", "ion", "-l", "and check it")
+        while "and check it" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
+            assert time.monotonic() < deadline, f"multiline draft did not paint:\n{pane}"
+            time.sleep(0.02)
+        assert "INPUT_ONCE: read data.txt" in pane and not requests, pane
         tmux("send-keys", "-t", "ion", "Enter")
         while "FINAL_ONCE" not in tmux("capture-pane", "-p", "-t", "ion"):
             assert time.monotonic() < deadline, "inline Turn did not finish"
             time.sleep(0.02)
 
         wait_completed_turns(1)
+        assert requests[0]["messages"][-1]["content"] == "INPUT_ONCE: read data.txt\nand check it"
 
         def check_history():
             history = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
             for marker in ("INPUT_ONCE", "NARRATIVE_ONCE", "FINAL_ONCE", "-observed data", "+UPDATED_SNAPSHOT"):
                 assert history.count(marker) == 1, f"{marker} was republished or lost:\n{history}"
-            assert history.count("stdout · 4 lines folded · /tools") == 1, f"shared scrollback lost the folded output or its inspector hint:\n{history}"
-            assert "COMMAND_OUTPUT_ONCE" not in history, "compact success output was not folded"
+            assert history.count("1 earlier stdout lines · /tools") == 1, f"shared scrollback lost the preview disclosure:\n{history}"
+            assert history.count("COMMAND_OUTPUT_ONCE") == 1, f"command tail was lost or duplicated:\n{history}"
             assert "Working" not in history, f"mutable operation chrome leaked into history:\n{history}"
             assert "THINK_1" not in history and "THINK_2" not in history, "hidden thinking was published retroactively"
             assert "SIGNATURE_PRIVATE" not in history and "ENCRYPTED_PRIVATE" not in history, "opaque reasoning leaked"
@@ -189,9 +196,9 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         time.sleep(0.1)
         check_history()
 
-        # A marker from folded stdout is not present in the exec arguments.
-        # Search saved results, then open the original numbered evidence.
-        tmux("send-keys", "-t", "ion", "-l", "/tools output COMMAND_OUTPUT_ONCE")
+        # Search for a marker omitted from the preview and not present in
+        # the exec arguments, then open the original numbered evidence.
+        tmux("send-keys", "-t", "ion", "-l", "/tools output FIRST_HIDDEN")
         tmux("send-keys", "-t", "ion", "Enter")
         while "Recorded tool output · 1 match(es)" not in (pane := tmux("capture-pane", "-p", "-t", "ion")):
             assert time.monotonic() < deadline, f"recorded output search did not find the command:\n{pane}"
@@ -213,7 +220,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
         assert len(requests) == 2, "searching saved results made a model request"
         check_history()
 
-        # Tool expansion in a shared pane must keep the inline draft and
+        # Inspection in a shared pane must keep the inline draft and
         # leave previously published history untouched.
         viewport_draft = "EXPANDED_UNSENT café 界 👩‍💻"
         tmux("send-keys", "-t", "ion", "-l", viewport_draft)
@@ -221,18 +228,20 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             assert time.monotonic() < deadline, "expanded-view draft did not paint"
             time.sleep(0.02)
         tmux("send-keys", "-t", "ion", "C-o")
-        while "Tool output: expanded" not in tmux("capture-pane", "-p", "-t", "ion"):
-            assert time.monotonic() < deadline, "draft-preserving expanded viewport did not open"
+        while True:
+            pane = tmux("capture-pane", "-p", "-t", "ion")
+            if "Tool 3: exec" in pane and "FIRST_HIDDEN" in pane:
+                break
+            assert time.monotonic() < deadline, f"Ctrl-O did not show recorded output:\n{pane}"
             time.sleep(0.02)
-        assert tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip() == "0"
-        check_history()
+        assert tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip() == "1"
         tmux("send-keys", "-t", "ion", "C-o")
         while True:
             pane = tmux("capture-pane", "-p", "-t", "ion")
             alternate = tmux("display-message", "-p", "-t", "ion", "#{alternate_on}").strip()
-            if alternate == "0" and "Tool output: compact" in pane and viewport_draft in pane:
+            if alternate == "0" and "Details closed" in pane and viewport_draft in pane:
                 break
-            assert time.monotonic() < deadline, f"collapsed viewport did not restore the draft (alternate={alternate}):\n{pane}"
+            assert time.monotonic() < deadline, f"closing inspection did not restore the draft (alternate={alternate}):\n{pane}"
             time.sleep(0.02)
         restored = tmux("capture-pane", "-p", "-t", "ion", "-S", "-")
         assert restored.count(viewport_draft) == 1, f"expanded viewport custody failed (alternate={tmux('display-message', '-p', '-t', 'ion', '#{alternate_on}').strip()}):\n{restored}"

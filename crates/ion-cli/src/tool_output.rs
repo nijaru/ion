@@ -67,7 +67,10 @@ impl<'a> RenderOptions<'a> {
     }
 
     pub(crate) fn details_hint(&self) -> &str {
-        self.expand_hint.as_deref().unwrap_or(self.inspect_command)
+        match self.detail {
+            OutputDetail::Compact => self.expand_hint.as_deref().unwrap_or(self.inspect_command),
+            OutputDetail::Expanded => self.inspect_command,
+        }
     }
 }
 
@@ -119,14 +122,15 @@ pub(crate) fn render_activity(
         return;
     };
     if activity.activity.kind == ToolActivityKind::Command {
+        let successful = activity.state == ActivityState::Completed && !result.is_error;
         render_command(
             rows,
             &result.value,
             prefix,
             width,
             detail,
-            3,
-            activity.state == ActivityState::Completed && !result.is_error,
+            if successful { 4 } else { 3 },
+            successful,
         );
     }
     if !(detail.detail == OutputDetail::Compact && successful_read(activity))
@@ -330,41 +334,20 @@ pub(crate) fn render_command(
         let incomplete = output[format!("{stream}_complete")].as_bool() == Some(false);
         let truncated = output[format!("{stream}_truncated")].as_bool() == Some(true);
         if let Some(text) = output[stream].as_str().filter(|text| !text.is_empty()) {
-            let line_count = text.lines().count();
-            let fold_success = match field {
-                // Like Pi's collapsed output, keep the ending of a noisy
-                // command visible even when the full capture spills.
-                Field::Stdout => !truncated || incomplete,
-                _ => line_count > compact_lines,
-            };
-            if successful && detail.detail == OutputDetail::Compact && fold_success {
-                let unit = if line_count == 1 { "line" } else { "lines" };
-                note(
-                    rows,
-                    prefix,
-                    &format!(
-                        "{stream} · {line_count} {unit} folded · {}",
-                        detail.details_hint()
-                    ),
-                    width,
-                    detail.theme,
-                );
-            } else {
-                note(rows, prefix, stream, width, detail.theme);
-                render_text(
-                    rows,
-                    text,
-                    prefix,
-                    field,
-                    width,
-                    detail,
-                    if failures_first && field == Field::Stderr {
-                        Preview::Bookends(compact_lines)
-                    } else {
-                        Preview::Tail(compact_lines)
-                    },
-                );
-            }
+            note(rows, prefix, stream, width, detail.theme);
+            render_text(
+                rows,
+                text,
+                prefix,
+                field,
+                width,
+                detail,
+                if failures_first && field == Field::Stderr {
+                    Preview::Bookends(compact_lines)
+                } else {
+                    Preview::Tail(compact_lines)
+                },
+            );
         }
         if incomplete {
             note(
@@ -767,7 +750,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn successful_compact_commands_fold_stdout_and_long_stderr() {
+    fn command_previews_keep_short_stdout_and_bound_long_stderr() {
         let mut activity = TranscriptActivity {
             identity: ion_core::TranscriptActivityIdentity::Tool(ion_core::ToolOccurrence {
                 assistant_entry: 2,
@@ -792,11 +775,11 @@ pub(crate) mod tests {
         };
         let keys = crate::keybindings::KeyBindings::default();
         let theme = Theme::default();
-        for (state, mode, folded) in [
+        for (state, mode, compact) in [
             (ActivityState::Completed, OutputDetail::Compact, true),
             (ActivityState::Completed, OutputDetail::Expanded, false),
-            (ActivityState::Failed, OutputDetail::Compact, false),
-            (ActivityState::TimedOut, OutputDetail::Compact, false),
+            (ActivityState::Failed, OutputDetail::Compact, true),
+            (ActivityState::TimedOut, OutputDetail::Compact, true),
         ] {
             activity.state = state;
             activity.result.as_mut().unwrap().is_error = state != ActivityState::Completed;
@@ -819,10 +802,18 @@ pub(crate) mod tests {
                 .map(|row| row.line.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert_eq!(text.contains("OBSERVED_STDOUT"), !folded, "{text}");
-            assert_eq!(text.contains("stdout · 1 line folded"), folded, "{text}");
-            assert_eq!(text.contains("stderr · 5 lines folded"), folded, "{text}");
-            assert_eq!(text.contains("OBSERVED_STDERR"), !folded, "{text}");
+            assert!(text.contains("OBSERVED_STDOUT"), "{text}");
+            assert!(text.contains("OBSERVED_STDERR"), "{text}");
+            assert_eq!(
+                text.contains("1 earlier stderr lines"),
+                compact && state == ActivityState::Completed,
+                "{text}"
+            );
+            assert_eq!(
+                text.contains("2 middle stderr lines"),
+                compact && state != ActivityState::Completed,
+                "{text}"
+            );
         }
         activity.state = ActivityState::Completed;
         let result = activity.result.as_mut().unwrap();
@@ -874,7 +865,7 @@ pub(crate) mod tests {
                 .map(|row| row.line.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");
-            assert_eq!(text.contains("PASSED"), complete, "{text}");
+            assert!(text.contains("PASSED"), "{text}");
             assert!(
                 !text.contains("BEGIN") && !text.contains("progress 1"),
                 "{text}"

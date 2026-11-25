@@ -41,7 +41,7 @@ actions! {
     External, "app.editor.external", EDIT, ["ctrl+g"], "Open external editor";
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
     Copy, "app.message.copy", COMPOSER | DETAILS, ["ctrl+x"], "Copy answer or selected tool evidence";
-    ExpandTools, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Expand/collapse tool output; close raw evidence inspection";
+    ExpandTools, "app.tools.expand", COMPOSER | DETAILS, ["ctrl+o"], "Inspect output (shared inline) or expand/collapse it; close inspection";
     FollowUp, "app.message.followUp", COMPOSER, ["alt+enter"], "Queue a follow-up while busy; submit normally when idle";
     Dequeue, "app.message.dequeue", COMPOSER, ["alt+up"], "Withdraw queued steering and follow-ups; cycle returned drafts";
     Scope, "tui.select.toggleScope", PICKER, ["tab"], "Toggle model shortlist/all routes or launch Session folder scope";

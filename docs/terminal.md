@@ -50,9 +50,9 @@ Unsaved recovery sources and receipt fences are lost when the process exits. Sav
 
 Manual `!` and `!!` commands and direct agent-run commands show recent output while they run. When the command finishes, the saved result replaces the live preview.
 
-Ctrl-O expands or collapses tool output without switching between inline and fullscreen. In a dedicated pane it also redraws earlier tool output in scrollback. In a shared shell pane it changes live and future output only. Folded tool rows point to `/tools`, and folded `!` shell output points to `/tool all`, so you can inspect earlier results without rewriting the terminal's scrollback.
+In a shared inline pane, Ctrl-O opens the latest tool result without rewriting scrollback. If the most recent output is from a manual shell run, it opens the conversation inspector instead. Press Esc or Ctrl-O to return to the draft. In fullscreen or a dedicated pane, Ctrl-O expands or collapses tool output in place.
 
-Compact mode hides successful file contents, directory listings, and search matches. It keeps result counts, partial ranges, capture warnings, and errors visible. Expand or use `/tool N` to see what was recorded.
+Compact mode shows recent command output, with a longer preview for manual `!` and `!!` commands. It hides successful file contents, directory listings, and search matches while keeping result counts, partial ranges, capture warnings, and errors visible. Use `/tool N` for a specific result or `/tool all` for the conversation, including manual shell output.
 
 Mutation rows show recorded line additions/removals for that operation, not repository totals. Counts cover the snapshot diff even when patch capture is truncated; an uncaptured comparison is reported separately from write success. Expansion shows recorded directory entries, file-search results and remote-tool text or structured values. It cannot recover data omitted during capture.
 
