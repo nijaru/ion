@@ -1,4 +1,4 @@
-//! Real process loss after a host effect but before its observation is committed.
+//! Real process loss at the observation boundary of an independently owned HTTP effect.
 use anyhow::{Result, ensure};
 use ion_ai::{
     BoxFuture, Content, Message, ModelRef, ModelResponse, ModelStreamEvent, ResponseTermination,
@@ -14,21 +14,32 @@ use ion_core::{
 };
 use std::{
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Write},
-    path::{Path, PathBuf},
+    io::{BufRead, BufReader, Read, Write},
+    net::{TcpListener, TcpStream},
+    path::Path,
     process::{Child, Command, Stdio},
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
 
-struct Effect(PathBuf, tokio::sync::Semaphore);
+const REMOTE_RESULT: &str = "remote effect accepted";
+
+struct Effect {
+    endpoint: String,
+    client: reqwest::Client,
+    ready: tokio::sync::Semaphore,
+}
 impl ToolSource for Effect {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
         vec![ToolRegistration::new(
             ToolDefinition::external(ToolSpec {
                 name: "effect".into(),
-                description: "Append one host effect.".into(),
+                description: "Submit one independently owned HTTP mutation.".into(),
                 input_schema: serde_json::json!({"type":"object","properties":{}}),
             }),
             self,
@@ -42,30 +53,25 @@ impl ToolExecutor for Effect {
     ) -> BoxFuture<'a, ToolOutput> {
         let stop = invocation.stop().clone();
         Box::pin(async move {
-            let _dispatch = self.1.acquire().await.unwrap();
-            let mut file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&self.0)
-                .unwrap();
-            file.write_all(b"effect\n").unwrap();
-            file.sync_all().unwrap();
-            println!("EFFECT_OBSERVED");
-            // The fixture is killed here: the real effect is independently durable,
-            // but no ToolOutput has reached Core. There is no replay suppression.
-            stop.cancelled().await;
-            ToolOutput {
-                value: serde_json::json!("effect"),
-                images: Vec::new(),
-                artifacts: Vec::new(),
-                is_error: false,
+            let _dispatch = self.ready.acquire().await.unwrap();
+            tokio::select! {
+                () = stop.cancelled() => ToolOutput {
+                    value: serde_json::json!("effect wait stopped"),
+                    artifacts: Vec::new(),
+                    images: Vec::new(),
+                    is_error: true,
+                },
+                result = async {
+                    self.client.post(&self.endpoint).send().await?.error_for_status()?.text().await
+                } => ToolOutput::success(serde_json::json!(result.expect("loopback effect response"))),
             }
         })
     }
 }
 struct FixtureService {
     inner: ScriptedModelService,
-    hold_first: std::sync::atomic::AtomicBool,
+    calls: AtomicUsize,
+    hold_at: Option<usize>,
     entered: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
 }
@@ -84,10 +90,11 @@ impl ion_ai::ModelService for FixtureService {
         request: ion_ai::ModelRequest,
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         Box::pin(async move {
-            if self
-                .hold_first
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-            {
+            let index = self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.hold_at == Some(index) {
+                if index == 1 {
+                    println!("AFTER_OBSERVATION");
+                }
                 self.entered.notify_one();
                 self.release.acquire().await.unwrap().forget();
             }
@@ -150,7 +157,7 @@ fn message() -> Message {
     Message::user_input("one delivery".into(), [])
 }
 
-async fn worker(root: &Path, mode: &str) {
+async fn worker(root: &Path, mode: &str, endpoint: String, observed: bool) {
     let path = root.join("session.db");
     let session = Arc::new(if mode == "effect" {
         Session::create(&path, None).unwrap()
@@ -182,14 +189,20 @@ async fn worker(root: &Path, mode: &str) {
     };
     let service = Arc::new(FixtureService {
         inner: ScriptedModelService::new(scripts),
-        hold_first: std::sync::atomic::AtomicBool::new(matches!(mode, "resume" | "cancel")),
+        calls: AtomicUsize::new(0),
+        hold_at: match mode {
+            "resume" | "cancel" => Some(0),
+            "effect" => Some(1), // freeze after Core commits the HTTP observation
+            _ => None,
+        },
         entered: tokio::sync::Notify::new(),
         release: tokio::sync::Semaphore::new(0),
     });
-    let effect = Arc::new(Effect(
-        root.join("effects"),
-        tokio::sync::Semaphore::new(usize::from(mode != "effect")),
-    ));
+    let effect = Arc::new(Effect {
+        endpoint,
+        client: reqwest::Client::builder().no_proxy().build().unwrap(),
+        ready: tokio::sync::Semaphore::new(usize::from(mode != "effect")),
+    });
     let application = Arc::new(Fixture {
         service: service.clone(),
         effect: effect.clone(),
@@ -226,7 +239,7 @@ async fn worker(root: &Path, mode: &str) {
         };
         assert_eq!(metadata, "busy retry");
         // Crash only after the busy reconciliation assertions have run.
-        effect.1.add_permits(1);
+        effect.ready.add_permits(1);
     } else {
         let before = session.view().unwrap().entries;
         let RequestAdmission::Existing { receipt, metadata } = control
@@ -442,11 +455,32 @@ async fn worker(root: &Path, mode: &str) {
                     .messages
                     .iter()
                     .flat_map(|message| &message.content)
-                    .any(|part| matches!(part, Content::ToolResult(result) if result.is_error))
+                    .any(
+                        |part| matches!(part, Content::ToolResult(result) if if observed {
+                            !result.is_error && result.result == REMOTE_RESULT
+                        } else {
+                            result.is_error
+                        })
+                    )
             );
         }
     }
-    assert!(session.view().unwrap().entries.iter().any(|entry| matches!(entry, SessionEntry::ToolResult { result, .. } if matches!(result.outcome, ToolOutcome::Unknown))));
+    let outcomes = view
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::ToolResult { result, .. } => Some(&result.outcome),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        match outcomes.as_slice() {
+            [ToolOutcome::Observed { output, .. }] => observed && output.value == REMOTE_RESULT,
+            [ToolOutcome::Unknown] => !observed,
+            _ => false,
+        },
+        "recovery changed or duplicated the original HTTP observation: {outcomes:?}"
+    );
     assert_eq!(fs::read(root.join("effects")).unwrap(), b"effect\n");
     let requests = service.requests();
     assert_eq!(
@@ -493,7 +527,7 @@ impl Drop for OwnedChild {
         let _ = self.0.wait();
     }
 }
-fn child(root: &Path, mode: &str) -> OwnedChild {
+fn child(root: &Path, mode: &str, http: &HttpEffect, observed: bool) -> OwnedChild {
     OwnedChild(
         Command::new(std::env::current_exe().unwrap())
             .args([
@@ -503,12 +537,101 @@ fn child(root: &Path, mode: &str) -> OwnedChild {
             ])
             .env("ION_SUBMISSION_FAULT_ROOT", root)
             .env("ION_SUBMISSION_FAULT_MODE", mode)
+            .env("ION_SUBMISSION_FAULT_ENDPOINT", &http.endpoint)
+            .env(
+                "ION_SUBMISSION_FAULT_OBSERVED",
+                if observed { "1" } else { "0" },
+            )
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .unwrap(),
     )
 }
+/// The effect owner lives outside both Session workers. It logs every POST,
+/// including a replay, and never deduplicates a request on the agent's behalf.
+struct HttpEffect {
+    endpoint: String,
+    effect: mpsc::Receiver<()>,
+    stop: mpsc::Sender<()>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+impl HttpEffect {
+    fn start(root: &Path, observed: bool) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = format!("http://{}/effect", listener.local_addr().unwrap());
+        let (notify, effect) = mpsc::channel();
+        let (stop, shutdown) = mpsc::channel();
+        let effects = root.join("effects");
+        let thread = std::thread::spawn(move || {
+            let mut first = true;
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        read_post(&mut stream);
+                        let mut file = OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&effects)
+                            .unwrap();
+                        file.write_all(b"effect\n").unwrap();
+                        file.sync_all().unwrap();
+                        notify.send(()).unwrap();
+                        if first && !observed {
+                            // No response bytes before the process dies. Do not
+                            // hold the listener during the continuation attempt.
+                            let mut byte = [0];
+                            let _ = stream.read(&mut byte);
+                        } else {
+                            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{REMOTE_RESULT}", REMOTE_RESULT.len()).unwrap();
+                        }
+                        first = false;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        if !matches!(
+                            shutdown.recv_timeout(Duration::from_millis(10)),
+                            Err(mpsc::RecvTimeoutError::Timeout)
+                        ) {
+                            break;
+                        }
+                    }
+                    Err(error) => panic!("effect listener: {error}"),
+                }
+            }
+        });
+        Self {
+            endpoint,
+            effect,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+impl Drop for HttpEffect {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
+
+fn read_post(stream: &mut TcpStream) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).unwrap();
+    assert_eq!(line, "POST /effect HTTP/1.1\r\n");
+    loop {
+        line.clear();
+        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
+        if line == "\r\n" {
+            break;
+        }
+    }
+}
+
 #[test]
 fn durable_submission_survives_process_loss() {
     if let Some(root) = std::env::var_os("ION_SUBMISSION_FAULT_ROOT") {
@@ -519,42 +642,61 @@ fn durable_submission_survives_process_loss() {
         runtime.block_on(worker(
             Path::new(&root),
             &std::env::var("ION_SUBMISSION_FAULT_MODE").unwrap(),
+            std::env::var("ION_SUBMISSION_FAULT_ENDPOINT").unwrap(),
+            std::env::var("ION_SUBMISSION_FAULT_OBSERVED").unwrap() == "1",
         ));
         return;
     }
     let root = std::env::temp_dir().join(format!("ion-submission-fault-{}", uuid::Uuid::now_v7()));
     fs::create_dir(&root).unwrap();
-    for mode in ["recover", "resume", "prefix", "cancel"] {
-        let case = root.join(mode);
+    for (mode, observed) in [
+        ("recover", false),
+        ("resume", false),
+        ("prefix", false),
+        ("cancel", false),
+        ("resume", true),
+    ] {
+        let case = root.join(format!("{mode}-{observed}"));
         fs::create_dir(&case).unwrap();
         let root = &case;
-        let mut first = child(root, "effect");
-        let stdout = first.0.stdout.take().unwrap();
-        let (tx, rx) = mpsc::channel();
-        let reader = std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let line = line.unwrap();
-                if line == "EFFECT_OBSERVED" {
-                    tx.send(()).unwrap();
-                    break;
-                }
-            }
+        let http = HttpEffect::start(root, observed);
+        let mut first = child(root, "effect", &http, observed);
+        let marker = observed.then(|| {
+            let stdout = first.0.stdout.take().unwrap();
+            let (tx, rx) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                let found = BufReader::new(stdout)
+                    .lines()
+                    .any(|line| line.unwrap() == "AFTER_OBSERVATION");
+                let _ = tx.send(found);
+            });
+            (rx, reader)
         });
-        rx.recv_timeout(Duration::from_secs(15))
+        http.effect
+            .recv_timeout(Duration::from_secs(15))
             .expect("effect must become independently observable");
+        if let Some((rx, _)) = &marker {
+            assert!(
+                rx.recv_timeout(Duration::from_secs(15))
+                    .expect("next provider request did not start")
+            );
+        }
         assert_eq!(fs::read(root.join("effects")).unwrap(), b"effect\n");
         first.0.kill().unwrap();
         assert!(!first.0.wait().unwrap().success());
-        reader.join().unwrap();
+        if let Some((_, reader)) = marker {
+            reader.join().unwrap();
+        }
         let view = Session::inspect(root.join("session.db")).unwrap();
         assert_eq!(view.unfinished_turn, Some(1));
-        assert!(
-            !view
-                .entries
+        assert_eq!(
+            view.entries
                 .iter()
-                .any(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+                .filter(|entry| matches!(entry, SessionEntry::ToolResult { .. }))
+                .count(),
+            usize::from(observed)
         );
-        let mut second = child(root, mode);
+        let mut second = child(root, mode, &http, observed);
         let deadline = Instant::now() + Duration::from_secs(15);
         loop {
             if let Some(status) = second.0.try_wait().unwrap() {
@@ -564,6 +706,7 @@ fn durable_submission_survives_process_loss() {
             assert!(Instant::now() < deadline, "recovery child timed out");
             std::thread::sleep(Duration::from_millis(10));
         }
+        drop(http); // Finish draining independently issued HTTP requests before checking for replay.
         assert_eq!(fs::read(root.join("effects")).unwrap(), b"effect\n");
     }
     fs::remove_dir_all(root).unwrap();
