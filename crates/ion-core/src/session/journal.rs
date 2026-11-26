@@ -1,6 +1,6 @@
 //! Journal codec and projection boundaries, independent of the storage owner.
 //! A reader supplies ordered records and point reads from the same committed cut.
-//! A writer commits the encoded batch at `expected_tail` before publishing projections.
+//! A writer commits the encoded batch against its journal checkpoint before publishing projections.
 use super::*;
 use crate::ToolOccurrence;
 
@@ -8,7 +8,62 @@ use crate::ToolOccurrence;
 // escapes control characters. Keep the storage bound above that encoded size.
 pub(crate) const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct JournalIdentity {
+    pub session: uuid::Uuid,
+    pub provider_session: uuid::Uuid,
+}
+
+impl JournalIdentity {
+    pub fn verify(self, observed: Self) -> Result<(), SessionError> {
+        if self != observed {
+            return Err(SessionError::JournalIdentityChanged);
+        }
+        Ok(())
+    }
+}
+
+/// Prepared writes carry their source journal as well as their source tail.
+/// This is a compare fence, not writer authority. The backend must also own
+/// the current writer lease (or a fenced host generation).
+pub(super) struct AppendBatch {
+    identity: JournalIdentity,
+    expected_tail: u64,
+    encoded: Vec<Vec<u8>>,
+}
+
+impl AppendBatch {
+    /// Stage the batch inside the backend's write transaction. `identity`,
+    /// `actual_tail` and every `insert` must use that same transaction. This
+    /// does not acknowledge commit or authorize publishing the projection.
+    pub fn stage(
+        self,
+        identity: JournalIdentity,
+        actual_tail: Option<i64>,
+        mut insert: impl FnMut(i64, Vec<u8>) -> Result<(), SessionError>,
+    ) -> Result<(), SessionError> {
+        self.identity.verify(identity)?;
+        let expected =
+            i64::try_from(self.expected_tail).map_err(|_| SessionError::InvalidHistory)?;
+        if actual_tail != (expected != 0).then_some(expected) {
+            return Err(SessionError::JournalFrontierChanged {
+                expected_tail: self.expected_tail,
+                actual: actual_tail,
+            });
+        }
+        let mut sequence = expected;
+        for body in self.encoded {
+            sequence = sequence
+                .checked_add(1)
+                .ok_or(SessionError::InvalidHistory)?;
+            insert(sequence, body)?;
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct AppendBasis<'a> {
+    pub identity: JournalIdentity,
     pub state: &'a State,
     pub context_index: &'a ContextIndex,
     pub settled: &'a BTreeSet<u64>,
@@ -16,8 +71,7 @@ pub(super) struct AppendBasis<'a> {
 }
 
 pub(super) struct PreparedAppend {
-    pub expected_tail: u64,
-    pub encoded: Vec<Vec<u8>>,
+    pub batch: AppendBatch,
     pub candidate: State,
     pub resolved_tools: Vec<Option<ToolOccurrence>>,
     pub replacement: Option<context_index::WorkingContext>,
@@ -108,8 +162,11 @@ impl AppendBasis<'_> {
             })
             .collect::<Result<Vec<_>, SessionError>>()?;
         Ok(PreparedAppend {
-            expected_tail: self.state.sequence,
-            encoded,
+            batch: AppendBatch {
+                identity: self.identity,
+                expected_tail: self.state.sequence,
+                encoded,
+            },
             candidate,
             resolved_tools,
             replacement,

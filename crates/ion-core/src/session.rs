@@ -22,7 +22,6 @@ use ion_ai::{
     ToolSpec, Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
-use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -1243,17 +1242,14 @@ impl Session {
             return Err(SessionError::InvalidName);
         }
         let mut store = self.lock_store()?;
-        let mut header = read_header(&store.connection)?;
-        header.name = name.map(str::to_owned);
-        let encoded = serde_json::to_vec(&header)?;
-        store.transaction(|tx| {
+        store.transaction(|tx, mut header| {
+            header.name = name.map(str::to_owned);
             tx.execute(
                 "UPDATE session SET header = ?1 WHERE id = 1",
-                params![encoded],
+                params![serde_json::to_vec(&header)?],
             )?;
-            Ok(())
-        })?;
-        Ok(header.name)
+            Ok(header.name)
+        })
     }
 
     /// Persist an idle Session's identity without route validation. Use
@@ -1953,6 +1949,9 @@ pub enum SessionError {
         /// COMMIT failed, not that a rollback was confirmed successful.
         rollback_error: Option<rusqlite::Error>,
     },
+    /// A live owner reached a different journal, even if its tail matched.
+    #[error("session journal identity changed before write; reopen the Session")]
+    JournalIdentityChanged,
     /// The prepared operation did not write; its working projection is stale.
     #[error(
         "session journal changed before append (expected tail {expected_tail}, found {actual:?}); reopen the Session"

@@ -214,7 +214,7 @@ impl ArtifactSink {
         let mut store = self.0.lock_store()?;
         let source = serde_json::to_vec(&self.1)?;
         let sql_offset = i64::try_from(offset).map_err(|_| SessionError::InvalidArtifactRange)?;
-        store.transaction(|tx| {
+        store.transaction(|tx, _| {
             tx.execute(
                 "INSERT OR IGNORE INTO artifacts(id,label,source) VALUES (?1,?2,?3)",
                 params![id.to_string(), label, source],
@@ -307,7 +307,7 @@ impl ArtifactWriter {
         let mut store = self.sink.0.lock_store().map_err(io::Error::other)?;
         let receipt = serde_json::to_vec(&reference).map_err(io_error)?;
         let source = serde_json::to_vec(&self.sink.1).map_err(io_error)?;
-        store.transaction(|tx| {
+        store.transaction(|tx, _| {
             let changed = tx.execute("INSERT INTO artifacts(id, receipt,label,source) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO UPDATE SET receipt=excluded.receipt WHERE artifacts.receipt IS NULL AND artifacts.label=excluded.label AND artifacts.source=excluded.source",
                 params![reference.id.to_string(), receipt, reference.label, source])?;
             if changed != 1 {

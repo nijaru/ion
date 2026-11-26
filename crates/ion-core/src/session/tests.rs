@@ -1261,13 +1261,13 @@ fn failed_copy_retains_lock_identity_for_waiting_writers() {
     );
     assert!(!destination.exists());
     let writer = Session::create(&destination, Some(&root)).unwrap();
-    assert_eq!(
-        flock(&waiting, FlockOperation::NonBlockingLockExclusive),
-        Err(rustix::io::Errno::WOULDBLOCK)
-    );
+    assert!(matches!(
+        waiting.try_lock(),
+        Err(fs::TryLockError::WouldBlock)
+    ));
     drop(writer);
-    flock(&waiting, FlockOperation::NonBlockingLockExclusive).unwrap();
-    flock(&waiting, FlockOperation::Unlock).unwrap();
+    waiting.try_lock().unwrap();
+    waiting.unlock().unwrap();
     drop(waiting);
     drop(source);
     fs::remove_dir_all(root).unwrap();

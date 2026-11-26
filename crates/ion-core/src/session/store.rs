@@ -1,7 +1,7 @@
 //! The Session's durable SQLite store: prepare a candidate, commit, then publish it.
 //! The Store holds derived in-memory projections beside the authoritative journal.
 
-use super::journal::encode_entry;
+use super::journal::{AppendBatch, JournalIdentity, encode_entry};
 use super::*;
 
 pub(super) const FORMAT_VERSION: u32 = 19;
@@ -14,6 +14,15 @@ pub(super) struct Header {
     pub(super) cwd: Option<PathBuf>,
     #[serde(default)]
     pub(super) name: Option<String>,
+}
+
+impl Header {
+    pub(super) fn identity(&self) -> JournalIdentity {
+        JournalIdentity {
+            session: self.id,
+            provider_session: self.provider_session_id,
+        }
+    }
 }
 
 /// Owns both the physical database and the exclusive writer lease. Field
@@ -102,7 +111,11 @@ impl OpenedStore {
         creation.publish();
         Ok(Self {
             native: NativeStore {
-                store: Mutex::new(Store::from_projection(connection, projection)),
+                store: Mutex::new(Store::from_projection(
+                    connection,
+                    header.identity(),
+                    projection,
+                )),
                 _lock: lock,
             },
             header,
@@ -128,7 +141,11 @@ impl OpenedStore {
         prepare_writer(&connection)?;
         Ok(Self {
             native: NativeStore {
-                store: Mutex::new(Store::from_projection(connection, projection)),
+                store: Mutex::new(Store::from_projection(
+                    connection,
+                    header.identity(),
+                    projection,
+                )),
                 _lock: lock,
             },
             header,
@@ -139,6 +156,7 @@ impl OpenedStore {
 
 pub(super) struct Store {
     pub(super) connection: Connection,
+    identity: JournalIdentity,
     faulted: bool,
     pub(super) state: State,
     pub(super) settled: BTreeSet<u64>,
@@ -210,14 +228,19 @@ impl Drop for SessionLock {
     fn drop(&mut self) {
         // A child may briefly inherit a duplicate file description. Release
         // this writer's lease explicitly before closing our descriptor.
-        let _ = flock(&self.0, FlockOperation::Unlock);
+        let _ = self.0.unlock();
     }
 }
 
 impl Store {
-    fn from_projection(connection: Connection, projection: HistoryProjection) -> Self {
+    fn from_projection(
+        connection: Connection,
+        identity: JournalIdentity,
+        projection: HistoryProjection,
+    ) -> Self {
         let mut store = Self {
             connection,
+            identity,
             faulted: false,
             state: projection.state,
             settled: projection.settled,
@@ -241,27 +264,40 @@ impl Store {
     }
 
     /// Once a transaction begins, a failed statement is known uncommitted only
-    /// after an explicitly successful rollback. COMMIT errors remain uncertain
-    /// even if SQLite's drop cleanup
-    /// succeeds: neither rollback nor visible bytes prove durable acceptance.
+    /// after an explicitly successful rollback. COMMIT errors remain uncertain.
     pub(super) fn transaction<T>(
         &mut self,
-        write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, SessionError>,
+        write: impl FnOnce(&rusqlite::Transaction<'_>, Header) -> Result<T, SessionError>,
     ) -> Result<T, SessionError> {
-        self.transaction_with(rusqlite::TransactionBehavior::Deferred, write)
+        let identity = self.identity;
+        self.transaction_with_header(|tx, header| {
+            identity.verify(header.identity())?;
+            write(tx, header)
+        })
     }
 
-    fn transaction_with<T>(
+    fn transaction_with_header<T>(
         &mut self,
-        behavior: rusqlite::TransactionBehavior,
-        write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, SessionError>,
+        write: impl FnOnce(&rusqlite::Transaction<'_>, Header) -> Result<T, SessionError>,
     ) -> Result<T, SessionError> {
         self.ensure_healthy()?;
-        let result = write_transaction_with(&mut self.connection, behavior, write);
-        if result
-            .as_ref()
-            .is_err_and(|error| error.is_commit_uncertain())
-        {
+        // Acquire write authority before sampling identity or tail. Upgrading a
+        // deferred read transaction could fail immediately on a busy writer.
+        let result = write_transaction_with(
+            &mut self.connection,
+            rusqlite::TransactionBehavior::Immediate,
+            |tx| write(tx, read_header(tx)?),
+        );
+        if result.as_ref().is_err_and(|error| {
+            error.is_commit_uncertain()
+                || matches!(
+                    error,
+                    SessionError::JournalIdentityChanged
+                        | SessionError::JournalFrontierChanged { .. }
+                )
+        }) {
+            // A definite mismatch means no write occurred, but this owner can
+            // no longer vouch for the projection from which it would prepare one.
             self.faulted = true;
         }
         result
@@ -310,8 +346,7 @@ impl Store {
     pub(super) fn append(&mut self, entries: &[SessionEntry]) -> Result<(), SessionError> {
         self.ensure_healthy()?;
         let journal::PreparedAppend {
-            expected_tail,
-            encoded,
+            batch,
             candidate,
             resolved_tools,
             replacement,
@@ -320,6 +355,7 @@ impl Store {
             new_settled,
             new_context_changes,
         } = journal::AppendBasis {
+            identity: self.identity,
             state: &self.state,
             context_index: &self.context_index,
             settled: &self.settled,
@@ -330,7 +366,7 @@ impl Store {
             |entry| read_entry(&self.connection, entry),
             |reference| artifacts::validate(&self.connection, reference),
         )?;
-        self.commit_append(expected_tail, encoded)?;
+        self.commit_append(batch)?;
         let mut sequence = self.state.sequence;
         for (entry, resolved) in entries.iter().zip(resolved_tools) {
             sequence += 1;
@@ -377,43 +413,15 @@ impl Store {
         Ok(())
     }
 
-    fn commit_append(
-        &mut self,
-        expected_tail: u64,
-        encoded: Vec<Vec<u8>>,
-    ) -> Result<(), SessionError> {
-        let expected = if expected_tail == 0 {
-            None
-        } else {
-            Some(i64::try_from(expected_tail).map_err(|_| SessionError::InvalidHistory)?)
-        };
-        // Acquire the write slot before sampling the frontier. Upgrading a
-        // deferred read transaction could fail immediately on a busy writer.
-        let result = self.transaction_with(rusqlite::TransactionBehavior::Immediate, |tx| {
-            let actual = tx.query_row("SELECT MAX(seq) FROM entries", [], |row| {
-                row.get::<_, Option<i64>>(0)
-            })?;
-            if actual != expected {
-                return Err(SessionError::JournalFrontierChanged {
-                    expected_tail,
-                    actual,
-                });
-            }
+    fn commit_append(&mut self, batch: AppendBatch) -> Result<(), SessionError> {
+        self.transaction_with_header(|tx, header| {
+            let tail = tx.query_row("SELECT MAX(seq) FROM entries", [], |row| row.get(0))?;
             let mut insert = tx.prepare("INSERT INTO entries(seq, body) VALUES (?1, ?2)")?;
-            let mut sequence = expected.unwrap_or(0);
-            for body in encoded {
-                sequence = sequence
-                    .checked_add(1)
-                    .ok_or(SessionError::InvalidHistory)?;
+            batch.stage(header.identity(), tail, |sequence, body| {
                 insert.execute(params![sequence, body])?;
-            }
-            Ok(())
-        });
-        if matches!(result, Err(SessionError::JournalFrontierChanged { .. })) {
-            // This process no longer owns the working projection of the journal.
-            self.faulted = true;
-        }
-        result
+                Ok(())
+            })
+        })
     }
 }
 
@@ -606,12 +614,9 @@ fn lock(path: &Path) -> Result<SessionLock, SessionError> {
         .truncate(false)
         .mode(0o600)
         .open(PathBuf::from(sidecar))?;
-    flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
-        if error == rustix::io::Errno::WOULDBLOCK {
-            SessionError::AlreadyOpen
-        } else {
-            SessionError::Io(error.into())
-        }
+    file.try_lock().map_err(|error| match error {
+        fs::TryLockError::WouldBlock => SessionError::AlreadyOpen,
+        fs::TryLockError::Error(error) => SessionError::Io(error),
     })?;
     Ok(SessionLock(file))
 }

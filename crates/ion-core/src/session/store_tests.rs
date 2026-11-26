@@ -208,6 +208,51 @@ fn stale_append_refuses_to_write_or_publish_working_state() {
     assert_eq!(saved.last_model, Some(model("other writer")));
 }
 
+#[test]
+fn matching_tail_does_not_authorize_writes_to_another_journal() {
+    for rename in [false, true] {
+        let fixture = Fixture::new();
+        let session = fixture.session();
+        session.select_model(model("before")).unwrap();
+
+        let external = Connection::open(fixture.path()).unwrap();
+        let mut header = read_header(&external).unwrap();
+        if rename {
+            header.id = uuid::Uuid::new_v4();
+        } else {
+            // A copied journal can retain the display Session ID but belong to
+            // a different provider lifetime. The tail in both cases is one.
+            header.provider_session_id = uuid::Uuid::new_v4();
+        }
+        header.name = Some("other owner".into());
+        external
+            .execute(
+                "UPDATE session SET header=?1 WHERE id=1",
+                params![serde_json::to_vec(&header).unwrap()],
+            )
+            .unwrap();
+
+        let refusal = if rename {
+            session.set_name(Some("wrong name")).unwrap_err()
+        } else {
+            session.select_model(model("wrong model")).unwrap_err()
+        };
+        assert!(matches!(refusal, SessionError::JournalIdentityChanged));
+        assert!(!refusal.is_commit_uncertain());
+        assert_faulted(session.entry_count());
+        assert_faulted(session.select_model(model("do not retry")));
+        assert_eq!(read_header(&external).unwrap().name, header.name);
+        let saved = Session::inspect(fixture.path()).unwrap();
+        assert_eq!(saved.entries.len(), 1);
+        assert_eq!(saved.last_model, Some(model("before")));
+        drop(session);
+
+        let next = Session::open(fixture.path()).unwrap();
+        next.select_model(model("reconstructed")).unwrap();
+        assert_eq!(next.entry_count().unwrap(), 2);
+    }
+}
+
 fn artifact_error(error: std::io::Error) -> SessionError {
     *error
         .into_inner()
