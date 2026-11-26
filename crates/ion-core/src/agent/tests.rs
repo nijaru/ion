@@ -2738,6 +2738,7 @@ async fn committed_sources_cover_reused_calls_and_atomic_steering_readiness() {
                 returned_model: None,
             }),
         ]),
+        response(vec![Content::Text("answer to first steer".into())]),
         response(vec![Content::Text("done".into())]),
     ]));
     let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)), model());
@@ -2854,7 +2855,7 @@ async fn committed_sources_cover_reused_calls_and_atomic_steering_readiness() {
             part: 0
         })
     );
-    for (offset, item) in projection.items[3..6].iter().enumerate() {
+    for (offset, item) in projection.items[3..5].iter().enumerate() {
         assert_eq!(
             item.source(),
             Some(TranscriptSource {
@@ -2864,9 +2865,11 @@ async fn committed_sources_cover_reused_calls_and_atomic_steering_readiness() {
         );
     }
     assert!(matches!(
-        &projection.items[5],
+        &projection.items[4],
         TranscriptItem::Readiness { .. }
     ));
+    assert!(matches!(&projection.items[6], TranscriptItem::User(steer)
+        if steer.steering && steer.source.is_some_and(|source| source.entry == assistant_entries[3] + 1)));
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert_eq!(

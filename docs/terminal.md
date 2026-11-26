@@ -24,6 +24,8 @@ Up and Down at the edges of the composer recall recent submitted prompts from th
 
 Enter submits normally while idle and steers the current model Turn while it is running. During a shell command or compaction it queues a follow-up instead. Alt-Enter queues a follow-up while work is pending, but behaves like Enter while idle, including after a stopped or failed Turn and for local commands.
 
+Like Pi’s default, Ion takes queued steering one message at a time, in order. The next queued message waits for the assistant’s response, even if the current request needs to retry or compact first.
+
 Pending steering and follow-ups appear above the composer. This is a view of the Host's input custody, not proof of model delivery. Alt-Up requests withdrawal of **all** queued steering and follow-ups without stopping the current operation. Steering claimed by Core is shown as resolving acceptance rather than withdrawable. Input already atomically committed cannot be withdrawn. Preparing input returns only after its worker has joined.
 
 Each confirmed withdrawal returns its original draft, caret and attachments separately. Unlike Pi's text-only concatenation, Ion does not merge attachment associations: one returned draft opens in the composer and the others, including any displaced composer draft, remain available through Alt-Up. With no queued input, Alt-Up cycles these drafts without submitting them.

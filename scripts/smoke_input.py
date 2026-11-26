@@ -502,12 +502,18 @@ def exercise_slash_input(work, base_env, endpoint):
             terminal.send("WAIT_HISTORY\r")
             terminal.wait(lambda: len(requests) == before + 5)
             steering = "/tmp/project/src/main.rs steer while running 🦀"
+            second_steer = "SECOND_STEER"
             terminal.send("\x1b[200~" + steering + "\x1b[201~\r")
+            terminal.send(second_steer + "\r")
+            terminal.wait(lambda: "SECOND_STEER" in terminal.text())
             terminal.paint()
             assert len(requests) == before + 5, "steering bypassed the active request"
             release.set()
-            terminal.wait(lambda: len(requests) == before + 6 and b"state=done" in terminal.output)
-            assert user_text(requests[-1]) == steering, requests[-1]
+            terminal.wait(lambda: len(requests) == before + 7 and b"state=done" in terminal.output)
+            first_request, second_request = requests[-2:]
+            assert user_text(first_request) == steering, first_request
+            assert second_steer not in json.dumps(first_request), "two steers reached the same model request"
+            assert user_text(second_request) == second_steer, second_request
             with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
                 facts = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries ORDER BY seq")]
             started = [entry["data"]["input"]["content"][0]["Text"]
@@ -515,12 +521,12 @@ def exercise_slash_input(work, base_env, endpoint):
             steered = [entry["data"]["input"]["content"][0]["Text"]
                        for entry in facts if entry["kind"] == "steering"]
             assert started == [*literals, "EXPANDED_payload_expanded", "WAIT_HISTORY"], started
-            assert steered == [steering], steered
+            assert steered == [steering, second_steer], steered
             terminal.output.clear()
             terminal.send("/settings expanded\r" if mode == "inline" else b"\x0f")
             terminal.wait(lambda: "Tool output: expanded" in terminal.text())
             terminal.send("EXIT_EXPANDED\r")
-            terminal.wait(lambda: len(requests) == before + 7 and b"state=done" in terminal.output)
+            terminal.wait(lambda: len(requests) == before + 8 and b"state=done" in terminal.output)
             terminal.finish()
             terminal.paint()
             if mode == "inline":
@@ -2256,11 +2262,10 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 terminal.wait(lambda: len(requests) == before + 1)
                 connection = sqlite3.connect(database)
                 try:
-                    # Corrupt and restore one existing payload, not the sequence:
-                    # an inserted row would shift concurrent committed coordinates
-                    # and deleting it would not repair those durable references.
-                    seq, saved = connection.execute("SELECT seq, body FROM entries ORDER BY seq LIMIT 1").fetchone()
-                    connection.execute("UPDATE entries SET body=? WHERE seq=?", (b'{"kind":"invalid_qualification_entry"}', seq))
+                    # Even when the live transcript needs no payload reread,
+                    # refresh validates the journal frontier. A bogus zero key
+                    # breaks that check without shifting concurrent append IDs.
+                    connection.execute("INSERT INTO entries VALUES (0, ?)", (b'{"kind":"invalid_qualification_entry"}',))
                     connection.commit()
                     release.set()
                     terminal.wait(lambda: "/session retries · prompts blocked" in terminal.text())
@@ -2268,7 +2273,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     terminal.send("UNSEEN_VIEW_MUST_NOT_SEND\rx")
                     terminal.wait(lambda: "› UNSEEN_VIEW_MUST_NOT_SENDx" in terminal.text())
                     assert len(requests) == before + 1, "stale view admitted input or replayed the accepted original"
-                    connection.execute("UPDATE entries SET body=? WHERE seq=?", (saved, seq))
+                    connection.execute("DELETE FROM entries WHERE seq=0")
                     connection.commit()
                     terminal.output.clear()
                     terminal.send("\x15/session\r")

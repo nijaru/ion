@@ -147,28 +147,80 @@ async fn delayed_intake_does_not_lock_producers_or_overtake_frozen_input() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn reopening_before_a_response_does_not_open_another_steering_slot() {
+    let root = std::env::temp_dir().join(format!("ion-steering-slot-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir(&root).unwrap();
+    let path = root.join("session.sqlite");
+    let session = Session::create(&path, Some(&root)).unwrap();
+    let model = ModelRef {
+        provider: "test".into(),
+        model: "test".into(),
+    };
+    let (turn, _) = session.begin_turn("root".into(), model).unwrap();
+    let limits = AgentLimits::default();
+    let inbox = SteeringInbox::new(limits, InputBudget::default());
+    inbox.push("first".into()).unwrap();
+    inbox.push("second".into()).unwrap();
+    assert_eq!(
+        inbox
+            .record_pending(&session, turn, limits)
+            .unwrap()
+            .steering,
+        [user_text("first".into())]
+    );
+    assert!(
+        inbox
+            .record_pending(&session, turn, limits)
+            .unwrap()
+            .steering
+            .is_empty()
+    );
+    drop(session);
+    let reopened = Session::open(&path).unwrap();
+    assert!(
+        inbox
+            .record_pending(&reopened, turn, limits)
+            .unwrap()
+            .steering
+            .is_empty()
+    );
+    assert_eq!(
+        inbox
+            .take_uncommitted()
+            .into_iter()
+            .map(crate::PreparedInput::into_message)
+            .collect::<Vec<_>>(),
+        [user_text("second".into())]
+    );
+    drop(reopened);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn steering_receipts_remain_ordered_without_observer_delivery() {
     let root = std::env::temp_dir().join(format!("ion-steering-receipts-{}", uuid::Uuid::now_v7()));
     std::fs::create_dir(&root).unwrap();
     let session = Arc::new(Session::create(root.join("session.sqlite"), Some(&root)).unwrap());
-    let service = Arc::new(ScriptedModelService::new([Script::Stream(vec![
-        ion_ai::ModelStreamEvent::Completed(ModelResponse {
-            message: Message {
-                role: Role::Assistant,
-                content: vec![Content::Text("done".into())],
-                provider_replay: None,
-            },
-            usage: ion_ai::Usage::unknown(),
-            termination: ResponseTermination::Completed,
-            returned_model: None,
-        }),
-    ])]));
+    let service = Arc::new(ScriptedModelService::new(["first answer", "done"].map(
+        |text| {
+            Script::Stream(vec![ion_ai::ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text(text.into())],
+                    provider_replay: None,
+                },
+                usage: ion_ai::Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            })])
+        },
+    )));
     let model = ModelRef {
         provider: "test".into(),
         model: "test".into(),
     };
-    let agent = Agent::with_tool_set(service, Arc::new(ToolSet::new([])), model);
+    let agent = Agent::with_tool_set(service.clone(), Arc::new(ToolSet::new([])), model);
     let budget = InputBudget::default();
     let inbox = Arc::new(SteeringInbox::new(agent.limits(), budget.clone()));
     let mut receipts = Vec::new();
@@ -190,6 +242,12 @@ async fn steering_receipts_remain_ordered_without_observer_delivery() {
         )
         .await
         .unwrap();
+    let requests = service.requests();
+    assert_eq!(requests.len(), 2);
+    for (request, text) in requests.iter().zip(["first", "second"]) {
+        assert_eq!(request.messages.last(), Some(&user_text(text.into())));
+    }
+    assert!(!requests[0].messages.contains(&user_text("second".into())));
     let committed = inbox.take_committed();
     assert_eq!(committed.len(), 2);
     let mut entries = Vec::new();

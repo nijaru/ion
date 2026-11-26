@@ -615,7 +615,7 @@ async fn acceptance_custody_precedes_progress_and_steering_uses_fifo_ids() {
         .snapshot(|m| m.literal.clone())
         .await
         .unwrap();
-    for id in [root, first, second] {
+    for id in [root, first] {
         let input = snapshot.inputs.iter().find(|input| input.id == id).unwrap();
         assert_eq!(
             input.phase,
@@ -635,19 +635,27 @@ async fn acceptance_custody_precedes_progress_and_steering_uses_fifo_ids() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(ids, [root, first, second]);
-    // Stop racing committed steering cannot turn it back into recoverable input.
-    fixture.control.clear_queue();
+    assert_eq!(ids, [root, first]);
+    let waiting = snapshot
+        .inputs
+        .iter()
+        .find(|input| input.id == second)
+        .unwrap();
+    assert_eq!(waiting.phase, InputCustodyPhase::InFlight);
+    // Stop returns the not-yet-admitted steer, not the committed one.
     fixture.control.request_stop();
     let (returned, settlement) = settle(&mut fixture.control).await;
-    assert!(returned.is_empty());
+    assert_eq!(returned.len(), 1);
+    assert_eq!(returned[0].id, second);
+    assert_eq!(returned[0].metadata.literal, "second");
+    assert!(matches!(returned[0].reason, ReturnReason::Stopped));
     assert_eq!(
         settlement
             .accepted
             .iter()
             .map(|input| input.metadata.literal.as_str())
             .collect::<Vec<_>>(),
-        ["root", "first", "second"]
+        ["root", "first"]
     );
 }
 

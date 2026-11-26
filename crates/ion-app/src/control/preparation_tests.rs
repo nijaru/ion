@@ -583,7 +583,7 @@ fn preparation_overlaps_turns_but_a_late_steer_never_retargets() {
 }
 
 #[test]
-fn ready_steering_joins_the_first_request_after_root_preparation() {
+fn ready_steering_joins_requests_one_at_a_time_after_root_preparation() {
     runtime().block_on(async {
         let (release, blocker) = block_decoder().await;
         let model = Model::new(1);
@@ -623,7 +623,7 @@ fn ready_steering_joins_the_first_request_after_root_preparation() {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(steering, ["first steer", "second steer"]);
+            assert_eq!(steering, ["first steer"]);
         }
         let view = fixture
             .control
@@ -643,11 +643,17 @@ fn ready_steering_joins_the_first_request_after_root_preparation() {
             .collect();
         assert_eq!(
             durable_steering,
-            ["first steer", "second steer"]
-                .map(|text| Message::user_input(text.into(), []))
-                .iter()
-                .collect::<Vec<_>>()
+            [&Message::user_input("first steer".into(), [])]
         );
+        model.release();
+        model.wait_calls(2).await;
+        assert_eq!(
+            model.requests.lock().unwrap()[1].messages.last(),
+            Some(&Message::user_input("second steer".into(), []))
+        );
+        model.release();
+        let (_, settlement) = settle(&mut fixture.control).await;
+        assert!(matches!(settlement.outcome, OperationOutcome::Turn(Ok(_))));
         fixture.control.shutdown().await;
     });
 }

@@ -275,6 +275,9 @@ struct State {
     compaction_inputs: Vec<u64>,
     pending_shell: Option<PendingShell>,
     assistant_seen_in_turn: bool,
+    // A committed steer is assigned to the next response, including across
+    // request retries, compaction, and a durable resume before that response.
+    steering_waits_for_response: bool,
     prefix_bound_in_turn: bool,
     recovery: Option<RecoveryBinding>,
     pending: Vec<PendingTool>,
@@ -454,6 +457,7 @@ impl State {
                 }
                 self.active = Some(*turn);
                 self.assistant_seen_in_turn = false;
+                self.steering_waits_for_response = false;
                 self.prefix_bound_in_turn = false;
                 self.recovery = recovery.clone();
                 self.last_id = *turn;
@@ -470,6 +474,7 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
+                self.steering_waits_for_response = true;
             }
             SessionEntry::Assistant {
                 turn,
@@ -539,6 +544,7 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.assistant_seen_in_turn = true;
+                self.steering_waits_for_response = false;
                 self.prefix_bound_in_turn |= message
                     .provider_replay
                     .as_ref()
@@ -616,6 +622,7 @@ impl State {
                 self.active = None;
                 self.recovery = None;
                 self.assistant_seen_in_turn = false;
+                self.steering_waits_for_response = false;
                 self.prefix_bound_in_turn = false;
                 self.last_end = Some((*turn, reason.clone()));
                 transition.settled = true;
@@ -1605,6 +1612,14 @@ impl Session {
         inputs: Vec<Message>,
     ) -> Result<(), SessionError> {
         self.record_inputs(turn, inputs, Vec::new()).map(|_| ())
+    }
+
+    pub(crate) fn steering_slot_open(&self, turn: u64) -> Result<bool, SessionError> {
+        let store = self.lock_store()?;
+        if store.state.active != Some(turn) || !store.state.pending.is_empty() {
+            return Err(SessionError::InvalidHistory);
+        }
+        Ok(!store.state.steering_waits_for_response)
     }
 
     pub(crate) fn record_inputs(

@@ -57,8 +57,14 @@ async fn live_producer_and_controller_share_fifo_admission_and_capacity() {
                         _ => None,
                     })
                     .collect();
-                assert_eq!(users, ["root", "producer", "controller"]);
+                assert_eq!(users, ["root", "producer"]);
             }
+            model.release();
+            model.wait_calls(3).await;
+            assert_eq!(
+                model.requests.lock().unwrap()[2].messages.last(),
+                Some(&literal("controller"))
+            );
             model.release();
             tokio::time::timeout(Duration::from_secs(5), async {
                 while f.control.is_busy() {
