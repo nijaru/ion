@@ -31,30 +31,45 @@ impl ResourcePaths {
     /// Anchor paths to the invocation cwd. Only a leading `~` component expands;
     /// no environment references or commands are evaluated.
     pub fn new(cwd: &Path, include_defaults: bool, paths: Vec<PathBuf>) -> Result<Self> {
-        let cwd = cwd
-            .canonicalize()
-            .with_context(|| format!("cannot resolve {}", cwd.display()))?;
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let paths = paths
-            .into_iter()
-            .map(|path| {
-                ensure!(
-                    !path.as_os_str().is_empty(),
-                    "resource path must not be empty"
-                );
-                let path = crate::expand_home_path(&path, home.as_deref())
-                    .context("cannot expand resource path")?
-                    .into_owned();
-                Ok(if path.is_absolute() {
-                    path
-                } else {
-                    cwd.join(path)
-                })
-            })
-            .collect::<Result<_>>()?;
         Ok(Self {
             include_defaults,
-            paths,
+            paths: resolve_paths(cwd, home.as_deref(), paths)?,
         })
     }
+
+    pub(super) fn append_configured(
+        &mut self,
+        config_root: &Path,
+        home: Option<&Path>,
+        paths: Vec<PathBuf>,
+    ) -> Result<()> {
+        if !paths.is_empty() {
+            self.paths.extend(resolve_paths(config_root, home, paths)?);
+        }
+        Ok(())
+    }
+}
+
+fn resolve_paths(base: &Path, home: Option<&Path>, paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
+    let base = base
+        .canonicalize()
+        .with_context(|| format!("cannot resolve {}", base.display()))?;
+    paths
+        .into_iter()
+        .map(|path| {
+            ensure!(
+                !path.as_os_str().is_empty(),
+                "resource path must not be empty"
+            );
+            let path = crate::expand_home_path(&path, home)
+                .context("cannot expand resource path")?
+                .into_owned();
+            Ok(if path.is_absolute() {
+                path
+            } else {
+                base.join(path)
+            })
+        })
+        .collect()
 }

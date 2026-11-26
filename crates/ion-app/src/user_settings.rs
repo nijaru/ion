@@ -41,7 +41,19 @@ struct Sections<
     tool_veto: V,
     theme: T,
     footer: F,
+    #[serde(rename = "skills")]
+    _skills: IgnoredAny,
+    #[serde(rename = "prompts")]
+    _prompts: IgnoredAny,
 }
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct ResourceSources<S: Default, P: Default> {
+    skills: S,
+    prompts: P,
+}
+
 impl UserSettings {
     pub fn load(root: &Path) -> Result<Self> {
         Self::read(&root.join("settings.json"))
@@ -89,6 +101,18 @@ impl UserSettings {
         Ok(self
             .decode::<Sections<IgnoredAny, IgnoredAny, IgnoredAny, IgnoredAny, F>>("footer")?
             .footer)
+    }
+
+    pub(crate) fn skill_paths(&self) -> Result<Vec<std::path::PathBuf>> {
+        Ok(self
+            .decode::<ResourceSources<_, IgnoredAny>>("skills")?
+            .skills)
+    }
+
+    pub(crate) fn prompt_paths(&self) -> Result<Vec<std::path::PathBuf>> {
+        Ok(self
+            .decode::<ResourceSources<IgnoredAny, _>>("prompts")?
+            .prompts)
     }
 
     /// Patch only the preference in a fresh document under the cooperating

@@ -296,12 +296,12 @@ fn options() -> Vec<Arg> {
             .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
             .help("Add a skill Markdown file or directory (repeatable)"),
         Arg::new("no_skills").long("no-skills").action(ArgAction::SetTrue)
-            .help("Skip default skill discovery; explicit --skill paths still load"),
+            .help("Skip discovered and settings-listed skills; explicit --skill paths still load"),
         Arg::new("prompt_templates").long("prompt-template").action(ArgAction::Append)
             .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
             .help("Add a prompt template Markdown file or directory (repeatable)"),
         Arg::new("no_prompt_templates").long("no-prompt-templates").action(ArgAction::SetTrue)
-            .help("Skip default prompt templates; explicit --prompt-template paths still load"),
+            .help("Skip discovered and settings-listed prompts; explicit --prompt-template paths still load"),
         Arg::new("use_theme").long("use-theme").value_name("NAME")
             .help("Terminal theme for this invocation; does not change the saved preference"),
         Arg::new("dedicated_pane").long("dedicated-pane").action(ArgAction::SetTrue)

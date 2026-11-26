@@ -44,9 +44,37 @@ impl Resources {
         }
     }
 
+    /// Discover resources from explicit and default locations without user settings.
     pub fn load(cwd: &Path, config_root: &Path, selection: &ResourceSelection) -> Result<Self> {
         let home = std::env::var_os("HOME").map(PathBuf::from);
         Self::load_selected(cwd, config_root, home.as_deref(), selection)
+    }
+
+    pub(crate) fn load_with_settings(
+        cwd: &Path,
+        config_root: &Path,
+        selection: &ResourceSelection,
+    ) -> Result<Self> {
+        if !selection.skills.include_defaults && !selection.prompt_templates.include_defaults {
+            return Self::load(cwd, config_root, selection);
+        }
+        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = home.as_deref();
+        let mut selection = selection.clone();
+        let settings = crate::user_settings::UserSettings::load(config_root)?;
+        if selection.skills.include_defaults {
+            selection
+                .skills
+                .append_configured(config_root, home, settings.skill_paths()?)?;
+        }
+        if selection.prompt_templates.include_defaults {
+            selection.prompt_templates.append_configured(
+                config_root,
+                home,
+                settings.prompt_paths()?,
+            )?;
+        }
+        Self::load_selected(cwd, config_root, home, &selection)
     }
 
     fn load_selected(

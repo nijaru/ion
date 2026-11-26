@@ -53,6 +53,26 @@ about once a minute, without blocking chat. Unsupported providers, proxy
 routes, and unavailable readings omit the field. Remove the corresponding
 field from the footer to disable these reads.
 
+## Keep extra skill and prompt paths
+
+Set `skills` and `prompts` in `~/.ion/settings.json` (or `$ION_HOME/settings.json`):
+
+```json
+{
+  "skills": ["~/team/skills", "personal-review.md"],
+  "prompts": ["~/team/prompts"]
+}
+```
+
+Each list accepts Markdown files and directories. Relative paths start at the
+directory containing `settings.json`, not the workspace. Ion expands a leading
+`~/`, but not globs or environment variables. If names collide, the first source
+wins: default directories, then CLI paths, then settings paths in list order.
+
+Run `/reload` to pick up path additions and removals without restarting. The
+`--no-skills` and `--no-prompt-templates` flags skip the respective default and
+configured sources. Explicit `--skill` and `--prompt-template` paths still work.
+
 ## Add a skill
 
 Create `.agents/skills/review/SKILL.md` in your project:
@@ -92,8 +112,7 @@ ion --skill ./my-review.md --skill ./team-skills
 ion --no-skills --skill ./team-skills
 ```
 
-`--no-skills` disables default discovery, not explicit paths. `/reload` keeps the
-startup selection and rereads its sources. `/skills` shows the selected files.
+`/reload` keeps your startup flags. `/skills` shows the selected files.
 
 ## Add a prompt template
 

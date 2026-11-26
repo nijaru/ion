@@ -321,11 +321,22 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         assert requests[-1]["messages"][-1]["content"].strip() == "Check Recovery; scope all."
         (prompts / "amplify.md").unlink()
         global_rule = work / "ion/AGENTS.md"
+        settings = work / "ion/settings.json"
+        extra_prompts = settings.parent / "team-prompts"
+        extra_prompts.mkdir()
+        (extra_prompts / "late.md").write_text("---\ndescription: A later prompt\n---\nA configured prompt.\n")
+        for version in ("before", "after"):
+            directory = work / "home/team-skills" / version
+            directory.mkdir(parents=True)
+            (directory / "handoff.md").write_text(
+                f"---\nname: handoff\ndescription: Configured vocabulary {version}.\n---\nTeam handoff.\n"
+            )
         (chosen_templates / "check.md").write_text("---\ndescription: Check a named concern\n---\nSelected Check $1; scope ${2:-all}.")
         for mode in ("inline", "fullscreen"):
             old_rule = f"GLOBAL_{mode}_OLD"
             new_rule = f"GLOBAL_{mode}_NEW"
             global_rule.write_text(old_rule + "\n")
+            settings.write_text(json.dumps({"skills": ["~/team-skills/before"]}))
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
 
@@ -389,9 +400,15 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         os.write(master, b"TUI\r")
                         phase = 2
                     elif phase == 2 and len(requests) == before + 1 and b"RESOURCE_OK" in current and program_ready(output):
-                        (live_prompts / "late.md").write_text("A later prompt.\n")
+                        if mode == "inline":
+                            (live_prompts / "late.md").write_text("A later prompt.\n")
                         (live_prompts / "broken.md").write_text("---\ndescription: [unclosed\n---\n")
                         global_rule.write_text(new_rule + "\n")
+                        # Relative settings paths are based at ION_HOME, not
+                        # the workspace. The inline CLI's opt-out still wins.
+                        settings.write_text(json.dumps({
+                            "skills": ["~/team-skills/after"], "prompts": ["team-prompts"],
+                        }))
                         checkpoint = len(output)
                         os.write(master, b"/reload\r")
                         phase = 3
@@ -402,6 +419,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                         assert b"broken.md" in current and b"invalid YAML frontmatter" in current, (
                             mode, "reload hid the resource file/reason", current[-4000:]
                         )
+                        assert b"duplicate template late" not in current, "opted-out prompt source was loaded"
                         checkpoint = len(output)
                         os.write(master, b"/prompts\r")
                         phase = 30
@@ -439,18 +457,22 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 assert len(requests) == before + 2, "completion duplicated submission"
                 expected_check = "Selected Check TUI; scope all." if mode == "inline" else "Check TUI; scope all."
                 assert requests[before]["messages"][-1]["content"].strip() == expected_check
-                assert requests[before + 1]["messages"][-1]["content"].strip() == "A later prompt."
+                expected_late = "A later prompt." if mode == "inline" else "A configured prompt."
+                assert requests[before + 1]["messages"][-1]["content"].strip() == expected_late
                 assert requests[before + 1]["reasoning_effort"] == "high", requests[before + 1]
                 original = requests[before]["messages"][0]["content"]
                 reloaded = requests[before + 1]["messages"][0]["content"]
                 assert old_rule in original and new_rule not in original, original
                 assert new_rule in reloaded and old_rule not in reloaded, reloaded
+                assert "Configured vocabulary before." in original and "Configured vocabulary after." not in original
+                assert "Configured vocabulary after." in reloaded and "Configured vocabulary before." not in reloaded
                 (live_prompts / "broken.md").unlink()
             finally:
                 if child.poll() is None:
                     child.send_signal(signal.SIGKILL)
                     child.wait()
                 os.close(master)
+        settings.unlink()
         for mode in ("inline", "fullscreen"):
             for steer in (False, True):
                 master, slave = pty.openpty()

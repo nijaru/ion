@@ -130,6 +130,7 @@ pub struct Host {
     credentials: CredentialStore,
     models: ModelStore,
     resource_selection: ResourceSelection,
+    user_resource_settings: bool,
 }
 
 impl Host {
@@ -142,12 +143,16 @@ impl Host {
             credentials,
             models,
             resource_selection: ResourceSelection::default(),
+            user_resource_settings: false,
         }
     }
 
+    /// Use the operator's home and enable settings-listed resource paths.
     pub fn from_environment() -> Result<Self> {
         let home = user_home(|name| std::env::var_os(name))?;
-        Ok(Self::new(home.clone(), home))
+        let mut host = Self::new(home.clone(), home);
+        host.user_resource_settings = true;
+        Ok(host)
     }
 
     pub fn config_root(&self) -> &Path {
@@ -182,7 +187,11 @@ impl Host {
     }
 
     pub fn resources(&self, cwd: &Path) -> Result<Resources> {
-        Resources::load(cwd, &self.config_root, &self.resource_selection)
+        if self.user_resource_settings {
+            Resources::load_with_settings(cwd, &self.config_root, &self.resource_selection)
+        } else {
+            Resources::load(cwd, &self.config_root, &self.resource_selection)
+        }
     }
 
     /// User-level MCP configuration only. Callers that are loading a project

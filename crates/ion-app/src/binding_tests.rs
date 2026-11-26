@@ -58,6 +58,7 @@ async fn explicit_service_environment_skips_user_settings_and_serves_named_comma
         .setup(session.clone(), selected, None, None, resources)
         .unwrap()
         .into_control::<()>();
+    control.reload_resources().await.unwrap();
     control
         .command("check", &["$(touch forbidden)".into()], ())
         .unwrap();
