@@ -26,17 +26,14 @@ impl JournalIdentity {
 /// Prepared writes carry their source journal as well as their source tail.
 /// This is a compare fence, not writer authority. The backend must also own
 /// the current writer lease (or a fenced host generation).
-pub(super) struct AppendBatch {
+struct AppendBatch {
     identity: JournalIdentity,
     expected_tail: u64,
     encoded: Vec<Vec<u8>>,
 }
 
 impl AppendBatch {
-    /// Stage the batch inside the backend's write transaction. `identity`,
-    /// `actual_tail` and every `insert` must use that same transaction. This
-    /// does not acknowledge commit or authorize publishing the projection.
-    pub fn stage(
+    fn stage(
         self,
         identity: JournalIdentity,
         actual_tail: Option<i64>,
@@ -70,8 +67,20 @@ pub(super) struct AppendBasis<'a> {
     pub message_count: usize,
 }
 
-pub(super) struct PreparedAppend {
-    pub batch: AppendBatch,
+pub(super) struct PreparedAppend<'a> {
+    batch: AppendBatch,
+    projection: AppendProjection<'a>,
+}
+
+/// All rows were staged. The exact candidate travels with them; there is no
+/// detached acknowledgment that could be paired with a different candidate.
+pub(super) struct StagedAppend<'a>(AppendProjection<'a>);
+
+/// The backend acknowledged the transaction containing this candidate.
+pub(super) struct CommittedAppend<'a>(AppendProjection<'a>);
+
+pub(super) struct AppendProjection<'a> {
+    pub entries: &'a [SessionEntry],
     pub candidate: State,
     pub resolved_tools: Vec<Option<ToolOccurrence>>,
     pub replacement: Option<context_index::WorkingContext>,
@@ -81,13 +90,41 @@ pub(super) struct PreparedAppend {
     pub new_context_changes: Vec<ModelContextChange>,
 }
 
+impl<'a> PreparedAppend<'a> {
+    /// Inside the write transaction, compare identity and tail and insert
+    /// each row. This does not authorize publishing the projection.
+    pub fn stage(
+        self,
+        identity: JournalIdentity,
+        actual_tail: Option<i64>,
+        insert: impl FnMut(i64, Vec<u8>) -> Result<(), SessionError>,
+    ) -> Result<StagedAppend<'a>, SessionError> {
+        self.batch.stage(identity, actual_tail, insert)?;
+        Ok(StagedAppend(self.projection))
+    }
+}
+
+impl<'a> StagedAppend<'a> {
+    /// Only the transaction owner can attest this after definite durable commit.
+    /// A successful staging call, a pending flush, or a lost reply is not enough.
+    pub fn acknowledge(self) -> CommittedAppend<'a> {
+        CommittedAppend(self.0)
+    }
+}
+
+impl<'a> CommittedAppend<'a> {
+    pub fn into_projection(self) -> AppendProjection<'a> {
+        self.0
+    }
+}
+
 impl AppendBasis<'_> {
-    pub fn prepare(
+    pub fn prepare<'a>(
         &self,
-        entries: &[SessionEntry],
+        entries: &'a [SessionEntry],
         read: impl Fn(u64) -> Result<SessionEntry, SessionError>,
         validate_artifact: impl Fn(&crate::ArtifactRef) -> Result<(), SessionError>,
-    ) -> Result<PreparedAppend, SessionError> {
+    ) -> Result<PreparedAppend<'a>, SessionError> {
         let mut replacement = None;
         let mut candidate = self.state.clone();
         // A shared pending shell owns the final context message. Seed only that
@@ -167,13 +204,16 @@ impl AppendBasis<'_> {
                 expected_tail: self.state.sequence,
                 encoded,
             },
-            candidate,
-            resolved_tools,
-            replacement,
-            replace_pending_message,
-            new_messages,
-            new_settled,
-            new_context_changes,
+            projection: AppendProjection {
+                entries,
+                candidate,
+                resolved_tools,
+                replacement,
+                replace_pending_message,
+                new_messages,
+                new_settled,
+                new_context_changes,
+            },
         })
     }
 }

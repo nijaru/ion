@@ -18,7 +18,7 @@ use super::{
     code_inspection::ChildRecordIndex,
     context::ProjectedMessage,
     context_index::{ContextIndex, WorkingContext},
-    journal::{self, AppendBatch, JournalIdentity, encode_entry},
+    journal::{self, CommittedAppend, JournalIdentity, PreparedAppend, encode_entry},
     projection::{ProjectionMode, project},
 };
 
@@ -239,16 +239,7 @@ impl Store {
 
     pub(super) fn append(&mut self, entries: &[SessionEntry]) -> Result<(), SessionError> {
         self.ensure_healthy()?;
-        let journal::PreparedAppend {
-            batch,
-            candidate,
-            resolved_tools,
-            replacement,
-            replace_pending_message,
-            new_messages,
-            new_settled,
-            new_context_changes,
-        } = journal::AppendBasis {
+        let prepared = journal::AppendBasis {
             identity: self.identity,
             state: &self.state,
             context_index: &self.context_index,
@@ -260,7 +251,22 @@ impl Store {
             |entry| read_entry(&self.connection, entry),
             |reference| artifacts::validate(&self.connection, reference),
         )?;
-        self.commit_append(batch)?;
+        let committed = self.commit_append(prepared)?;
+        self.publish_append(committed);
+        Ok(())
+    }
+
+    fn publish_append(&mut self, committed: CommittedAppend<'_>) {
+        let journal::AppendProjection {
+            entries,
+            candidate,
+            resolved_tools,
+            replacement,
+            replace_pending_message,
+            new_messages,
+            new_settled,
+            new_context_changes,
+        } = committed.into_projection();
         let mut sequence = self.state.sequence;
         for (entry, resolved) in entries.iter().zip(resolved_tools) {
             sequence += 1;
@@ -304,18 +310,21 @@ impl Store {
             self.context_changes.extend(new_context_changes);
         }
         self.prune_context();
-        Ok(())
     }
 
-    fn commit_append(&mut self, batch: AppendBatch) -> Result<(), SessionError> {
-        self.transaction_with_header(|tx, header| {
+    fn commit_append<'a>(
+        &mut self,
+        prepared: PreparedAppend<'a>,
+    ) -> Result<CommittedAppend<'a>, SessionError> {
+        let staged = self.transaction_with_header(|tx, header| {
             let tail = tx.query_row("SELECT MAX(seq) FROM entries", [], |row| row.get(0))?;
             let mut insert = tx.prepare("INSERT INTO entries(seq, body) VALUES (?1, ?2)")?;
-            batch.stage(header.identity(), tail, |sequence, body| {
+            prepared.stage(header.identity(), tail, |sequence, body| {
                 insert.execute(params![sequence, body])?;
                 Ok(())
             })
-        })
+        })?;
+        Ok(staged.acknowledge())
     }
 }
 

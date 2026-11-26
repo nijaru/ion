@@ -1,6 +1,8 @@
 use super::*;
 use std::io::Write;
 
+mod commit_ack;
+
 struct Fixture(PathBuf);
 
 impl Fixture {
