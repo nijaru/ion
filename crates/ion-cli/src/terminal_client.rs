@@ -73,8 +73,6 @@ use question::{QuestionAction, QuestionModal};
 pub use setup::{choose_session, setup_model};
 
 pub(crate) const MAX_DRAFT: usize = ion_core::MAX_RECALL_PROMPT_BYTES;
-const RESUME_TURN_LIMIT: usize = 6;
-const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
 #[derive(Default)]
 pub(super) struct ProgramStatusState {
@@ -254,7 +252,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.provider_usage.bind(runtime.provider_usage().filter(|source| ui.footer.shows_provider_usage(source.kind())));
             ui.reconcile_recovery(runtime.session().id())?;
-            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, &ui.conversation, ui.conversation.scope().is_none() && !ui.dedicated_pane) {
+            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, &ui.conversation) {
                 ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }
@@ -574,7 +572,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     }
     if outcome.is_ok()
         && std::io::stdout().is_terminal()
-        && (ui.conversation.has_omitted_history() || ui.conversation.items().next().is_some())
+        && ui.conversation.items().next().is_some()
         && let Some(command) = resume_command(runtime.catalog(), runtime.session())
     {
         crate::print_stdout(format_args!("To resume: {command}"))?;
@@ -903,13 +901,6 @@ fn context_report(report: &Result<ion_core::ContextReport, ion_core::AgentError>
     )
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ResumeHistoryTail {
-    start: usize,
-    omitted_turns: usize,
-    omitted_entries: usize,
-}
-
 fn transcript_item_turn(item: &TranscriptItem) -> Option<u64> {
     match item {
         TranscriptItem::User(message) | TranscriptItem::Assistant(message) => message.turn,
@@ -918,45 +909,6 @@ fn transcript_item_turn(item: &TranscriptItem) -> Option<u64> {
             Some(*turn)
         }
         TranscriptItem::UserShell(_) | TranscriptItem::Oversized { .. } => None,
-    }
-}
-
-fn resume_history_tail(items: &[TranscriptItem]) -> ResumeHistoryTail {
-    let mut turns = Vec::new();
-    for item in items {
-        if let Some(turn) = transcript_item_turn(item)
-            && turns.last().copied() != Some(turn)
-        {
-            turns.push(turn);
-        }
-    }
-
-    if turns.len() > RESUME_TURN_LIMIT {
-        let first_turn = turns[turns.len() - RESUME_TURN_LIMIT];
-        let start = items
-            .iter()
-            .position(|item| transcript_item_turn(item) == Some(first_turn))
-            .unwrap_or(0);
-        return ResumeHistoryTail {
-            start,
-            omitted_turns: turns.len() - RESUME_TURN_LIMIT,
-            omitted_entries: start,
-        };
-    }
-
-    if turns.is_empty() && items.len() > RESUME_ENTRY_LIMIT_WITHOUT_TURNS {
-        let start = items.len() - RESUME_ENTRY_LIMIT_WITHOUT_TURNS;
-        return ResumeHistoryTail {
-            start,
-            omitted_turns: 0,
-            omitted_entries: start,
-        };
-    }
-
-    ResumeHistoryTail {
-        start: 0,
-        omitted_turns: 0,
-        omitted_entries: 0,
     }
 }
 
@@ -1286,21 +1238,9 @@ impl Frontend {
             }
             Some(KeyAction::ExpandTools) => {
                 if self.mode == TuiMode::Inline && !self.dedicated_pane {
-                    if self.conversation.has_omitted_history()
-                        && !self
-                            .conversation
-                            .items()
-                            .any(|item| matches!(item, TranscriptItem::UserShell(_)))
-                        && !crate::transcript_detail::tools(self.conversation.items())
-                            .any(|tool| tool.result.is_some())
-                    {
-                        self.open_archive();
-                    } else {
-                        self.details = Some(evidence::Inspection::live(DetailView::latest_output(
-                            self.conversation.items(),
-                            self.conversation.tool_offset(),
-                        )));
-                    }
+                    self.details = Some(evidence::Inspection::live(DetailView::latest_output(
+                        self.conversation.items(),
+                    )));
                 } else {
                     self.toggle_tool_output();
                 }
@@ -1536,13 +1476,8 @@ impl Frontend {
         }
     }
 
-    fn open_archive(&mut self) {
-        self.history_view = Some(HistoryViewport::archive());
-        self.details = Some(evidence::Inspection::page(DetailView::default()));
-    }
-
     fn open_live_details(&mut self, selection: evidence::Select) {
-        match selection.view(self.conversation.items(), self.conversation.tool_offset()) {
+        match selection.view(self.conversation.items()) {
             Ok(view) => self.details = Some(evidence::Inspection::live(view)),
             Err(status) => self.status = status.into(),
         }
@@ -2036,11 +1971,10 @@ fn modal_rows(
                 .view
                 .prepare_recorded(tool, width, ui.themes.theme())
         }
-        evidence::Source::Live => inspector.view.prepare_live(
+        evidence::Source::Live => inspector.view.prepare_themed(
             ui.conversation.items(),
             ui.conversation.live().map_or(&[], LiveTranscript::notices),
             ui.conversation.revision(),
-            ui.conversation.tool_offset(),
             width,
             ui.themes.theme(),
         ),

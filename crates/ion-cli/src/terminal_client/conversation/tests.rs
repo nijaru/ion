@@ -33,7 +33,6 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
                 base.head_entry,
                 None,
                 Some(checkpoint),
-                None,
             ),
         );
         let input = Message::user_input("request".into(), []);
@@ -102,7 +101,6 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
                 base.selection,
                 2,
                 Some(checkpoint),
-                None,
                 None,
             ),
         );

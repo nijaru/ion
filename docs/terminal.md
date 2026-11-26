@@ -8,7 +8,7 @@ For a pane dedicated to Ion, use `ion chat --dedicated-pane`. Ion clears the pan
 
 Reopening a Session with a saved, available model and no launch input shows its history even if that provider's key is missing. Ion keeps the saved model rather than switching providers. A new prompt without the required credential returns its draft and attachments without starting a Turn; use `/login` or explicitly select another model. First-run setup, launch inputs and explicit changes to another model still use startup credential checks.
 
-On an ordinary settled reopen, chat loads a recent slice of the transcript. Press Alt-T for earlier history or for a large entry that did not fit. Dedicated panes keep their full replay behavior.
+On reopen, normal chat shows the selected branch from the beginning. Alt-T is a separate way to browse the transcript without moving the composer.
 
 Opening chat still loads configured application resources and MCP connections. Use `ion --session ID inspect` for credential-free, read-only inspection without that setup.
 

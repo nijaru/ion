@@ -559,12 +559,12 @@ fn editor_line_shortcuts_keep_other_lines_and_graphemes_intact() {
 }
 
 #[test]
-fn resume_history_tail_keeps_the_last_six_turns() {
-    let items = (1..=9)
+fn reopen_publishes_every_selected_turn_and_shell_once() {
+    let turns = (1..=9)
         .map(|turn| {
             TranscriptItem::User(ion_core::TranscriptMessage {
                 source: Some(TranscriptSource {
-                    entry: turn * 2 - 1,
+                    entry: turn,
                     part: 0,
                 }),
                 turn: Some(turn),
@@ -573,22 +573,11 @@ fn resume_history_tail_keeps_the_last_six_turns() {
             })
         })
         .collect::<Vec<_>>();
-    let tail = resume_history_tail(&items);
-    assert_eq!(tail.start, 3);
-    assert_eq!(tail.omitted_turns, 3);
-    assert_eq!(transcript_item_turn(&items[tail.start]), Some(4));
-}
-
-#[test]
-fn resume_history_tail_bounds_shell_only_history() {
-    let items = (0..40)
-        .map(|index| {
+    let commands = (1..=40)
+        .map(|entry| {
             TranscriptItem::UserShell(ion_core::UserShellActivity {
-                source: TranscriptSource {
-                    entry: index * 2 + 1,
-                    part: 0,
-                },
-                command: format!("echo {index}"),
+                source: TranscriptSource { entry, part: 0 },
+                command: format!("echo {entry}"),
                 outcome: Some(ion_core::UserShellOutcome::Observed {
                     output: ion_core::ToolOutput::success(serde_json::Value::Null),
                 }),
@@ -596,10 +585,35 @@ fn resume_history_tail_bounds_shell_only_history() {
             })
         })
         .collect::<Vec<_>>();
-    let tail = resume_history_tail(&items);
-    assert_eq!(tail.start, 8);
-    assert_eq!(tail.omitted_turns, 0);
-    assert_eq!(tail.omitted_entries, 8);
+    for items in [turns, commands] {
+        let mut conversation = conversation::Conversation::default();
+        let path = std::path::Path::new("fixture.session");
+        let prepare = || {
+            conversation::Prepared::committed(
+                ion_core::TranscriptProjection {
+                    items: items.clone(),
+                },
+                uuid::Uuid::nil(),
+                0,
+                items.len() as u64,
+                None,
+                None,
+            )
+        };
+        conversation.reconcile_prepared(path, prepare());
+        let pending = conversation.segments(conversation::Rows::Pending);
+        assert_eq!(pending.len(), items.len());
+        for (segment, expected) in pending.iter().zip(&items) {
+            assert!(matches!(segment, conversation::Segment::Item(item) if *item == expected));
+        }
+        conversation::fixtures::publish(&mut conversation);
+        conversation.reconcile_prepared(path, prepare());
+        assert!(
+            conversation
+                .segments(conversation::Rows::Pending)
+                .is_empty()
+        );
+    }
 }
 
 #[test]

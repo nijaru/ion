@@ -103,15 +103,7 @@ impl ContextIndex {
 
     pub(super) fn transcript_checkpoint(&self) -> Option<u64> {
         let head = self.transcript_head(self.head);
-        self.is_transcript_boundary(head).then_some(head)
-    }
-
-    pub(super) fn is_transcript_boundary(&self, entry: u64) -> bool {
-        entry == 0 || self.nodes[(entry - 1) as usize].transcript_boundary
-    }
-
-    pub(super) fn tools_through(&self, entry: u64) -> usize {
-        self.tool_count(self.tool_ancestor(entry))
+        (head == 0 || self.nodes[(head - 1) as usize].transcript_boundary).then_some(head)
     }
 
     pub(super) fn transcript_after(&self, boundary: u64) -> Option<Vec<u64>> {

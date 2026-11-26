@@ -590,10 +590,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
 
         for mode in ("inline", "fullscreen"):
             target = f"paged-{mode}"
-            mode_archive = work / f"{target}.sqlite"
-            with sqlite3.connect(archive) as source, sqlite3.connect(mode_archive) as history:
-                source.backup(history)
-            launch = [binary, "--session", mode_archive, "chat", "--tui-mode", mode]
+            launch = [binary, "--session", archive, "chat", "--tui-mode", mode]
             tmux("new-session", "-d", "-s", target, "-x", "100", "-y", "22", "-c", str(workspace), shlex.join(map(str, launch)))
             tmux("set-option", "-w", "-t", target, "remain-on-exit", "on")
             end = time.monotonic() + 12
@@ -607,8 +604,11 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
                     time.sleep(0.02)
                 return pane
 
-            seeded = wait_for(lambda pane: composer_ready(pane) and "earlier history:" in pane.lower())
-            assert "PAGED_SHELL_057" not in seeded, "startup decoded the oversized final shell"
+            wait_for(lambda pane: composer_ready(pane) and "PAGED_SHELL_057" in pane)
+            if mode == "inline":
+                resumed = tmux("capture-pane", "-p", "-t", target, "-S", "-")
+                for marker in ("INPUT_ONCE", "PAGED_SHELL_000", "PAGED_SHELL_057"):
+                    assert resumed.count(marker) == 1, f"reopen skipped or duplicated {marker}"
             tmux("send-keys", "-t", target, "-l", "PAGED_UNSENT")
             tmux("send-keys", "-t", target, "M-t")
             wait_for(lambda pane: "Transcript" in pane and "PAGED_SHELL_056" in pane and "older history" in pane)
@@ -650,7 +650,7 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             tmux("send-keys", "-t", target, "Escape")
             wait_for(lambda pane: "PAGED_UNSENT" in pane and composer_ready(pane))
             if mode == "inline":
-                assert "PAGED_SHELL_057" not in tmux("capture-pane", "-p", "-t", target, "-S", "-"), "pager published archived evidence into inline chat"
+                assert tmux("capture-pane", "-p", "-t", target, "-S", "-").count("PAGED_SHELL_057") == 1
             tmux("send-keys", "-t", target, "C-c", "C-c")
             wait_for(lambda pane: "PAGED_UNSENT" not in pane and composer_ready(pane))
 
@@ -678,16 +678,6 @@ with tempfile.TemporaryDirectory(prefix="ion-scrollback-") as temporary:
             wait_for(lambda pane: "Conversation ·" in pane and "exceeds the page limit" in pane)
             tmux("send-keys", "-t", target, "Escape")
             wait_for(lambda pane: composer_ready(pane) and "Conversation ·" not in pane)
-            tmux("send-keys", "-t", target, "-l", "/tool 2")
-            tmux("send-keys", "-t", target, "Enter")
-            wait_for(lambda pane: "Tool 2: edit" in pane and "Recorded edit diff" in pane)
-            tmux("send-keys", "-t", target, "Escape")
-            wait_for(lambda pane: composer_ready(pane) and "Recorded edit diff" not in pane)
-            tmux("send-keys", "-t", target, "-l", "!!printf '%s%s\\n' SEED_NEW_ EFFECT")
-            tmux("send-keys", "-t", target, "Enter")
-            wait_for(lambda pane: composer_ready(pane) and "SEED_NEW_EFFECT" in pane)
-            if mode == "inline":
-                assert tmux("capture-pane", "-p", "-t", target, "-S", "-").count("SEED_NEW_EFFECT") == 1
             tmux("send-keys", "-t", target, "C-d", "C-d")
             while tmux("display-message", "-p", "-t", target, "#{pane_dead}").strip() != "1":
                 assert time.monotonic() < end, f"{mode}: reopened pager did not exit"

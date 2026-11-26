@@ -1,11 +1,11 @@
 //! Composer inspection has its own source. Committed snapshots are opened on
 //! demand; the live source stays attached to in-flight activity.
-use std::{collections::HashMap, num::NonZeroUsize, path::Path};
+use std::{num::NonZeroUsize, path::Path};
 
 use anyhow::Result;
 use ion_app::SessionControl;
 use ion_core::{
-    ActivityState, Session, SessionError, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget,
+    Session, SessionError, ToolEvidence, ToolEvidenceCursor, ToolEvidenceTarget,
     TranscriptActivity, TranscriptActivityIdentity, TranscriptItem,
 };
 
@@ -71,14 +71,13 @@ impl Select {
     pub(super) fn view<'a>(
         self,
         items: impl Iterator<Item = &'a TranscriptItem>,
-        offset: usize,
     ) -> Result<DetailView, &'static str> {
         let candidates = tools(items);
         let selection = match self {
             Self::Conversation => return Ok(DetailView::new(None)),
             Self::Latest => candidates.enumerate().last(),
             Self::Number(number) => number
-                .checked_sub(offset + 1)
+                .checked_sub(1)
                 .and_then(|index| candidates.enumerate().nth(index)),
             Self::Identity(identity) => candidates
                 .enumerate()
@@ -87,7 +86,7 @@ impl Select {
         let (index, activity) =
             selection.ok_or("Tool result not found; use /tools to list tools")?;
         Ok(DetailView::new(Some((
-            NonZeroUsize::new(offset + index + 1).expect("one-based tool number"),
+            NonZeroUsize::new(index + 1).expect("one-based tool number"),
             activity.identity,
         ))))
     }
@@ -98,13 +97,7 @@ pub(super) fn open(
     ui: &mut Frontend,
     selection: Select,
 ) -> Result<()> {
-    let offset = ui.conversation.tool_offset();
-    let outside_live_window = match &selection {
-        Select::Number(number) => *number <= offset,
-        Select::Latest if offset > 0 => tools(ui.conversation.items()).next().is_none(),
-        _ => false,
-    };
-    if control.is_busy() && !outside_live_window {
+    if control.is_busy() {
         ui.open_live_details(selection);
         Ok(())
     } else {
@@ -119,7 +112,8 @@ pub(super) fn open_committed(
 ) -> Result<()> {
     let target = match selection {
         Select::Conversation => {
-            ui.open_archive();
+            ui.history_view = Some(super::HistoryViewport::archive());
+            ui.details = Some(Inspection::page(DetailView::default()));
             return Ok(());
         }
         Select::Latest => Some(ToolEvidenceTarget::Latest),
@@ -203,24 +197,11 @@ pub(super) fn list(
     ui: &mut Frontend,
     query: Option<String>,
 ) -> Result<()> {
-    let live = if control.is_busy() && ui.conversation.has_omitted_history() {
-        tools(ui.conversation.items())
-            .map(|activity| (activity.identity, activity.state))
-            .collect::<HashMap<_, _>>()
-    } else {
-        HashMap::new()
-    };
-    if control.is_busy() && !ui.conversation.has_omitted_history() {
+    if control.is_busy() {
         let mut items: Vec<_> = tools(ui.conversation.items())
             .enumerate()
             .filter_map(|(index, activity)| {
-                matching_item(
-                    index + 1,
-                    activity,
-                    &ui.cwd,
-                    query.as_deref(),
-                    Some(activity.state),
-                )
+                matching_item(index + 1, activity, &ui.cwd, query.as_deref(), false)
             })
             .collect();
         items.reverse();
@@ -237,13 +218,9 @@ pub(super) fn list(
     ui.session_io.start(session, async move {
         let items = reader
             .fold_committed_tools(Vec::new(), move |items, number, activity| {
-                if let Some(item) = matching_item(
-                    number.get(),
-                    activity,
-                    &cwd,
-                    query.as_deref(),
-                    live.get(&activity.identity).copied(),
-                ) {
+                if let Some(item) =
+                    matching_item(number.get(), activity, &cwd, query.as_deref(), true)
+                {
                     items.push(item);
                 }
             })
@@ -260,7 +237,7 @@ fn matching_item(
     activity: &TranscriptActivity,
     cwd: &Path,
     query: Option<&str>,
-    live_state: Option<ActivityState>,
+    committed: bool,
 ) -> Option<PickerItem> {
     if let Some(query) = query
         && !activity
@@ -273,7 +250,7 @@ fn matching_item(
     let mut label = format!(
         "{number} · {} · {}",
         activity.name,
-        state_label(live_state.unwrap_or(activity.state))
+        state_label(activity.state)
     );
     if let Some(subject) = activity_subject(activity, cwd) {
         label.push_str(" · ");
@@ -282,10 +259,10 @@ fn matching_item(
     Some(PickerItem {
         label,
         detail: None,
-        value: if live_state.is_some() {
-            PickerValue::LiveTool(activity.identity)
-        } else {
+        value: if committed {
             PickerValue::CommittedTool(activity.identity)
+        } else {
+            PickerValue::LiveTool(activity.identity)
         },
     })
 }

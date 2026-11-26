@@ -94,10 +94,7 @@ pub(super) struct Prepared {
 }
 
 enum PreparedPrefix {
-    Rebuild {
-        tail: super::ResumeHistoryTail,
-        omitted_prefix: Option<usize>,
-    },
+    Rebuild,
     Retain(PresentationCursor),
 }
 
@@ -114,7 +111,6 @@ impl Prepared {
             view.context_position().head_entry,
             None,
             None,
-            None,
         )
     }
 
@@ -125,18 +121,11 @@ impl Prepared {
         head_entry: u64,
         after: Option<PresentationCursor>,
         checkpoint: Option<PresentationCursor>,
-        omitted_prefix: Option<usize>,
     ) -> Self {
         let positions = source_positions(&canonical);
         let mut sealed = SealedPrefix::default();
         sealed.extend(&canonical.items);
-        let prefix = after.map_or_else(
-            || PreparedPrefix::Rebuild {
-                tail: super::resume_history_tail(&canonical.items),
-                omitted_prefix,
-            },
-            PreparedPrefix::Retain,
-        );
+        let prefix = after.map_or(PreparedPrefix::Rebuild, PreparedPrefix::Retain);
         Self {
             canonical,
             sealed,
@@ -225,7 +214,6 @@ pub(super) struct Conversation {
     // unfinished suffix. Native publication has its own, later frontier.
     checkpoint: Option<(PresentationCursor, SealedPrefix)>,
     sealed: SealedPrefix,
-    omitted_prefix: Option<usize>,
     live: Option<Live>,
     notices: Vec<Notice>,
     visible_notice: bool,
@@ -265,14 +253,6 @@ impl Conversation {
             None
         }
     }
-    pub(super) fn has_omitted_history(&self) -> bool {
-        self.omitted_prefix.is_some()
-    }
-
-    pub(super) fn tool_offset(&self) -> usize {
-        self.omitted_prefix.unwrap_or(0)
-    }
-
     pub(super) fn live(&self) -> Option<&LiveTranscript> {
         self.live.as_ref().map(|live| &live.transcript)
     }
@@ -456,11 +436,7 @@ impl Conversation {
             Change::Session
         };
         if change != Change::Unchanged {
-            let PreparedPrefix::Rebuild {
-                tail,
-                omitted_prefix,
-            } = prefix
-            else {
+            let PreparedPrefix::Rebuild = prefix else {
                 unreachable!("new selection cannot reuse a transcript prefix");
             };
             self.publication_generation += 1;
@@ -468,41 +444,17 @@ impl Conversation {
             self.notices.clear();
             self.visible_notice = false;
             self.notices_published = 0;
-            let start = tail.start.min(sealed.len);
-            self.through = start.checked_sub(1).map(|index| {
-                canonical.items[index]
-                    .source()
-                    .expect("resume boundary is committed")
-            });
+            // Rebuild publishes the selected conversation from the beginning.
+            // Already-printed native scrollback belongs to the previous scope.
+            self.through = None;
             let label = session;
             self.banner = if same_session {
                 Some(format!(
                     "— selected context at entry {} · alternatives retained · files unchanged —",
                     head_entry
                 ))
-            } else if omitted_prefix.is_some() {
-                Some(format!(
-                    "— resumed session {label} · earlier history: Alt-T —"
-                ))
             } else if !canonical.items.is_empty() {
-                Some(if tail.omitted_turns > 0 {
-                    format!(
-                        "— resumed session {label} · {} earlier turn(s) retained —",
-                        tail.omitted_turns
-                    )
-                } else if tail.omitted_entries > 0 {
-                    format!(
-                        "— resumed session {label} · {} earlier entr{} retained —",
-                        tail.omitted_entries,
-                        if tail.omitted_entries == 1 {
-                            "y"
-                        } else {
-                            "ies"
-                        }
-                    )
-                } else {
-                    format!("— resumed session {label} —")
-                })
+                Some(format!("— resumed session {label} —"))
             } else if had_previous_session {
                 Some(format!("— session {label} —"))
             } else {
@@ -510,8 +462,7 @@ impl Conversation {
             };
         }
         match prefix {
-            PreparedPrefix::Rebuild { omitted_prefix, .. } => {
-                self.omitted_prefix = omitted_prefix;
+            PreparedPrefix::Rebuild => {
                 self.sealed = sealed;
                 self.canonical = canonical;
                 self.positions = positions;

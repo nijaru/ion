@@ -75,7 +75,6 @@ impl History {
                 snapshot.head_entry,
                 snapshot.after,
                 snapshot.checkpoint,
-                snapshot.omitted_prefix,
             ),
             prompts: snapshot.prompts,
             label: label(snapshot.id, snapshot.name),
@@ -258,7 +257,6 @@ impl SessionIo {
         &mut self,
         control: &SessionControl<EditorDraft>,
         conversation: &conversation::Conversation,
-        seed_history: bool,
     ) -> Result<()> {
         if !self.refresh_pending
             || self.has_read()
@@ -276,11 +274,7 @@ impl SessionIo {
         self.start(session, async move {
             Ok(ReadOutput::History(
                 io.run(move |session| {
-                    let snapshot = if seed_history {
-                        session.presentation_seed()?
-                    } else {
-                        session.presentation(after)?
-                    };
+                    let snapshot = session.presentation(after)?;
                     let revision = snapshot.revision;
                     let context = agent.context_report(session, &instructions);
                     let mut history = History::committed(snapshot);
@@ -777,13 +771,6 @@ impl Frontend {
         // Edits and pickers opened while it loaded still belong to this Session.
         let initialized = self.conversation.scope().is_some();
         let change = self.conversation.reconcile_prepared(path, projection);
-        if !initialized
-            && self.mode == super::TuiMode::Fullscreen
-            && self.conversation.has_omitted_history()
-            && self.status.is_empty()
-        {
-            self.status = "Earlier history: Alt-T".into();
-        }
         let same_session = !initialized || change != conversation::Change::Session;
         if !same_session {
             self.editor.reset_edit_baseline();
