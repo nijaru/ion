@@ -144,7 +144,7 @@ impl PreparedRequest {
             .as_ref()
             .map_or(&[], |context| context.tools.as_slice());
         let catalog = catalog.map_or_else(
-            || tools.snapshot_with_previous(previous),
+            || tools.request_catalog(previous),
             |catalog| catalog.with_previous(previous),
         );
         let context = ModelContextSnapshot {

@@ -163,22 +163,12 @@ impl Drop for McpReconnect {
 }
 
 impl McpStartup {
-    /// Join initial generations that may publish direct model tools.
-    /// Other attempts stay owned by the returned manager, not this wait.
-    pub async fn wait_for_direct(self) -> Self {
-        self.wait(true).await
-    }
-
     /// Wait for every initial generation (for hosts requiring a complete inventory).
-    pub async fn wait_for_all(self) -> Self {
-        self.wait(false).await
-    }
-
-    async fn wait(mut self, direct_only: bool) -> Self {
+    pub async fn wait_for_all(mut self) -> Self {
         let Some(tools) = self.tools.as_ref() else {
             return self;
         };
-        let work = tools.initial_work(direct_only);
+        let work = tools.initial_work();
         for result in join_all(work.iter().map(|work| work.joined())).await {
             if let Err(error) = result {
                 self.diagnostics.push(error);
@@ -191,7 +181,7 @@ impl McpStartup {
             if let Err(error) = tools.shutdown().await {
                 self.diagnostics.push(format!("{error:#}"));
             }
-            for work in tools.initial_work(false) {
+            for work in tools.initial_work() {
                 self.diagnostics.extend(work.take_startup_diagnostics());
             }
             self.tools = None;
@@ -248,9 +238,18 @@ impl McpTools {
         McpStartup { tools, diagnostics }
     }
 
-    fn initial_work(&self, direct_only: bool) -> Vec<Arc<ConnectionWork>> {
+    fn initial_work(&self) -> Vec<Arc<ConnectionWork>> {
+        self.connection_work(|work, _| work.initial)
+    }
+
+    fn pending_work(&self, exposure: McpExposure) -> Vec<Arc<ConnectionWork>> {
         self.connection_work(|work, definition| {
-            work.initial && (!direct_only || may_publish_direct(definition))
+            may_publish(definition, exposure)
+                && work
+                    .completion
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_none()
         })
     }
 
@@ -427,22 +426,13 @@ impl McpTools {
     }
 
     async fn refresh_changed(&self, stop: CancellationToken) -> Vec<String> {
-        // A direct replacement has retired the old generation. Preserve the
-        // request boundary for that route without blocking on optional peers,
-        // holding the catalog gate, or cancelling a shared reconnect on Stop.
-        let replacements = self.connection_work(|work, definition| {
-            !work.initial
-                && may_publish_direct(definition)
-                && work
-                    .completion
-                    .read()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .is_none()
-        });
+        // Wait for direct inventory at the request boundary, not client open.
+        // Stop drops this wait, not the manager's shared connection workers.
+        let direct = self.pending_work(McpExposure::Direct);
         tokio::select! {
             biased;
             () = stop.cancelled() => return Vec::new(),
-            _ = join_all(replacements.iter().map(|work| work.joined())) => {},
+            _ = join_all(direct.iter().map(|work| work.joined())) => {},
         }
         let mut diagnostics = self
             .state
@@ -551,12 +541,12 @@ impl McpTools {
     }
 }
 
-fn may_publish_direct(definition: &McpServer) -> bool {
-    definition.exposure() == McpExposure::Direct
+fn may_publish(definition: &McpServer, exposure: McpExposure) -> bool {
+    definition.exposure() == exposure
         || definition
             .tool_exposure()
             .values()
-            .any(|exposure| *exposure == McpExposure::Direct)
+            .any(|configured| *configured == exposure)
 }
 
 impl ToolSource for McpTools {
@@ -617,6 +607,17 @@ impl ToolSource for McpTools {
             .collect::<Vec<_>>();
         registrations.extend(resource_tools::registrations(&live));
         registrations
+    }
+
+    fn deferred_pending(&self) -> bool {
+        !self.pending_work(McpExposure::Deferred).is_empty()
+    }
+
+    fn wait_for_deferred(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let pending = self.pending_work(McpExposure::Deferred);
+            join_all(pending.iter().map(|work| work.joined())).await;
+        })
     }
 
     fn refresh<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {

@@ -4,11 +4,11 @@ Use `ion mcp add` for a local stdio server or `ion mcp add-http` for a remote
 Streamable HTTP server. `ion mcp list` shows saved configuration; `/mcp` in chat
 shows connection status and tool counts.
 
-Enabled servers connect in parallel when a coding client starts. Only servers
-configured to expose direct tools hold up client startup. A deferred server
-connects in the background; once it's available, `tool_search` can load its
-schemas for a later request. Use `/mcp` to check if a server is still connecting
-or why it failed. Both exposure modes respect the
+Enabled servers connect in parallel without blocking chat from opening. Model
+requests wait for connecting servers configured to expose direct tools. Deferred
+servers don't block ordinary requests: `tool_search` waits for their inventory
+when called and loads matching schemas for the next request. Use `/mcp` to check
+if a server is still connecting or why it failed. Both exposure modes respect the
 [selected tool loadout](tool-control.md#select-the-models-tools).
 
 ## Use Context7 for library documentation

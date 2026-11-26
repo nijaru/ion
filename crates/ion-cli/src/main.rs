@@ -699,27 +699,12 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             // stream through MCP startup, writer acquisition and the client.
             let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
             let mut application = application.expect("non-coding commands returned before runtime setup");
-            let mut interrupted = false;
             let startup = if matches!(client, Client::Headless(headless::Request::Compact(_), _)) {
                 ion_app::McpStartup::default()
             } else {
-                let preparation = host.external_tools(
-                    session_cwd,
-                    stop.clone(),
-                );
-                tokio::pin!(preparation);
-                tokio::select! {
-                    biased;
-                    _ = termination::requested(&mut interrupt, &terminated) => {
-                        interrupted = true;
-                        stop.cancel();
-                        // Never drop startup while it owns helpers/transports.
-                        preparation.await
-                    }
-                    startup = &mut preparation => startup,
-                }
+                host.external_tools(session_cwd, stop.clone())
             };
-            interrupted |= stop.is_cancelled();
+            let mut interrupted = stop.is_cancelled();
             let external_mcp = startup.tools;
             let mut handed_off = false;
             // Terminal and bidirectional RPC own a live question responder.

@@ -632,6 +632,46 @@ time.sleep(60)
 '''
 
 
+def receive_rpc(client, deadline, predicate, forbidden=None):
+    while True:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0 and select.select([client.stdout], [], [], remaining)[0], "RPC response timed out"
+        raw = client.stdout.readline()
+        assert raw, "RPC closed before response"
+        assert forbidden is None or forbidden not in raw, "credential leaked to RPC output"
+        record = json.loads(raw)
+        if predicate(record):
+            return record
+
+
+def wait_inventory(client, deadline, forbidden=None):
+    receive_rpc(client, deadline, lambda record: record["type"] == "ready", forbidden)
+    while True:
+        client.stdin.write(b'{"type":"get_state","id":"inventory"}\n')
+        state = receive_rpc(client, deadline, lambda record: record.get("id") == "inventory", forbidden)
+        servers = state["data"]["mcp_servers"]
+        if all(server["status"] != "connecting" for server in servers):
+            return servers
+        time.sleep(0.02)
+
+
+def inspect_inventory(workspace, env, stderr=subprocess.PIPE):
+    # RPC ready no longer implies that MCP initialization has completed.
+    with subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=stderr, bufsize=0) as client:
+        try:
+            servers = wait_inventory(client, time.monotonic() + 15)
+            client.stdin.close()
+            assert client.wait(timeout=10) == 0
+            if client.stderr is not None:
+                assert not client.stderr.read()
+            return servers
+        finally:
+            if client.poll() is None:
+                client.kill()
+                client.wait(timeout=10)
+
+
 def check_owned_cleanup():
     # Offline startup/exit only: no provider requests or live server routes.
     with tempfile.TemporaryDirectory(prefix="ion-mcp-owned-") as temporary:
@@ -658,7 +698,7 @@ def check_owned_cleanup():
             (prompts / "probe.md").write_text("Inspect $@")
             configured = {"owned": {"command": sys.executable, "args": [str(fixture), mode]}}
             if name in ("preflight", "diagnostic-io", "preflight-io"):
-                configured["broken"] = {"command": str(work / "missing-server")}
+                configured["broken"] = {"command": 42}  # synchronous configuration diagnostic
             config_path.write_text(json.dumps({"servers": configured}))
             pid = None
             input_database = workspace / "must-not-exist.sqlite"
@@ -677,6 +717,12 @@ def check_owned_cleanup():
                             os.close(writer)
                         assert response.returncode == 1, f"{name}: CLI diagnostic delivery panicked: {response.returncode}"
                         assert out.tell() == 0, f"{name}: RPC started despite failed startup diagnostics"
+                    elif name in ("exit", "init-fault", "listing-fault"):
+                        [owned] = inspect_inventory(workspace, env, err)
+                        assert owned["status"] == ("unavailable" if error else "available"), owned
+                        if error:
+                            assert error in owned["diagnostic"], owned
+                        response = subprocess.CompletedProcess(args, 0)
                     else:
                         response = subprocess.run([binary, "--cwd", workspace, *args], input="", env=env, stdout=out, stderr=err, text=True, timeout=25)
                     out.seek(0)
@@ -691,15 +737,14 @@ def check_owned_cleanup():
                     assert not (workspace / "owned.pid").exists(), "invalid input started MCP"
                     assert not (workspace / "owned.eof").exists(), "unexpected MCP transport"
                     continue
-                pid = int((workspace / "owned.pid").read_text())
-                process = subprocess.run(["ps", "-p", str(pid), "-o", "pid="], capture_output=True, text=True)
-                assert not process.stderr, process
-                assert not process.stdout.strip(), f"{name}: owned root {pid} survived or was not reaped"
-                assert (workspace / "owned.eof").exists(), f"{name}: transport did not close stdin"
-                if error:
-                    assert error in response.stderr, response
+                if (workspace / "owned.pid").exists():
+                    pid = int((workspace / "owned.pid").read_text())
+                    process = subprocess.run(["ps", "-p", str(pid), "-o", "pid="], capture_output=True, text=True)
+                    assert not process.stderr and not process.stdout.strip(), f"{name}: owned root {pid} survived or was not reaped"
+                if name in ("exit", "init-fault", "listing-fault"):
+                    assert pid is not None and (workspace / "owned.eof").exists(), f"{name}: transport did not close stdin"
                 if name == "preflight":
-                    assert "cannot start MCP server broken" in response.stderr, response
+                    assert error in response.stderr and 'invalid MCP server "broken"' in response.stderr, response
                 expected_failure = name in ("preflight", "diagnostic-io", "preflight-io")
                 assert (response.returncode != 0) == expected_failure, response
             finally:
@@ -738,29 +783,14 @@ def check_context7(work, workspace, env, server, remote):
         deadline = time.monotonic() + 20
 
         def receive(predicate):
-            while True:
-                remaining = deadline - time.monotonic()
-                assert remaining > 0 and select.select([client.stdout], [], [], remaining)[0], "RPC discovery timed out"
-                raw = client.stdout.readline()
-                assert raw, "RPC closed before discovery"
-                assert CONTEXT7_TOKEN.encode() not in raw, "credential leaked to RPC output"
-                record = json.loads(raw)
-                if predicate(record):
-                    return record
+            return receive_rpc(client, deadline, predicate, CONTEXT7_TOKEN.encode())
 
         def send(kind, **fields):
             client.stdin.write((json.dumps({"type": kind, **fields}) + "\n").encode())
 
         try:
-            receive(lambda record: record["type"] == "ready")
-            while True:
-                send("get_state", id="inventory")
-                state = receive(lambda record: record["type"] == "response" and record.get("id") == "inventory")
-                [status] = state["data"]["mcp_servers"]
-                if status["status"] == "available":
-                    break
-                assert status["status"] == "connecting", status
-                time.sleep(0.02)
+            [status] = wait_inventory(client, deadline, CONTEXT7_TOKEN.encode())
+            assert status["status"] == "available", status
             send("prompt", id="docs", message="Use Context7: " + CONTEXT7_QUERY)
             result = receive(lambda record: record["type"] == "turn_end")
             assert result["status"] == "completed", result
@@ -833,8 +863,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert "  exposure\tdirect" in paused_listing.stdout and "${ION_MCP_ENABLE_MISSING}" not in paused_listing.stdout, paused_listing
         for name in ("paused-local", "paused-remote"):
             subprocess.run([binary, "mcp", "enable", name], env=env, check=True, capture_output=True)
-        enabled = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env={**env, "ION_MCP_ENABLE_MISSING": "fixture-token"}, check=True, capture_output=True, text=True, timeout=15)
-        assert not enabled.stderr, enabled
+        enabled = inspect_inventory(workspace, {**env, "ION_MCP_ENABLE_MISSING": "fixture-token"})
+        assert [server["status"] for server in enabled] == ["available", "available"], enabled
         assert (workspace / "enable-events.txt").read_text() == "started\neof\n"
         assert "/mcp" in remote.received_paths and set(remote.header_methods) == {"POST", "GET", "DELETE"}
         assert requests == [] and remote_calls == [], "configuration management dispatched model/tool work"
@@ -843,8 +873,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         remote.header_methods = []
         remote.received_paths = []
         subprocess.run([binary, "mcp", "add-http", "redirected", f"http://127.0.0.1:{remote.server_port}/redirect", "--header", "Authorization=Bearer ${REMOTE_MCP_TOKEN}", "--header", "X-Api-Key=${REMOTE_HEADER_KEY}"], env=env, check=True, capture_output=True)
-        redirected = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=env, check=True, capture_output=True, text=True, timeout=15)
-        assert "initialization failed" in redirected.stderr, redirected
+        [redirected] = inspect_inventory(workspace, env)
+        assert redirected["status"] == "unavailable" and "initialization failed" in redirected["diagnostic"], redirected
         assert not remote.redirect_followed, "HTTP startup replayed credentials to a redirect target"
         subprocess.run([binary, "mcp", "remove", "redirected"], env=env, check=True, capture_output=True)
         for stage in ("headers", "sse"):
@@ -852,9 +882,9 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
             remote.startup_seen = threading.Event()
             subprocess.run([binary, "mcp", "add-http", "stalled", f"http://127.0.0.1:{remote.server_port}/stalled-{stage}"], env=env, check=True, capture_output=True)
             try:
-                stalled = subprocess.run([binary, "--cwd", workspace, "rpc"], input="", env=env, check=True, capture_output=True, text=True, timeout=15)
+                [stalled] = inspect_inventory(workspace, env)
                 assert remote.startup_seen.is_set(), "HTTP bootstrap was not exercised"
-                assert "initialization timed out" in stalled.stderr, stalled
+                assert stalled["status"] == "unavailable" and "initialization timed out" in stalled["diagnostic"], stalled
             finally:
                 remote.startup_release.set()
                 subprocess.run([binary, "mcp", "remove", "stalled"], env=env, check=True, capture_output=True)

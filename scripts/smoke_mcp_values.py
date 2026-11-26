@@ -183,14 +183,15 @@ for line in sys.stdin:
         project.unlink()
         sleeper = workspace / "interrupt-helper.py"
         sleeper.write_text("import os,sys,time\nfrom pathlib import Path\npath=Path(sys.argv[1]);tmp=path.with_suffix('.tmp')\ntmp.write_text(str(os.getpid()));tmp.replace(path)\ntime.sleep(60)\n")
-        for client, stop_signal in product([["run", "Never admitted."], ["rpc"], ["chat"]], (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
+        for client, stop_signal in product([["run", "Never sent."], ["rpc"]], (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)):
             marker = workspace / ("pid-" + client[0] + f"-{stop_signal}")
             save({"interrupted": {"command": sys.executable, "args": [str(source)], "env": {
                 "TOKEN": {"command": sys.executable, "args": [str(sleeper), str(marker)]}
             }}})
             before = len(provider_packets)
             child = subprocess.Popen([binary, "--cwd", workspace, *client], env=env,
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                     stdin=subprocess.PIPE if client[0] == "rpc" else subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                      start_new_session=True)
             pid = None
             try:
@@ -200,10 +201,11 @@ for line in sys.stdin:
                 assert marker.exists(), f"startup helper was not admitted: {client}, Ion status {child.poll()}"
                 pid = int(marker.read_text())
                 child.send_signal(stop_signal)
+                child.wait(timeout=5)  # Don't race the signal with RPC stdin EOF.
                 stdout, stderr = child.communicate(timeout=5)
                 assert child.returncode == 1, (client, child.returncode, stdout, stderr)
-                assert b"MCP startup interrupted" in stderr, stderr
-                assert len(provider_packets) == before, "interrupted preparation admitted a model request"
+                assert b"interrupted" in stderr or b"cancelled" in stderr, stderr
+                assert len(provider_packets) == before, "interrupted readiness sent a model request"
                 try:
                     os.kill(pid, 0)
                 except ProcessLookupError:
@@ -221,7 +223,7 @@ for line in sys.stdin:
                     if observed.returncode == 0 and str(sleeper) in observed.stdout:
                         assert int(observed.stdout.split()[0]) == pid, observed.stdout
                         os.killpg(pid, signal.SIGKILL)
-        print("Ion MCP argv helpers: startup SIGINT/TERM/HUP join preparation before headless/RPC/terminal admission: OK")
+        print("Ion MCP argv helpers: SIGINT/TERM/HUP join connection work without a model request: OK")
         print("Ion MCP argv helpers: literal data, captured headers/env, offline readers, trust, secret-safe failure and zero replay: OK")
     finally:
         for server in [provider, remote]:

@@ -370,7 +370,11 @@ def main():
                     fixture.value("")
                     fixture.save(steady=False)
                 rpc = Rpc(fixture)
-                inspect(fixture, rpc, "unavailable" if case == "unavailable" else "available", steady=case != "unavailable")
+                initial = "unavailable" if case == "unavailable" else "available"
+                until(lambda: [server["status"] for server in rpc.request("get_state")["data"]["mcp_servers"]]
+                      == ([initial] if case == "unavailable" else [initial, "available"]),
+                      "initial MCP inventory did not settle")
+                inspect(fixture, rpc, initial, steady=case != "unavailable")
                 if case == "unavailable":
                     before = fixture.facts()
                     assert not fixture.events() and not fixture.requests

@@ -59,7 +59,7 @@ impl OrderedBatch {
     {
         let session = io.session();
         let catalog = self.plan.catalog();
-        let mut activate_tools = BTreeSet::new();
+        let mut activate_tools: Vec<ion_ai::ToolSpec> = Vec::new();
         for (index, call) in self.calls.iter().enumerate() {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
@@ -149,13 +149,21 @@ impl OrderedBatch {
                     )
                 }
             };
-            let previously_activated = activate_tools.len();
-            activate_tools.extend(activated);
-            let next_context =
-                (activate_tools.len() != previously_activated).then(|| ModelContextSnapshot {
-                    instructions: instructions.into(),
-                    tools: catalog.declared_specs_with(&activate_tools),
-                });
+            let changed = !activated.is_empty();
+            for spec in activated {
+                if let Some(previous) = activate_tools
+                    .iter_mut()
+                    .find(|previous| previous.name == spec.name)
+                {
+                    *previous = spec;
+                } else {
+                    activate_tools.push(spec);
+                }
+            }
+            let next_context = changed.then(|| ModelContextSnapshot {
+                instructions: instructions.into(),
+                tools: catalog.context_after_discovery(&activate_tools),
+            });
             let settlement = crate::ToolSettlement {
                 call_id: call.id.clone(),
                 name: call.name.clone(),

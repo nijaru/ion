@@ -75,7 +75,7 @@ pub(crate) enum ToolExecution {
     Observed {
         output: ToolOutput,
         /// Deferred capabilities to add to the next request's declared loadout.
-        activate: Vec<String>,
+        activate: Vec<ToolSpec>,
     },
     NotDispatched {
         reason: String,
@@ -168,6 +168,17 @@ impl ToolRegistration {
 pub trait ToolSource: Send + Sync {
     fn registrations(self: Arc<Self>) -> Vec<ToolRegistration>;
 
+    /// Whether a future publication may add deferred tools. A request samples
+    /// this before registrations so concurrent publication cannot hide search.
+    fn deferred_pending(&self) -> bool {
+        false
+    }
+
+    /// Wait for deferred inventory. Dropping this wait must not cancel owned work.
+    fn wait_for_deferred(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+
     fn refresh<'a>(&'a self, _stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
         Box::pin(async { Vec::new() })
     }
@@ -245,27 +256,38 @@ impl ToolSet {
     /// Freeze one coherent executable catalog and restore previously declared
     /// deferred tools only when their provider-neutral definition is unchanged.
     pub fn snapshot_with_previous(&self, previous: &[ToolSpec]) -> ToolCatalog {
-        let mut entries: Vec<RoutedTool> = Vec::new();
-        let mut positions = HashMap::new();
-        for source in &self.sources {
-            for registration in source.clone().registrations() {
-                let name = registration.definition.spec.name.clone();
-                if !self.selection.allows(&name) {
-                    continue;
-                }
-                let routed = RoutedTool::new(
+        self.build_catalog(previous, false)
+    }
+
+    pub(crate) fn request_catalog(&self, previous: &[ToolSpec]) -> ToolCatalog {
+        self.build_catalog(previous, true)
+    }
+
+    fn build_catalog(&self, previous: &[ToolSpec], allow_wait: bool) -> ToolCatalog {
+        let discovery = (allow_wait && self.selection.allows(TOOL_SEARCH_NAME))
+            .then(|| {
+                self.sources
+                    .iter()
+                    .filter(|source| source.deferred_pending())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .filter(|sources| !sources.is_empty())
+            .map(|pending| PendingDiscovery {
+                pending,
+                sources: self.sources.clone(),
+            });
+        let (registrations, mut positions) =
+            Self::source_registrations(&self.sources, &self.selection);
+        let mut entries = registrations
+            .into_iter()
+            .map(|registration| {
+                RoutedTool::new(
                     registration.definition,
                     ToolRoute::Executor(registration.executor),
-                );
-                match positions.get(&name).copied() {
-                    Some(index) => entries[index] = routed,
-                    None => {
-                        positions.insert(name, entries.len());
-                        entries.push(routed);
-                    }
-                }
-            }
-        }
+                )
+            })
+            .collect::<Vec<_>>();
         if let Some((runtime, limits)) = &self.composition {
             let definition = crate::composition::definition(*limits);
             let name = definition.spec.name.clone();
@@ -300,8 +322,38 @@ impl ToolSet {
             previous,
             self.selection.clone(),
             self.policy.clone(),
+            discovery,
         )
     }
+
+    fn source_registrations(
+        sources: &[Arc<dyn ToolSource>],
+        selection: &ToolSelection,
+    ) -> (Vec<ToolRegistration>, HashMap<String, usize>) {
+        let mut entries = Vec::new();
+        let mut positions = HashMap::new();
+        for source in sources {
+            for registration in source.clone().registrations() {
+                let name = registration.definition.spec.name.clone();
+                if !selection.allows(&name) {
+                    continue;
+                }
+                match positions.get(&name).copied() {
+                    Some(index) => entries[index] = registration,
+                    None => {
+                        positions.insert(name, entries.len());
+                        entries.push(registration);
+                    }
+                }
+            }
+        }
+        (entries, positions)
+    }
+}
+
+struct PendingDiscovery {
+    pending: Vec<Arc<dyn ToolSource>>,
+    sources: Vec<Arc<dyn ToolSource>>,
 }
 
 #[derive(Clone)]
@@ -342,6 +394,7 @@ pub struct ToolCatalog {
     positions: HashMap<String, usize>,
     declared: HashSet<String>,
     selection: ToolSelection,
+    discovery: Option<PendingDiscovery>,
 }
 
 impl ToolCatalog {
@@ -350,6 +403,7 @@ impl ToolCatalog {
         previous: &[ToolSpec],
         selection: ToolSelection,
         policy: Option<Arc<dyn crate::ToolPolicy>>,
+        discovery: Option<PendingDiscovery>,
     ) -> Self {
         let mut positions = entries
             .iter()
@@ -373,11 +427,12 @@ impl ToolCatalog {
             .collect::<HashSet<_>>();
 
         if selection.allows(TOOL_SEARCH_NAME)
-            && entries.iter().any(|entry| {
-                entry.input_schema.is_ok()
-                    && entry.definition.exposure == ToolExposure::Deferred
-                    && !declared.contains(&entry.definition.spec.name)
-            })
+            && (discovery.is_some()
+                || entries.iter().any(|entry| {
+                    entry.input_schema.is_ok()
+                        && entry.definition.exposure == ToolExposure::Deferred
+                        && !declared.contains(&entry.definition.spec.name)
+                }))
         {
             let definition = tool_search_definition();
             let name = definition.spec.name.clone();
@@ -398,6 +453,7 @@ impl ToolCatalog {
             positions,
             declared,
             selection,
+            discovery,
         }
     }
 
@@ -412,6 +468,7 @@ impl ToolCatalog {
             previous,
             self.selection.clone(),
             self.policy.clone(),
+            None,
         )
     }
 
@@ -487,28 +544,32 @@ impl ToolCatalog {
         self.entry(name).map(|entry| &entry.definition)
     }
 
-    /// Declared specs after additionally activating names returned by the
-    /// intrinsic discovery tool. Unknown/non-deferred names are ignored.
-    pub fn declared_specs_with(
-        &self,
-        additional: &std::collections::BTreeSet<String>,
-    ) -> Vec<ToolSpec> {
-        let search_needed = self.callable_entries().any(|entry| {
-            entry.definition.exposure == ToolExposure::Deferred
-                && !self.declared.contains(&entry.definition.spec.name)
-                && !additional.contains(&entry.definition.spec.name)
-        });
-        self.callable_entries()
-            .filter(|entry| match &entry.route {
-                ToolRoute::Search => search_needed,
-                ToolRoute::Executor(_) | ToolRoute::Composition(..) | ToolRoute::History => {
-                    self.declared.contains(&entry.definition.spec.name)
-                        || (entry.definition.exposure == ToolExposure::Deferred
-                            && additional.contains(&entry.definition.spec.name))
-                }
+    /// Persist exact discovery results, never a promise that a name will
+    /// resolve to the same definition when the next request is built.
+    pub(crate) fn context_after_discovery(&self, additional: &[ToolSpec]) -> Vec<ToolSpec> {
+        let mut specs = self
+            .callable_entries()
+            .filter(|entry| {
+                self.declared.contains(&entry.definition.spec.name)
+                    && !matches!(entry.route, ToolRoute::Search)
             })
             .map(|entry| entry.definition.spec.clone())
-            .collect()
+            .collect::<Vec<_>>();
+        specs.extend_from_slice(additional);
+        if let Some(search) = self
+            .entry(TOOL_SEARCH_NAME)
+            .filter(|entry| matches!(entry.route, ToolRoute::Search))
+            && (self.discovery.is_some()
+                || self.callable_entries().any(|entry| {
+                    let definition = &entry.definition;
+                    definition.exposure == ToolExposure::Deferred
+                        && !self.declared.contains(&definition.spec.name)
+                        && !additional.contains(&definition.spec)
+                }))
+        {
+            specs.push(search.definition.spec.clone());
+        }
+        specs
     }
 
     /// Search callable definitions with the same ranking as the model's
@@ -655,9 +716,9 @@ impl ToolCatalog {
             return ToolDispatch::rejected("stopped before tool dispatch");
         }
         match &entry.route {
-            ToolRoute::Search => {
-                ToolDispatch::Execution(Box::pin(async move { self.search_deferred(call) }))
-            }
+            ToolRoute::Search => ToolDispatch::Execution(Box::pin(async move {
+                self.search_deferred(call, invocation.stop()).await
+            })),
             ToolRoute::Executor(executor) => {
                 // Selecting a frozen route grants no host authority. Even an
                 // executor's synchronous constructor runs only when polled.
@@ -675,7 +736,7 @@ impl ToolCatalog {
         }
     }
 
-    fn search_deferred(&self, call: &ToolCall) -> ToolExecution {
+    async fn search_deferred(&self, call: &ToolCall, stop: &CancellationToken) -> ToolExecution {
         let input: ToolSearchInput = match serde_json::from_value(call.arguments.clone()) {
             Ok(input) => input,
             Err(error) => {
@@ -710,20 +771,52 @@ impl ToolCatalog {
             });
         }
 
-        let matches = discovery::rank(
-            &query,
-            self.callable_entries()
-                .filter(|entry| {
-                    entry.definition.exposure == ToolExposure::Deferred
-                        && !self.declared.contains(&entry.definition.spec.name)
-                })
-                .map(|entry| &entry.definition),
-            limit,
-        );
+        // The discovery view is inert: these registrations never become routes
+        // in the response that issued this search (including composed siblings).
+        let not_loaded = |definition: &ToolDefinition| {
+            definition.exposure == ToolExposure::Deferred
+                && !self.declared.contains(&definition.spec.name)
+        };
+        let fresh;
+        let matches = if let Some(discovery) = &self.discovery {
+            for source in &discovery.pending {
+                tokio::select! {
+                    biased;
+                    () = stop.cancelled() => return ToolExecution::NotDispatched {
+                        reason: "stopped while waiting for deferred tool inventory".into(),
+                    },
+                    () = source.wait_for_deferred() => {},
+                }
+            }
+            fresh = ToolSet::source_registrations(&discovery.sources, &self.selection)
+                .0
+                .into_iter()
+                .map(|registration| registration.definition)
+                .collect::<Vec<_>>();
+            discovery::rank(
+                &query,
+                fresh.iter().filter(|definition| {
+                    not_loaded(definition)
+                        && crate::json_schema::CompiledSchema::compile(
+                            &definition.spec.input_schema,
+                        )
+                        .is_ok()
+                }),
+                limit,
+            )
+        } else {
+            discovery::rank(
+                &query,
+                self.callable_entries()
+                    .map(|entry| &entry.definition)
+                    .filter(|definition| not_loaded(definition)),
+                limit,
+            )
+        };
 
         let activate = matches
             .iter()
-            .map(|definition| definition.spec.name.clone())
+            .map(|definition| definition.spec.clone())
             .collect::<Vec<_>>();
         let tools = matches
             .iter()
@@ -813,7 +906,7 @@ mod tests {
         assert!(catalog.is_declared(TOOL_SEARCH_NAME));
         assert!(
             catalog
-                .declared_specs_with(&["broken".into()].into_iter().collect())
+                .declared_specs()
                 .iter()
                 .all(|spec| spec.name != "broken")
         );
@@ -1037,16 +1130,95 @@ mod tests {
             panic!("search was rejected")
         };
         assert!(!output.is_error);
-        assert_eq!(activate, ["deferred"]);
+        assert_eq!(activate[0].name, "deferred");
         assert_eq!(output.value["count"], 1);
 
-        let activate = activate.into_iter().collect();
         let names = catalog
-            .declared_specs_with(&activate)
+            .context_after_discovery(&activate)
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
         assert_eq!(names, ["direct", "deferred"]);
+    }
+
+    struct PendingSource(tokio::sync::watch::Receiver<Option<Arc<Stub>>>);
+
+    impl ToolSource for PendingSource {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            self.0
+                .borrow()
+                .clone()
+                .map_or_else(Vec::new, |stub| stub.registrations())
+        }
+
+        fn deferred_pending(&self) -> bool {
+            self.0.borrow().is_none()
+        }
+
+        fn wait_for_deferred(&self) -> BoxFuture<'_, ()> {
+            Box::pin(async move {
+                let _ = self.0.clone().wait_for(Option::is_some).await;
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn late_discovery_persists_an_exact_spec_without_granting_a_route() {
+        let (inventory, receive) = tokio::sync::watch::channel(None);
+        let tools = ToolSet::new([Arc::new(PendingSource(receive)) as Arc<dyn ToolSource>]);
+        let fixed = tools.snapshot();
+        let issued = tools.request_catalog(&[]);
+        assert!(!fixed.is_declared(TOOL_SEARCH_NAME));
+        assert!(issued.is_declared(TOOL_SEARCH_NAME));
+        let call = ToolCall {
+            id: "search".into(),
+            name: TOOL_SEARCH_NAME.into(),
+            arguments: json!({"query":"lookup"}),
+            raw_arguments: None,
+        };
+        let stop = CancellationToken::new();
+        let ToolDispatch::Execution(wait) = issued
+            .execute_model_call(crate::ToolInvocation::untracked(&call, stop.clone()))
+            .await
+        else {
+            panic!("expected search execution");
+        };
+        tokio::pin!(wait);
+        assert!(futures_util::poll!(&mut wait).is_pending());
+        stop.cancel();
+        assert!(matches!(wait.await, ToolExecution::NotDispatched { .. }));
+
+        let mut lookup = Stub::new("lookup", "original");
+        lookup.definition.exposure = ToolExposure::Deferred;
+        let spec = lookup.definition.spec.clone();
+        inventory.send_replace(Some(Arc::new(lookup)));
+        let ToolDispatch::Execution(search) = issued
+            .execute_model_call(crate::ToolInvocation::untracked(
+                &call,
+                CancellationToken::new(),
+            ))
+            .await
+        else {
+            panic!("expected search execution");
+        };
+        let ToolExecution::Observed { activate, .. } = search.await else {
+            panic!("expected discovery result");
+        };
+        assert_eq!(activate, [spec]);
+        assert!(issued.definition("lookup").is_none());
+        assert!(
+            fixed
+                .with_previous(&activate)
+                .definition("lookup")
+                .is_none()
+        );
+        let saved = issued.context_after_discovery(&activate);
+        assert!(tools.request_catalog(&saved).is_declared("lookup"));
+
+        let mut changed = Stub::new("lookup", "replacement");
+        changed.definition.exposure = ToolExposure::Deferred;
+        inventory.send_replace(Some(Arc::new(changed)));
+        assert!(!tools.request_catalog(&saved).is_declared("lookup"));
     }
 
     #[test]
