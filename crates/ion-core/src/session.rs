@@ -63,6 +63,7 @@ mod storage;
 pub use retirement::SessionRetirement;
 pub use retirements::SessionRetirements;
 pub use storage::{SessionIo, SessionReader};
+mod journal;
 mod store;
 mod submission;
 #[cfg(test)]
@@ -70,6 +71,8 @@ mod submission_tests;
 use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
+pub(crate) use journal::MAX_ENTRY_BYTES;
+use journal::encode_entry;
 use projection::{
     MessageAudience, ProjectionMode, model_context_state, project, selected_messages,
     shell_message, shell_outcome_at, valid_model_context,
@@ -81,9 +84,8 @@ pub use records::{
     UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
-pub(crate) use store::MAX_ENTRY_BYTES;
 use store::{
-    FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path, encode_entry,
+    FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path,
     initialize_new, lock, prepare_writer, project_connection, read_entries, read_entry,
     read_header,
 };
@@ -2019,8 +2021,16 @@ pub enum SessionError {
         /// COMMIT failed, not that a rollback was confirmed successful.
         rollback_error: Option<rusqlite::Error>,
     },
+    /// The prepared operation did not write; its working projection is stale.
+    #[error(
+        "session journal changed before append (expected tail {expected_tail}, found {actual:?}); reopen the Session"
+    )]
+    JournalFrontierChanged {
+        expected_tail: u64,
+        actual: Option<i64>,
+    },
     /// A previous operation faulted this Store. This operation was not admitted.
-    #[error("session store is faulted after an uncertain transaction; reopen the Session")]
+    #[error("session store is faulted; reopen the Session")]
     StoreFaulted,
     #[error("session mutex was poisoned")]
     Poisoned,

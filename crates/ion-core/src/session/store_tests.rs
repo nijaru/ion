@@ -99,6 +99,40 @@ fn assert_faulted<T>(result: Result<T, SessionError>) {
     assert!(matches!(error, SessionError::StoreFaulted));
 }
 
+#[test]
+fn stale_append_refuses_to_write_or_publish_working_state() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    session.select_model(model("before")).unwrap();
+    let unexpected = SessionEntry::ModelSelected {
+        model: model("other writer"),
+    };
+    // Deliberately bypass the cooperative file lease to simulate a stale writer.
+    let external = Connection::open(fixture.path()).unwrap();
+    external
+        .execute(
+            "INSERT INTO entries(body) VALUES (?1)",
+            params![encode_entry(&unexpected).unwrap()],
+        )
+        .unwrap();
+
+    let refusal = session.select_model(model("must not publish")).unwrap_err();
+    assert!(matches!(
+        refusal,
+        SessionError::JournalFrontierChanged {
+            expected_tail: 1,
+            actual: Some(2)
+        }
+    ));
+    assert!(!refusal.is_commit_uncertain());
+    assert_faulted(session.entry_count());
+    assert_faulted(session.select_model(model("must not write again")));
+    assert_eq!(session.store().lock().unwrap().state.sequence, 1);
+    let saved = Session::inspect(fixture.path()).unwrap();
+    assert_eq!(saved.entries.len(), 2);
+    assert_eq!(saved.last_model, Some(model("other writer")));
+}
+
 fn artifact_error(error: std::io::Error) -> SessionError {
     *error
         .into_inner()

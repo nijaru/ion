@@ -2343,8 +2343,10 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                 database, = set((work / "ion").rglob("*.sqlite")) - previous
                 connection = sqlite3.connect(database)
                 try:
-                    seq = connection.execute("SELECT COALESCE(MAX(seq), -1) + 1 FROM entries").fetchone()[0]
-                    connection.execute("INSERT INTO entries VALUES (?, ?)", (seq, b'{"kind":"invalid_qualification_entry"}'))
+                    # Refuse admission and corrupt the independent snapshot
+                    # without advancing the active writer's journal frontier.
+                    header, = connection.execute("SELECT header FROM session WHERE id=1").fetchone()
+                    connection.execute("UPDATE session SET header=? WHERE id=1", (b'{}',))
                     connection.execute("CREATE TRIGGER reject_admission BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'INPUT_QUALIFICATION_REFUSAL'); END")
                     connection.commit()
                     before = len(requests)
@@ -2354,7 +2356,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
                     assert "› KEEP_ORIGINAL_INPUT" in terminal.text(), terminal.output[-2500:]
                     assert len(requests) == before, "failed admission issued a request"
                     connection.execute("DROP TRIGGER reject_admission")
-                    connection.execute("DELETE FROM entries WHERE seq=?", (seq,))
+                    connection.execute("UPDATE session SET header=? WHERE id=1", (header,))
                     connection.commit()
                     terminal.output.clear()
                     # A following edit acknowledges processing Enter even when
