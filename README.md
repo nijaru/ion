@@ -66,6 +66,7 @@ ion -r                               # choose a saved Session
 - [Sessions and alternative conversations](docs/sessions.md): reopen, navigate, clone/fork, attach input, estimate context, compact and retrieve retained evidence.
 - [Terminal chat](docs/terminal.md): composer controls, tool-output inspection, external editors and shutdown.
 - [Tool selection and operator vetoes](docs/tool-control.md): model loadouts, native path rules, Code Mode recovery and optional refusal programs.
+- [MCP tools](docs/mcp.md): connect local or HTTP servers, defer tool declarations and set up Context7.
 - [Long-running programs](docs/processes.md): supervised programs, PTY attachment and stop/join controls.
 - [Skills, prompts and commands](docs/customization.md): resource discovery, `/reload` and trusted executable commands.
 - [Delegating coding work](docs/delegation.md): subagents, task controls and recorded results.

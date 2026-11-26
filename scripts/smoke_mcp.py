@@ -20,6 +20,10 @@ requests = []
 launch_requests = []
 remote_calls = []
 discovery_requests = []
+CONTEXT7_TOKEN = "fixture-context7-key"
+CONTEXT7_QUERY = "How do I lock a workspace with Cargo?"
+CONTEXT7_RESOLVE = {"libraryName": "Cargo", "query": CONTEXT7_QUERY}
+CONTEXT7_DOCS = {"libraryId": "/fixture/cargo", "query": CONTEXT7_QUERY, "language": "toml"}
 
 
 def check_embedded_delivery(body):
@@ -45,9 +49,11 @@ def check_embedded_delivery(body):
 class Provider(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-        if self.path not in ("/launch/chat/completions", "/discovery/chat/completions"):
+        if self.path not in ("/launch/chat/completions", "/discovery/chat/completions", "/context7/chat/completions"):
             requests.append(body)
-        if self.path == "/discovery/chat/completions":
+        if self.path == "/context7/chat/completions":
+            changes = self.context7_changes(body)
+        elif self.path == "/discovery/chat/completions":
             changes = self.discovery_changes(body)
         elif self.path == "/launch/chat/completions":
             changes = self.launch_changes(body)
@@ -237,6 +243,29 @@ class Provider(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def context7_changes(self, body):
+        self.server.context7_requests.append(body)
+        assert CONTEXT7_TOKEN not in json.dumps(body), "MCP credential leaked to the model"
+        step = len(self.server.context7_requests)
+        resolve, docs = (f"mcp__8_context7__{name}" for name in ("resolve-library-id", "query-docs"))
+        names = {tool["function"]["name"] for tool in body["tools"]}
+        if step == 1:
+            assert not ({resolve, docs} & names) and "tool_search" in names, names
+            name, arguments = "tool_search", {"query": "Context7", "limit": 2}
+        elif step == 2:
+            assert {resolve, docs} <= names, names
+            name, arguments = resolve, CONTEXT7_RESOLVE
+        elif step == 3:
+            assert "/fixture/cargo" in body["messages"][-1]["content"], body
+            name, arguments = docs, CONTEXT7_DOCS
+        else:
+            assert step == 4 and "CONTEXT7_FIXTURE_DOCUMENTATION" in body["messages"][-1]["content"], body
+            return [{"choices": [{"index": 0, "delta": {"content": "CONTEXT7_OK"}, "finish_reason": "stop"}]}]
+        return [{"choices": [{"index": 0, "delta": {"tool_calls": [
+            {"index": 0, "id": f"context7-{step}", "type": "function",
+             "function": {"name": name, "arguments": json.dumps(arguments)}}
+        ]}, "finish_reason": "tool_calls"}]}]
+
     def discovery_changes(self, body):
         discovery_requests.append(body)
         names = {tool["function"]["name"] for tool in body["tools"]}
@@ -377,11 +406,29 @@ class RemoteMcp(BaseHTTPRequestHandler):
             release.wait(20)
             self.close_connection = True
             return
-        assert self.path == "/mcp", self.path
+        context7 = self.path == "/context7/mcp"
+        assert context7 or self.path == "/mcp", self.path
+        if context7:
+            assert self.headers.get_all("Authorization") == [f"Bearer {CONTEXT7_TOKEN}"], "missing Context7 bearer authentication"
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         method = request.get("method")
         if method == "initialize":
             result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ion-remote-smoke", "version": "1"}}
+        elif context7 and method == "tools/list":
+            def schema(fields, required):
+                return {"type": "object", "properties": {field: {"type": "string"} for field in fields},
+                        "required": required, "additionalProperties": False}
+
+            result = {"tools": [
+                {"name": "resolve-library-id", "description": "Resolve a library name to its documentation ID",
+                 "inputSchema": schema(CONTEXT7_RESOLVE, ["libraryName", "query"])},
+                {"name": "query-docs", "description": "Look up current library documentation and code examples",
+                 "inputSchema": schema(CONTEXT7_DOCS, ["libraryId", "query"])},
+            ]}
+        elif context7 and method == "tools/call":
+            self.server.context7_calls.append(request["params"])
+            text = {"resolve-library-id": "/fixture/cargo", "query-docs": "CONTEXT7_FIXTURE_DOCUMENTATION"}[request["params"]["name"]]
+            result = {"content": [{"type": "text", "text": text}], "isError": False}
         elif method == "tools/list":
             name = "lowercase" if getattr(self.server, "tool_changed", False) else "uppercase"
             result = {"tools": [{"name": name, "description": name, "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}
@@ -415,7 +462,7 @@ class RemoteMcp(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
-        if method == "initialize":
+        if method == "initialize" and not context7:
             self.send_header("Mcp-Session-Id", "header-session")
         self.end_headers()
         self.wfile.write(payload)
@@ -666,6 +713,35 @@ def check_owned_cleanup():
     print("Ion MCP pre-effect input rejection and owned roots on exit/preflight/startup faults: OK")
 
 
+def check_context7(work, workspace, env, server, remote):
+    config_root = work / "ion-context7"
+    env = {**env, "ION_HOME": str(config_root), "CONTEXT7_API_KEY": CONTEXT7_TOKEN}
+    server.context7_requests = []
+    remote.context7_calls = []
+    before = list(remote.received_paths)
+    subprocess.run([binary, "mcp", "add-http", "context7", f"http://127.0.0.1:{remote.server_port}/context7/mcp",
+                    "--bearer-token-env", "CONTEXT7_API_KEY", "--exposure", "deferred",
+                    "--description", "Context7 library documentation and code examples"],
+                   env=env, check=True, capture_output=True, timeout=10)
+    assert remote.received_paths == before, "configuration contacted the remote server"
+    saved = (config_root / "mcp.json").read_text()
+    assert "CONTEXT7_API_KEY" in saved and CONTEXT7_TOKEN not in saved, "credential was saved instead of referenced"
+    subprocess.run([binary, "use", "smoke", "docs", "--wire", "chat-completions", "--endpoint",
+                    f"http://127.0.0.1:{server.server_port}/context7/chat/completions"],
+                   env=env, check=True, capture_output=True, timeout=10)
+    command = [binary, "--cwd", workspace, "--session", work / "context7.sqlite"]
+    reply = subprocess.run([*command, "run", "Use Context7: " + CONTEXT7_QUERY],
+                           env=env, check=True, capture_output=True, text=True, timeout=20)
+    assert reply.stdout.strip() == "CONTEXT7_OK" and len(server.context7_requests) == 4, reply
+    assert CONTEXT7_TOKEN not in reply.stdout + reply.stderr, "credential leaked to CLI output"
+    expected = [("resolve-library-id", CONTEXT7_RESOLVE), ("query-docs", CONTEXT7_DOCS)]
+    assert [(call["name"], call["arguments"]) for call in remote.context7_calls] == expected, remote.context7_calls
+    inspection = subprocess.run([*command, "inspect"], env=env, check=True, capture_output=True, text=True, timeout=10)
+    assert CONTEXT7_TOKEN not in inspection.stdout, "credential leaked to Session"
+    assert "CONTEXT7_FIXTURE_DOCUMENTATION" in inspection.stdout and len(remote.context7_calls) == 2
+    print("Ion Context7-compatible MCP: bearer auth, deferred discovery, resolve/query and passive evidence: OK")
+
+
 check_owned_cleanup()
 
 with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
@@ -699,6 +775,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         remote.redirect_followed = False
         remote.header_methods = []
         remote.received_paths = []
+        check_context7(work, workspace, env, server, remote)
+        remote.received_paths.clear()
         paused_script = work / "paused.py"
         paused_script.write_text(server_source.replace("'mcp-events.txt'", "'enable-events.txt'"))
         env.pop("ION_MCP_ENABLE_MISSING", None)
