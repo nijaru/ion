@@ -225,6 +225,23 @@ impl SessionReader {
         self.run(Session::context_position).await
     }
 
+    /// The active committed Turn, without loading its transcript.
+    pub async fn unfinished_turn(&self) -> Result<Option<u64>, SessionError> {
+        self.run(|session| Ok(session.lock_store()?.state.active))
+            .await
+    }
+
+    /// Find the recovery cut only when the delivery key owns the active Turn.
+    /// This is a passive read, not authority to resume it.
+    pub async fn recovery_for_request(
+        &self,
+        key: &RequestKey,
+    ) -> Result<Option<super::RecoveryState>, SessionError> {
+        let key = key.clone();
+        self.run(move |session| session.recovery_for_request(&key))
+            .await
+    }
+
     pub async fn reconcile_request(
         &self,
         key: &RequestKey,

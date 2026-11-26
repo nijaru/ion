@@ -48,25 +48,47 @@ pub struct RecoveryState {
     pub authority: AuthorityScope,
 }
 
+fn recovery_at(store: &Store, session: uuid::Uuid) -> Option<RecoveryState> {
+    let turn = store.state.active?;
+    let binding = store
+        .state
+        .recovery
+        .as_ref()
+        .filter(|binding| binding.session == session)?;
+    Some(RecoveryState {
+        point: RecoveryPoint {
+            session,
+            turn,
+            checkpoint: store.state.sequence,
+        },
+        authority: binding.authority.clone(),
+    })
+}
+
 impl Session {
     /// Passive eligibility only: not liveness, authentication or proof old effects
     /// stopped. Callers must explicitly choose whether to continue despite uncertainty.
     pub fn recovery_state(&self) -> Result<Option<RecoveryState>, SessionError> {
         let store = self.lock_store()?;
-        Ok(store
-            .state
-            .active
-            .zip(store.state.recovery.as_ref())
-            .and_then(|(turn, binding)| {
-                (binding.session == self.id()).then(|| RecoveryState {
-                    point: RecoveryPoint {
-                        session: self.id(),
-                        turn,
-                        checkpoint: store.state.sequence,
-                    },
-                    authority: binding.authority.clone(),
-                })
-            }))
+        Ok(recovery_at(&store, self.id()))
+    }
+
+    pub(super) fn recovery_for_request(
+        &self,
+        key: &RequestKey,
+    ) -> Result<Option<RecoveryState>, SessionError> {
+        let store = self.lock_store()?;
+        let Some(turn) = store.state.active else {
+            return Ok(None);
+        };
+        let receipt = submission::request_receipt(&store.connection, self.id(), key, None)?;
+        if receipt.is_some_and(|receipt| receipt.turn == turn && receipt.end.is_none()) {
+            recovery_at(&store, self.id())
+                .map(Some)
+                .ok_or(SessionError::RecoveryAuthorityChanged)
+        } else {
+            Ok(None)
+        }
     }
 
     pub(crate) fn resume_turn(

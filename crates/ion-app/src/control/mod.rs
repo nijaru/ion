@@ -41,6 +41,8 @@ use steering::{SteeringMonitor, SteeringTarget};
 mod tests;
 mod types;
 pub use types::*;
+mod wake;
+pub use wake::{WakeRecovery, WakeTarget};
 
 const MAX_ADMISSIONS: usize = 64;
 const OBSERVATION_CAPACITY: usize = 64;

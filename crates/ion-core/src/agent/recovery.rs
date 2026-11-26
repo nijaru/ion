@@ -36,6 +36,11 @@ impl Agent {
         self
     }
 
+    /// The trusted application assertion this Agent uses for explicit continuation.
+    pub fn recovery_authority(&self) -> Option<&AuthorityScope> {
+        self.recovery_scope.as_ref()
+    }
+
     pub(super) fn request_settings<'a>(&'a self, instructions: &'a str) -> RequestSettings<'a> {
         RequestSettings {
             model: &self.model,

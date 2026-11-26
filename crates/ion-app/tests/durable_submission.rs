@@ -27,6 +27,9 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "durable_submission/wake.rs"]
+mod wake;
+
 const REMOTE_RESULT: &str = "remote effect accepted";
 
 struct Effect {
@@ -72,6 +75,7 @@ struct FixtureService {
     inner: ScriptedModelService,
     calls: AtomicUsize,
     hold_at: Option<usize>,
+    provisional_stream: bool,
     entered: tokio::sync::Notify,
     release: tokio::sync::Semaphore,
 }
@@ -91,6 +95,16 @@ impl ion_ai::ModelService for FixtureService {
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         Box::pin(async move {
             let index = self.calls.fetch_add(1, Ordering::Relaxed);
+            if index == 0 && self.provisional_stream {
+                use futures_util::{StreamExt, stream};
+                let delta = Ok(ModelStreamEvent::TextDelta {
+                    block: 0,
+                    text: "uncommitted draft".into(),
+                });
+                return Ok(
+                    Box::pin(stream::iter([delta]).chain(stream::pending())) as ion_ai::ModelStream
+                );
+            }
             if self.hold_at == Some(index) {
                 if index == 1 {
                     println!("AFTER_OBSERVATION");
@@ -158,6 +172,9 @@ fn message() -> Message {
 }
 
 async fn worker(root: &Path, mode: &str, endpoint: String, observed: bool) {
+    if mode.starts_with("wake-") {
+        return wake::worker(root, mode, endpoint).await;
+    }
     let path = root.join("session.db");
     let session = Arc::new(if mode == "effect" {
         Session::create(&path, None).unwrap()
@@ -190,6 +207,7 @@ async fn worker(root: &Path, mode: &str, endpoint: String, observed: bool) {
     let service = Arc::new(FixtureService {
         inner: ScriptedModelService::new(scripts),
         calls: AtomicUsize::new(0),
+        provisional_stream: false,
         hold_at: match mode {
             "resume" | "cancel" => Some(0),
             "effect" => Some(1), // freeze after Core commits the HTTP observation
@@ -709,5 +727,6 @@ fn durable_submission_survives_process_loss() {
         drop(http); // Finish draining independently issued HTTP requests before checking for replay.
         assert_eq!(fs::read(root.join("effects")).unwrap(), b"effect\n");
     }
+    wake::qualify(&root);
     fs::remove_dir_all(root).unwrap();
 }

@@ -45,6 +45,14 @@ Use `setup.into_control()` when the application is shared: shutdown stops only t
 Use `control.begin_close()` and join its retained handle when the client no longer needs the live binding. A standalone close returns after SQLite closes and releases the writer lease. Drop live Session, reader and I/O handles first; a passive `SessionHistory` receipt handle can stay alive. For a shared application, the outer owner still joins its retirement scope after shutting down all controls and transferred work. Clients that need final live reads can first use borrowed `shutdown()`, then close. Cancelling a borrowed wait does not abandon native work.
 
 
+## Keyed wakeups
+
+A single-Session application can use `SessionControl<()>::submit_with_wake` for scheduled work. Bind the Agent with `with_recovery_scope`, authorize the request key, and supply a callback that acknowledges the durable wakeup only after recording its target and scheduling it. Ion calls the callback before accepting new work. Redelivery of a committed key returns its receipt without changing the wakeup.
+
+On a valid alarm, pass its `WakeTarget` and a rearm callback to `recover_from_wake`. Ion continues only the unfinished Turn owned by that key. It rearms before resuming or reporting that the current instance already owns the work. `Quiescent` means there is no work for that target; an alarm never creates an input. `Refused` preserves whether continuation was rejected or its commit is uncertain. Inspect uncertain outcomes before proceeding.
+
+The application owns authentication, the durable scheduler, and serialization across delivery and alarms. Fence stale alarms and clear only the wake generation you still own. These methods do not supply a Durable Object runtime. The current test uses native process loss and a file-backed wake fixture.
+
 ## Tool schemas
 
 Core compiles each frozen catalog entry's input schema once and shares that immutable contract when rebuilding exposure. All dispatch paths enforce it before policy or effects. See [registered input schemas](tool-control.md#registered-input-schemas) for strict, offline checks and supported bounds.

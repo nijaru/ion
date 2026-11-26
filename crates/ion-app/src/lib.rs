@@ -82,7 +82,7 @@ pub use control::{
     RequestAdmission, RequestDecision, RequestLaunch, RequestPlan, ReturnReason, ReturnSnapshot,
     ReturnedInput, SessionClose, SessionControl, Settlement, ShutdownError, ShutdownReport,
     SnapshotCursor, SteeringReceipt, SteeringStatus, StopTarget, TurnSteering, UnresolvedInput,
-    UnresolvedRequest, UpdateSnapshot, UserInput, preflight_messages,
+    UnresolvedRequest, UpdateSnapshot, UserInput, WakeRecovery, WakeTarget, preflight_messages,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use delegation::{
