@@ -1,5 +1,6 @@
 //! Exclusive, retained custody of one Session operation and its actual task.
-use futures_util::FutureExt;
+mod task;
+
 use std::{
     future::{Future, poll_fn},
     pin::Pin,
@@ -9,11 +10,11 @@ use std::{
     },
     task::{Context, Poll, Wake, Waker},
 };
+pub(crate) use task::Executor;
+pub use task::OperationFence;
+use task::{Task, TaskResult};
 use thiserror::Error;
-use tokio::{
-    sync::{Notify, futures::OwnedNotified},
-    task::JoinHandle,
-};
+use tokio::sync::{Notify, futures::OwnedNotified};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Error)]
@@ -88,18 +89,6 @@ impl Drop for StopOnFailure {
     }
 }
 
-/// Read-only liveness of the actual task, independent of observer delivery or
-/// whether its controlling owner has joined it. This grants no abort authority.
-#[derive(Clone)]
-pub struct OperationFence(Option<tokio::task::AbortHandle>);
-impl OperationFence {
-    pub fn is_finished(&self) -> bool {
-        self.0
-            .as_ref()
-            .is_none_or(tokio::task::AbortHandle::is_finished)
-    }
-}
-
 /// An owned stop-and-join handle, not authority to abort execution. Dropping it
 /// requests stop; the Session retains the task and its outcome until joined.
 /// Await a retained `&mut Operation` when selecting repeatedly on completion.
@@ -131,7 +120,7 @@ impl<T, E> Operation<T, E> {
                 unreported_failure: None,
             }))),
             joined: false,
-            fence: OperationFence(None),
+            fence: OperationFence::completed(),
             notified: None,
         }
     }
@@ -191,6 +180,7 @@ impl<T, E> Drop for Operation<T, E> {
 }
 
 pub(crate) struct OperationOwner {
+    executor: Executor,
     state: Mutex<State>,
     closed: AtomicBool,
     contended: AtomicBool,
@@ -210,8 +200,15 @@ impl Wake for JoinWake {
 
 impl Default for OperationOwner {
     fn default() -> Self {
+        Self::new(Executor::default())
+    }
+}
+
+impl OperationOwner {
+    pub(crate) fn new(executor: Executor) -> Self {
         let wake = Arc::new(Notify::new());
         Self {
+            executor,
             state: Mutex::new(State::default()),
             closed: AtomicBool::new(false),
             contended: AtomicBool::new(false),
@@ -233,7 +230,7 @@ struct State {
 struct Running {
     id: u64,
     stop: CancellationToken,
-    task: JoinHandle<()>,
+    task: Task,
     // Retain even an abandoned typed outcome. This is one in-process slot, not
     // another durable ledger; a subsequent operation replaces settled custody.
     _completion: Arc<dyn CompletionCustody>,
@@ -248,12 +245,18 @@ struct StateGuard<'a> {
     state: Option<MutexGuard<'a, State>>,
     owner: &'a OperationOwner,
     notify: bool,
-    failed: Option<FailedTask>,
+    joined: Option<JoinedTask>,
+}
+
+struct JoinedTask {
+    // A host's retained join handle can own arbitrary destructors, too.
+    _task: Task,
+    failure: Option<FailedTask>,
 }
 
 struct FailedTask {
     stop: CancellationToken,
-    error: tokio::task::JoinError,
+    _payload: Option<Box<dyn std::any::Any + Send>>,
 }
 impl std::ops::Deref for StateGuard<'_> {
     type Target = State;
@@ -273,17 +276,19 @@ impl std::ops::DerefMut for StateGuard<'_> {
 impl Drop for StateGuard<'_> {
     fn drop(&mut self) {
         drop(self.state.take());
-        if let Some(failed) = &self.failed {
+        if let Some(failed) = self
+            .joined
+            .as_ref()
+            .and_then(|joined| joined.failure.as_ref())
+        {
             failed.stop.cancel();
         }
         let contended = self.owner.contended.swap(false, Ordering::SeqCst);
         if self.notify || contended {
             self.owner.wake.notify_waiters();
         }
-        // A JoinError can own an arbitrary panic payload with a destructor.
-        if let Some(failed) = self.failed.take() {
-            drop(failed.error);
-        }
+        // Drop the join handle and any panic payload only after unlocking.
+        drop(self.joined.take());
     }
 }
 
@@ -298,7 +303,7 @@ impl OperationOwner {
             state: Some(state),
             owner: self,
             notify: false,
-            failed: None,
+            joined: None,
         })
     }
 
@@ -321,17 +326,8 @@ impl OperationOwner {
 
     pub(crate) fn try_lock(&self) -> Result<IdleSession<'_>, OperationError> {
         let mut state = self.try_state().ok_or(OperationError::Active)?;
-        if state
-            .running
-            .as_ref()
-            .is_some_and(|running| running.task.is_finished())
-        {
-            // Finished-task polling cannot suspend. Keep the handle in custody
-            // until its actual completion (including failure) has been consumed.
-            let result = (&mut state.running.as_mut().unwrap().task)
-                .now_or_never()
-                .expect("a finished task is ready to join");
-            state.failed = state.finish(result);
+        if let Some(result) = state.running.as_mut().and_then(|run| run.task.try_join()) {
+            state.joined = Some(state.finish(result));
             state.notify = true;
         }
         state.idle(self.closed.load(Ordering::SeqCst))?;
@@ -367,12 +363,11 @@ impl OperationOwner {
         E: Send + From<OperationError> + OperationFailure + 'static,
     {
         let result = (|| {
-            let runtime = tokio::runtime::Handle::try_current()
-                .map_err(|_| E::from(OperationError::RuntimeUnavailable))?;
+            let spawner = self.executor.bind().map_err(E::from)?;
             let mut idle = self.try_lock().map_err(E::from)?;
             let (operation, previous) =
                 self.install(&mut idle, stop, |completion, failure_stop| {
-                    runtime.spawn_blocking(move || {
+                    spawner.spawn_blocking(move || {
                         completion.finish(work());
                         failure_stop.disarm();
                     })
@@ -396,15 +391,14 @@ impl OperationOwner {
         E: Send + From<OperationError> + OperationFailure + 'static,
         F: Future<Output = Result<T, E>> + Send + 'static,
     {
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|_| E::from(OperationError::RuntimeUnavailable))?;
+        let spawner = self.executor.bind().map_err(E::from)?;
         let mut idle = self.try_lock().map_err(E::from)?;
         let (prepared, work) = prepare()?;
         let Some(work) = work else {
             return Ok((prepared, None));
         };
         let (operation, previous) = self.install(&mut idle, stop, |completion, failure_stop| {
-            runtime.spawn(async move {
+            spawner.spawn(async move {
                 completion.finish(work.await);
                 failure_stop.disarm();
             })
@@ -418,7 +412,7 @@ impl OperationOwner {
         self: &Arc<Self>,
         idle: &mut IdleSession<'_>,
         stop: CancellationToken,
-        spawn: impl FnOnce(Arc<Completion<T, E>>, StopOnFailure) -> JoinHandle<()>,
+        spawn: impl FnOnce(Arc<Completion<T, E>>, StopOnFailure) -> Task,
     ) -> (Operation<T, E>, Option<Arc<dyn CompletionCustody>>)
     where
         T: Send + 'static,
@@ -444,7 +438,7 @@ impl OperationOwner {
                 armed: true,
             },
         );
-        let fence = OperationFence(Some(task.abort_handle()));
+        let fence = task.fence();
         idle.0.running = Some(Running {
             id,
             stop: stop.clone(),
@@ -472,8 +466,8 @@ impl OperationOwner {
         notified: &mut Pin<Box<OwnedNotified>>,
     ) -> Poll<Result<(), OperationError>> {
         // Register each waiter before polling the retained join. A single task
-        // waker fans out to operation and shutdown waiters; polling JoinHandle
-        // with competing caller wakers would strand whichever was overwritten.
+        // waker fans out to operation and shutdown waiters; polling the join
+        // with competing caller wakers could strand whichever was overwritten.
         let mut state = std::task::ready!(self.poll_state(cx, notified));
         if id <= state.settled {
             return Poll::Ready(Ok(()));
@@ -485,10 +479,13 @@ impl OperationOwner {
             return Poll::Ready(Err(OperationError::CompletionConsumed));
         };
         debug_assert_eq!(running.id, id);
-        match Pin::new(&mut running.task).poll(&mut Context::from_waker(&self.join_waker)) {
+        match running
+            .task
+            .poll_join(&mut Context::from_waker(&self.join_waker))
+        {
             Poll::Pending => Poll::Pending,
             Poll::Ready(result) => {
-                state.failed = state.finish(result);
+                state.joined = Some(state.finish(result));
                 state.notify = true;
                 Poll::Ready(state.failure.as_ref().map_or(Ok(()), |failure| {
                     Err(OperationError::TaskFailed(failure.clone()))
@@ -562,37 +559,43 @@ impl State {
             .and_then(|completion| completion.unreported_failure())
     }
 
-    fn finish(&mut self, result: Result<(), tokio::task::JoinError>) -> Option<FailedTask> {
-        let failed = match result {
+    fn finish(&mut self, result: TaskResult) -> JoinedTask {
+        let running = self.running.take().expect("joining the retained task");
+        let failure = match result {
             Ok(()) => {
-                self.settled = self.running.as_ref().unwrap().id;
+                self.settled = running.id;
                 None
             }
             // A genuine panic can destroy an executor's joining continuation.
             // Do not claim local quiescence or allow reuse of this live owner.
             Err(error) => {
-                self.failure = Some(error.to_string());
+                self.failure = Some(error.message);
                 Some(FailedTask {
-                    stop: self.running.as_ref().unwrap().stop.clone(),
-                    error,
+                    stop: running.stop,
+                    _payload: error.payload,
                 })
             }
         };
         // Keep the outcome after join as well; replacement of the slot occurs
         // only on the next successful start. No running handle is abandoned.
-        let running = self.running.take().unwrap();
         self.completed = Some(running._completion);
-        failed
+        JoinedTask {
+            _task: running.task,
+            failure,
+        }
     }
 }
+
+#[cfg(test)]
+pub(crate) mod executor_tests;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    struct DropProbe {
-        owner: std::sync::Weak<OperationOwner>,
-        outside_lock: Arc<AtomicBool>,
+    pub(super) struct DropProbe {
+        pub(super) owner: std::sync::Weak<OperationOwner>,
+        pub(super) outside_lock: Arc<AtomicBool>,
     }
     impl Drop for DropProbe {
         fn drop(&mut self) {
@@ -647,8 +650,20 @@ mod tests {
                 .poll(&mut Context::from_waker(&waker))
                 .is_pending()
         );
-        let idle = owner.try_lock().unwrap();
-        drop(idle);
+        tokio::spawn({
+            let owner = owner.clone();
+            async move {
+                // A synchronous reservation must join an already-finished
+                // task even when its caller has exhausted Tokio's budget.
+                use tokio::task::coop::{consume_budget, has_budget_remaining};
+                while has_budget_remaining() {
+                    consume_budget().await;
+                }
+                drop(owner.try_lock().unwrap());
+            }
+        })
+        .await
+        .unwrap();
         operation.await.unwrap();
         assert!(probe.woke.load(Ordering::SeqCst));
         assert!(

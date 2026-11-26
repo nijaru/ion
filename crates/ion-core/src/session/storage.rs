@@ -2,7 +2,7 @@
 //! writer nor a durable work queue: all lanes use the existing Session Store.
 use std::sync::{Arc, Mutex};
 
-use crate::operation::{OperationError, OperationFailure, OperationOwner};
+use crate::operation::{Executor, OperationError, OperationFailure, OperationOwner};
 
 use super::{RequestKey, RequestReceipt, Session, SessionError, SessionStatus, SessionView};
 
@@ -269,6 +269,7 @@ impl SessionReader {
 
 #[derive(Default)]
 pub(super) struct StorageWork {
+    executor: Executor,
     pub(super) retirement: super::retirement::RetirementWork,
     pub(super) children: super::SessionRetirements,
     state: Mutex<State>,
@@ -328,6 +329,13 @@ impl Drop for Admission<'_> {
 }
 
 impl StorageWork {
+    pub(super) fn new(executor: Executor) -> Self {
+        Self {
+            executor,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn take_owners(&self) -> Vec<Arc<OperationOwner>> {
         std::mem::take(
             &mut self
@@ -399,7 +407,7 @@ impl StorageWork {
         {
             return Err(OperationError::Closed);
         }
-        let owner = Arc::new(OperationOwner::default());
+        let owner = Arc::new(OperationOwner::new(self.executor.clone()));
         state.owners.push(owner.clone());
         Ok(owner)
     }

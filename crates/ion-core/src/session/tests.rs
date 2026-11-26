@@ -14,6 +14,78 @@ fn test_execution() -> ModelExecution {
     }
 }
 
+#[test]
+fn keyed_turn_and_storage_lanes_run_without_a_tokio_runtime() {
+    use crate::operation::executor_tests::ManualExecutor;
+    use ion_ai::{
+        ModelResponse, ModelStreamEvent, ResponseTermination, Script, ScriptedModelService,
+    };
+
+    let (root, path) = fixture();
+    let executor = Arc::new(ManualExecutor::default());
+    let opened = OpenedStore::create(&path, Some(&root), uuid::Uuid::new_v4(), &[], None).unwrap();
+    let session = Arc::new(Session::from_native(opened, executor.executor()));
+    let message = |role, text: &str| Message {
+        role,
+        content: vec![Content::Text(text.into())],
+        provider_replay: None,
+    };
+    let provider = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+        ModelStreamEvent::Completed(ModelResponse {
+            message: message(Role::Assistant, "done"),
+            usage: Usage::unknown(),
+            termination: ResponseTermination::Completed,
+            returned_model: None,
+        }),
+    ])]));
+    let agent = crate::Agent::with_tool_set(
+        provider.clone(),
+        Arc::new(crate::ToolSet::new([])),
+        test_execution().route.logical,
+    );
+    let request = SubmissionRequest {
+        key: RequestKey::new("fixture".into(), "delivery".into()).unwrap(),
+        input: message(Role::User, "run once"),
+    };
+    let submit = || {
+        agent.submit_request::<_, ()>(
+            session.clone(),
+            request.clone(),
+            String::new(),
+            CancellationToken::new(),
+            None,
+            |_| {},
+        )
+    };
+    let submitted = executor.complete(submit()).unwrap();
+    let operation = submitted.operation.unwrap();
+    assert!(
+        provider.requests().is_empty(),
+        "dispatch was not driven yet"
+    );
+    assert!(!operation.fence().is_finished());
+    let committed = Session::inspect(&path).unwrap();
+    assert!(committed.entries.iter().any(|entry| matches!(entry,
+        SessionEntry::TurnStarted { turn, request: Some(key), .. }
+            if *turn == submitted.receipt.turn && *key == request.key
+    )));
+    assert!(matches!(
+        session.reserve_idle(),
+        Err(SessionError::OperationActive)
+    ));
+
+    assert_eq!(executor.complete(operation).unwrap(), "done");
+    let duplicate = executor.complete(submit()).unwrap();
+    assert!(duplicate.operation.is_none());
+    assert_eq!(duplicate.receipt.turn, submitted.receipt.turn);
+    assert_eq!(duplicate.receipt.end, Some(TurnEndReason::Completed));
+    assert_eq!(provider.requests().len(), 1);
+    executor.complete(session.shutdown()).unwrap();
+    drop(session);
+    assert!(Session::open(&path).is_ok());
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn user_shell_operation_rejects_overlap_and_commits_before_release() {
     let (root, path) = fixture();

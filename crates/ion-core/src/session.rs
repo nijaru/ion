@@ -10,7 +10,9 @@ use std::{
     time::Duration,
 };
 
-use crate::operation::{IdleSession, Operation, OperationError, OperationFailure, OperationOwner};
+use crate::operation::{
+    Executor, IdleSession, Operation, OperationError, OperationFailure, OperationOwner,
+};
 use crate::tool_set::ToolActivity;
 #[cfg(test)]
 use ion_ai::ToolResult;
@@ -692,20 +694,22 @@ impl Session {
         entries: &[SessionEntry],
         artifact_source: Option<(&Path, uuid::Uuid)>,
     ) -> Result<Self, SessionError> {
-        OpenedStore::create(path, cwd, id, entries, artifact_source).map(Self::from_native)
+        let opened = OpenedStore::create(path, cwd, id, entries, artifact_source)?;
+        Ok(Self::from_native(opened, Executor::default()))
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        OpenedStore::open(path).map(Self::from_native)
+        let opened = OpenedStore::open(path)?;
+        Ok(Self::from_native(opened, Executor::default()))
     }
 
-    fn from_native(opened: OpenedStore) -> Self {
+    fn from_native(opened: OpenedStore, executor: Executor) -> Self {
         Self {
             native: Some(opened.native),
             header: opened.header,
             path: opened.path,
-            operations: Arc::new(OperationOwner::default()),
-            storage: Arc::default(),
+            operations: Arc::new(OperationOwner::new(executor.clone())),
+            storage: Arc::new(storage::StorageWork::new(executor)),
         }
     }
 
