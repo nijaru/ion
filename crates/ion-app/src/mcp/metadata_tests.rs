@@ -51,8 +51,9 @@ for line in sys.stdin:
             )
             .unwrap();
     }
-    let startup =
-        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
+    let startup = McpTools::start(&config, &root, tokio_util::sync::CancellationToken::new())
+        .wait_for_all()
+        .await;
     let source = startup.tools.unwrap();
     let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
     let mut observed = Vec::new();
@@ -179,8 +180,9 @@ for line in sys.stdin:
             )
             .unwrap();
     }
-    let startup =
-        McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
+    let startup = McpTools::start(&config, &root, tokio_util::sync::CancellationToken::new())
+        .wait_for_all()
+        .await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let source = startup.tools.unwrap();
     let snapshot = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();

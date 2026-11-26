@@ -4,6 +4,7 @@ import base64
 import json
 from smoke_artifacts import artifact_bytes
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -730,15 +731,53 @@ def check_context7(work, workspace, env, server, remote):
                     f"http://127.0.0.1:{server.server_port}/context7/chat/completions"],
                    env=env, check=True, capture_output=True, timeout=10)
     command = [binary, "--cwd", workspace, "--session", work / "context7.sqlite"]
-    reply = subprocess.run([*command, "run", "Use Context7: " + CONTEXT7_QUERY],
-                           env=env, check=True, capture_output=True, text=True, timeout=20)
-    assert reply.stdout.strip() == "CONTEXT7_OK" and len(server.context7_requests) == 4, reply
-    assert CONTEXT7_TOKEN not in reply.stdout + reply.stderr, "credential leaked to CLI output"
+    # Discoverable tools aren't a startup barrier. Observe the published
+    # inventory through the same client before asking it to use those tools.
+    with subprocess.Popen([*command, "rpc"], env=env, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0) as client:
+        deadline = time.monotonic() + 20
+
+        def receive(predicate):
+            while True:
+                remaining = deadline - time.monotonic()
+                assert remaining > 0 and select.select([client.stdout], [], [], remaining)[0], "RPC discovery timed out"
+                raw = client.stdout.readline()
+                assert raw, "RPC closed before discovery"
+                assert CONTEXT7_TOKEN.encode() not in raw, "credential leaked to RPC output"
+                record = json.loads(raw)
+                if predicate(record):
+                    return record
+
+        def send(kind, **fields):
+            client.stdin.write((json.dumps({"type": kind, **fields}) + "\n").encode())
+
+        try:
+            receive(lambda record: record["type"] == "ready")
+            while True:
+                send("get_state", id="inventory")
+                state = receive(lambda record: record["type"] == "response" and record.get("id") == "inventory")
+                [status] = state["data"]["mcp_servers"]
+                if status["status"] == "available":
+                    break
+                assert status["status"] == "connecting", status
+                time.sleep(0.02)
+            send("prompt", id="docs", message="Use Context7: " + CONTEXT7_QUERY)
+            result = receive(lambda record: record["type"] == "turn_end")
+            assert result["status"] == "completed", result
+            client.stdin.close()
+            assert client.wait(timeout=10) == 0
+            assert CONTEXT7_TOKEN.encode() not in client.stderr.read(), "credential leaked to CLI diagnostics"
+        finally:
+            if client.poll() is None:
+                client.kill()
+                client.wait(timeout=10)
+    assert len(server.context7_requests) == 4, server.context7_requests
     expected = [("resolve-library-id", CONTEXT7_RESOLVE), ("query-docs", CONTEXT7_DOCS)]
     assert [(call["name"], call["arguments"]) for call in remote.context7_calls] == expected, remote.context7_calls
     inspection = subprocess.run([*command, "inspect"], env=env, check=True, capture_output=True, text=True, timeout=10)
     assert CONTEXT7_TOKEN not in inspection.stdout, "credential leaked to Session"
-    assert "CONTEXT7_FIXTURE_DOCUMENTATION" in inspection.stdout and len(remote.context7_calls) == 2
+    assert "CONTEXT7_FIXTURE_DOCUMENTATION" in inspection.stdout and "CONTEXT7_OK" in inspection.stdout
+    assert len(remote.context7_calls) == 2
     print("Ion Context7-compatible MCP: bearer auth, deferred discovery, resolve/query and passive evidence: OK")
 
 

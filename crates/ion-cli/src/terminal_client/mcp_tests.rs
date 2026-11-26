@@ -13,6 +13,7 @@ fn inspection_is_the_safe_default_and_actions_require_visible_confirmation() {
     for status in [
         McpServerStatus::Available,
         McpServerStatus::Unavailable,
+        McpServerStatus::Connecting,
         McpServerStatus::Reconnecting,
         McpServerStatus::CleanupFailed,
         McpServerStatus::Closing,
@@ -26,6 +27,7 @@ fn inspection_is_the_safe_default_and_actions_require_visible_confirmation() {
                 hidden: 3,
             },
             resources: true,
+            diagnostic: None,
         };
         let picker = actions(&server);
         assert_eq!(
@@ -83,7 +85,9 @@ async fn manager_inspection_is_passive_and_removed_actions_cannot_retarget() {
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &fixture.root, CancellationToken::new()).await;
+    let startup = McpTools::start(&config, &fixture.root, CancellationToken::new())
+        .wait_for_all()
+        .await;
     assert!(!startup.diagnostics.is_empty());
     let tools = startup.tools.unwrap();
     let model = fixture.control.agent().model().clone();

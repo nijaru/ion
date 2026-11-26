@@ -121,7 +121,9 @@ impl Fixture {
         .expect("fixture did not observe the request");
     }
     async fn connect(&self) -> McpStartup {
-        McpTools::connect(&self.config, &self.root, CancellationToken::new()).await
+        McpTools::start(&self.config, &self.root, CancellationToken::new())
+            .wait_for_all()
+            .await
     }
     fn tools(source: &Arc<McpTools>) -> ion_core::ToolSet {
         ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>])
@@ -447,7 +449,7 @@ async fn startup_cancellation_joins_successes_accumulated_before_a_failed_peer()
     fixture.config.add("z_collision", collision).unwrap();
     let stop = CancellationToken::new();
     let (startup, ()) = tokio::join!(
-        McpTools::connect(&fixture.config, &fixture.root, stop.clone()),
+        McpTools::start(&fixture.config, &fixture.root, stop.clone()).wait_for_all(),
         async {
             fixture.wait("closing").await;
             stop.cancel();

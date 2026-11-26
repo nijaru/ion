@@ -155,8 +155,9 @@ for line in sys.stdin:
                 }),
             )
             .unwrap();
-        let startup =
-            McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
+        let startup = McpTools::start(&config, &root, tokio_util::sync::CancellationToken::new())
+            .wait_for_all()
+            .await;
         assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
         let source = startup.tools.unwrap();
         let tools = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]);
@@ -166,8 +167,9 @@ for line in sys.stdin:
         let project = McpConfig::with_project(&root, &root).unwrap();
         project.set_project_enabled("bound", false).unwrap();
         project.trust_project().unwrap();
-        let disabled =
-            McpTools::connect(&project, &root, tokio_util::sync::CancellationToken::new()).await;
+        let disabled = McpTools::start(&project, &root, tokio_util::sync::CancellationToken::new())
+            .wait_for_all()
+            .await;
         assert!(disabled.tools.is_none());
         assert!(
             disabled.diagnostics.is_empty(),
@@ -276,7 +278,7 @@ for line in sys.stdin:
                     exposure: McpExposure::Direct,
                     tool_exposure: Default::default(),
                 })).unwrap();
-                let startup = McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()).await;
+                let startup = McpTools::start(&config, &root, tokio_util::sync::CancellationToken::new()).wait_for_all().await;
                 assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
                 let source = startup.tools.unwrap();
                 let issued = ion_core::ToolSet::new([source.clone() as Arc<dyn ToolSource>]).snapshot();
@@ -373,11 +375,12 @@ for line in sys.stdin:
         let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         fs::write(root.join("mcp.json"), b"{invalid").unwrap();
-        let startup = McpTools::connect(
+        let startup = McpTools::start(
             &McpConfig::new(&root),
             &root,
             tokio_util::sync::CancellationToken::new(),
         )
+        .wait_for_all()
         .await;
         assert!(startup.tools.is_none());
         assert_eq!(startup.diagnostics.len(), 1);

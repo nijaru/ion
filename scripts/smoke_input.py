@@ -68,6 +68,22 @@ class Handler(BaseHTTPRequestHandler):
             assert release.wait(10), "fixture did not release stopped response"
             return
         delta = None
+        if prompt == "MCP_DEFERRED_ORDINARY":
+            assert not any(t["function"]["name"].startswith("mcp__") for t in body["tools"]), body
+        if prompt == "MCP_DEFERRED_DISCOVERY":
+            names = {t["function"]["name"] for t in body["tools"]}
+            name = "mcp__4_slow__lookup"
+            if body["messages"][-1]["role"] == "user":
+                assert "tool_search" in names and name not in names, names
+                call = ("tool_search", {"query": "lookup", "limit": 1})
+            elif name in names and "MCP_DEFERRED_RESULT" not in user_text(body):
+                call = (name, {})
+            else:
+                assert "MCP_DEFERRED_RESULT" in user_text(body), body
+                call = None
+            if call:
+                delta = {"tool_calls": [{"index": 0, "id": call[0], "type": "function",
+                                         "function": {"name": call[0], "arguments": json.dumps(call[1])}}]}
         if prompt == "/skill:missing TASK_TERMINAL_GUIDANCE 🦀":
             delta = {"content": "TASK_FINAL_🦀"}
         if prompt.startswith("TASK_PARENT_") or prompt.startswith("TASK_CHILD_"):
@@ -200,6 +216,78 @@ class Terminal:
         if self.redirected_master is not None:
             os.close(self.redirected_master)
         self.child.wait(timeout=5)
+
+
+def exercise_deferred_mcp(work, env, endpoint):
+    home = work / "deferred-ion"
+    env = {**env, "ION_HOME": str(home)}
+    script = work / "slow-mcp.py"
+    script.write_text('''import json, os, sys, time
+from pathlib import Path
+for line in sys.stdin:
+    request = json.loads(line)
+    if "id" not in request:
+        continue
+    method = request["method"]
+    if method == "initialize":
+        Path("mcp.pid").write_text(str(os.getpid()))
+        while not Path("mcp.release").exists():
+            time.sleep(0.01)
+        result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "slow", "version": "1"}}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "lookup", "description": "Look up documentation",
+                             "inputSchema": {"type": "object", "properties": {}}}]}
+    elif method == "tools/call":
+        Path("mcp.called").touch()
+        result = {"content": [{"type": "text", "text": "MCP_DEFERRED_RESULT"}]}
+    else:
+        raise AssertionError(method)
+    print(json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}), flush=True)
+''')
+    subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", endpoint, "--wire", "chat-completions"],
+                   env=env, check=True, capture_output=True)
+    subprocess.run([binary, "mcp", "add", "slow", "--exposure", "deferred", sys.executable, script],
+                   env=env, check=True, capture_output=True)
+    for mode in ("inline", "fullscreen"):
+        for release_server in (True, False):
+            cwd = work / f"deferred-mcp-{mode}-{release_server}"
+            cwd.mkdir()
+            terminal = Terminal(cwd, env, mode)
+            pid = None
+            try:
+                terminal.wait_ready(lambda: "›" in terminal.text() and (cwd / "mcp.pid").exists())
+                pid = int((cwd / "mcp.pid").read_text())
+                terminal.output.clear()
+                terminal.send("MCP_DEFERRED_ORDINARY\r")
+                terminal.wait(lambda: "DONE_MCP_DEFERRED_ORDINARY" in terminal.text() and b"state=done" in terminal.output)
+                terminal.output.clear()
+                terminal.send("/mcp\r")
+                terminal.wait(lambda: "slow · connecting" in terminal.text())
+                if release_server:
+                    (cwd / "mcp.release").touch()
+                    terminal.wait(lambda: "slow · available" in terminal.text())
+                terminal.send(b"\x1b")
+                terminal.paint()
+                if release_server:
+                    terminal.output.clear()
+                    terminal.send("MCP_DEFERRED_DISCOVERY\r")
+                    terminal.wait(lambda: "DONE_MCP_DEFERRED_DISCOVERY" in terminal.text() and b"state=done" in terminal.output)
+                    assert (cwd / "mcp.called").exists(), "discovered MCP tool did not run"
+                terminal.finish()
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    pid = None
+                assert pid is None, "MCP helper survived client shutdown"
+                print(f"MCP startup {mode}, released={release_server}: ordinary prompt before discovery, later availability or joined exit: OK", flush=True)
+            finally:
+                terminal.close()
+                if pid is not None:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 def exercise_recovery_sources(work, env):
@@ -1929,6 +2017,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_keybindings(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_tasks(work, env)
+        exercise_deferred_mcp(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_launch(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_usage(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_turn_outcomes(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")

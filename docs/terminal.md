@@ -10,7 +10,7 @@ Reopening a Session with a saved, available model and no launch input shows its 
 
 On reopen, normal chat shows the selected branch from the beginning. Alt-T is a separate way to browse the transcript without moving the composer.
 
-Opening chat still loads configured application resources and MCP connections. Use `ion --session ID inspect` for credential-free, read-only inspection without that setup.
+Opening chat loads application resources and starts configured [MCP connections](mcp.md). Deferred servers connect in the background. Use `ion --session ID inspect` for credential-free, read-only inspection without that setup.
 
 ## Input and orientation
 

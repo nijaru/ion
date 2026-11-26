@@ -204,6 +204,7 @@ impl Host {
         McpConfig::with_project(&self.config_root, cwd)
     }
 
+    /// Start MCP connections and wait only for servers that may expose direct tools.
     pub async fn external_tools(
         &self,
         cwd: &Path,
@@ -218,7 +219,7 @@ impl Host {
                 };
             }
         };
-        McpTools::connect(&config, cwd, stop).await
+        McpTools::start(&config, cwd, stop).wait_for_direct().await
     }
 
     /// Bind a selected HTTP route to a complete caller-owned tool set. This

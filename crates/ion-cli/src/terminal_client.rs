@@ -203,6 +203,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let background = runtime.background();
     let mut background_revision = 0;
     let mut completion_revision = 0;
+    let mut mcp_changes = runtime.mcp_changes();
     let mut ui = Frontend {
         editor: Editor {
             attachments: init.attachments,
@@ -302,6 +303,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     completion_revision = readiness.revision();
                     if let Some(owner) = &background { tasks::refresh(&mut ui, owner); }
                     poll_control = true;
+                    continue;
+                },
+                changed = async { mcp_changes.as_mut().expect("MCP change receiver").changed().await }, if mcp_changes.is_some() => {
+                    if changed.is_err() { mcp_changes = None; }
                     continue;
                 },
                 // Idle is eager. Disable this branch until another UI action

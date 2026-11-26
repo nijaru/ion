@@ -51,7 +51,9 @@ finally:
         )
         .unwrap();
     let startup =
-        ion_app::McpTools::connect(&config, &cwd, tokio_util::sync::CancellationToken::new()).await;
+        ion_app::McpTools::start(&config, &cwd, tokio_util::sync::CancellationToken::new())
+            .wait_for_all()
+            .await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let tools = startup.tools.unwrap();
     let session = original.host.session().clone();

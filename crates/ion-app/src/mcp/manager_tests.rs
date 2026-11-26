@@ -26,6 +26,8 @@ async fn shutdown_preserves_unpublished_cleanup_errors_separately_from_operation
                 catalog: Arc::new(SyncRwLock::new(Catalog::new())),
                 refresh_gate: Mutex::new(()),
                 closing: CancellationToken::new(),
+                startup_stop: CancellationToken::new(),
+                changes: watch::Sender::new(()),
             });
             let error = combine_cleanup::<()>(
                 Err(anyhow!("replacement failed")),
@@ -46,7 +48,9 @@ async fn shutdown_preserves_unpublished_cleanup_errors_separately_from_operation
             if with_reconnect {
                 let completion = Arc::new(SyncRwLock::new(Some(Err(failure))));
                 let task = tokio::spawn(async {});
-                let work = Arc::new(ReconnectWork {
+                let work = Arc::new(ConnectionWork {
+                    initial: false,
+                    diagnostics_reported: AtomicBool::new(false),
                     stop: CancellationToken::new(),
                     completion,
                     join: Mutex::new(ReconnectJoin { task, result: None }),
@@ -56,7 +60,7 @@ async fn shutdown_preserves_unpublished_cleanup_errors_separately_from_operation
                     .state
                     .write()
                     .unwrap()
-                    .reconnects
+                    .connections
                     .insert("peer".into(), work);
             }
             assert_eq!(

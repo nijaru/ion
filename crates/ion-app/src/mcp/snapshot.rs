@@ -8,6 +8,7 @@ use super::{McpExposure, McpTools};
 pub enum McpServerStatus {
     Available,
     Unavailable,
+    Connecting,
     Reconnecting,
     CleanupFailed,
     /// Admission is closed; this does not prove cleanup has finished.
@@ -29,6 +30,9 @@ pub struct McpServerSnapshot {
     pub tools: McpToolCounts,
     /// Resource access advertised by the published, non-hidden generation.
     pub resources: bool,
+    /// Last connection failure; display as untrusted diagnostic text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diagnostic: Option<String>,
 }
 
 impl McpTools {
@@ -51,19 +55,27 @@ impl McpTools {
                     .servers
                     .get(name)
                     .filter(|server| !server.retiring.is_cancelled());
+                let attempt = state.connections.get(name);
+                let completion = attempt.map(|work| {
+                    work.completion
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                });
                 let status = if self.closing.is_cancelled() {
                     McpServerStatus::Closing
                 } else if state.cleanup_failures.contains_key(name) {
                     McpServerStatus::CleanupFailed
-                } else if state.reconnects.get(name).is_some_and(|work| {
-                    work.completion
-                        .read()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .is_none()
-                }) {
-                    McpServerStatus::Reconnecting
                 } else if live.is_some() {
                     McpServerStatus::Available
+                } else if let Some((work, _)) = attempt
+                    .zip(completion.as_ref())
+                    .filter(|(_, completion)| completion.is_none())
+                {
+                    if work.initial {
+                        McpServerStatus::Connecting
+                    } else {
+                        McpServerStatus::Reconnecting
+                    }
                 } else {
                     McpServerStatus::Unavailable
                 };
@@ -82,6 +94,11 @@ impl McpTools {
                     status,
                     tools,
                     resources: live.is_some_and(|server| server.resources),
+                    diagnostic: completion
+                        .as_ref()
+                        .and_then(|completion| completion.as_ref())
+                        .and_then(|outcome| outcome.as_ref().err())
+                        .map(|failure| failure.message.clone()),
                 }
             })
             .collect()

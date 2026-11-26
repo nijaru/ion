@@ -804,7 +804,8 @@ mod tests {
             .unwrap();
         let startup = tokio::time::timeout(
             Duration::from_secs(10),
-            McpTools::connect(&config, &root, tokio_util::sync::CancellationToken::new()),
+            McpTools::start(&config, &root, tokio_util::sync::CancellationToken::new())
+                .wait_for_all(),
         )
         .await
         .unwrap();

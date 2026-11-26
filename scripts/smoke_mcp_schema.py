@@ -109,6 +109,7 @@ for line in sys.stdin:
         result={'protocolVersion':r['params']['protocolVersion'],'capabilities':{'tools':{}},'serverInfo':{'name':'schema','version':'1'}}
     elif r['method']=='tools/list':
         result={'tools':[
+            {'name':'ready','description':'Fixture readiness sentinel','inputSchema':{'type':'object'}},
             {'name':'checked','description':'schema conformance checked','inputSchema':{'type':'object'},'outputSchema':{'$defs':{'Count':{'type':'integer'}},'type':'object','properties':{'count':{'$ref':'#/$defs/Count'}},'required':['count']}},
             {'name':'unchecked','description':'schema conformance unchecked','inputSchema':{'type':'object'},'outputSchema':{'$ref':sys.argv[2]}}]}
     elif r['method']=='tools/call':
@@ -128,10 +129,15 @@ for line in sys.stdin:
         try:
             subprocess.run([BINARY, "use", "smoke", "schema", "--endpoint", f"http://127.0.0.1:{server.server_port}/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
             for mode, packets in (("direct", 3), ("deferred", 4), ("composed", 2)):
-                config = {"servers": {"schema": {"command": sys.executable, "args": [str(fixture), str(effects), reference], "exposure": "direct" if mode == "direct" else "deferred"}}}
+                # Test schema delivery, not a race with background startup.
+                # A direct per-tool override gates this server's inventory;
+                # the two actual test tools retain their selected exposure.
+                config = {"servers": {"schema": {"command": sys.executable, "args": [str(fixture), str(effects), reference],
+                                                  "exposure": "direct" if mode == "direct" else "deferred",
+                                                  "tool_exposure": {"ready": "direct"}}}}
                 (work / "ion/mcp.json").write_text(json.dumps(config))
                 server.mode, server.packets = mode, []
-                command = [BINARY, "--cwd", work / "workspace"] + (["--code-mode"] if mode == "composed" else []) + ["run", "Check MCP schema conformance."]
+                command = [BINARY, "--cwd", work / "workspace", "--exclude-tools", "mcp__6_schema__ready"] + (["--code-mode"] if mode == "composed" else []) + ["run", "Check MCP schema conformance."]
                 response = subprocess.run(command, env=env, check=True, capture_output=True, text=True, timeout=30)
                 assert response.stdout.strip() == "MCP_SCHEMA_OK" and len(server.packets) == packets, response
                 assert "unchecked" in response.stderr and "SCHEMA_CANARY" not in response.stderr, response

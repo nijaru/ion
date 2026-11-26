@@ -26,6 +26,7 @@ fn status(value: McpServerStatus) -> &'static str {
     match value {
         McpServerStatus::Available => "available",
         McpServerStatus::Unavailable => "unavailable",
+        McpServerStatus::Connecting => "connecting",
         McpServerStatus::Reconnecting => "reconnecting",
         McpServerStatus::CleanupFailed => "cleanup failed; replacement blocked",
         McpServerStatus::Closing => "closing; cleanup may still be running",
@@ -33,7 +34,7 @@ fn status(value: McpServerStatus) -> &'static str {
 }
 
 fn details(server: &McpServerSnapshot) -> String {
-    format!(
+    let mut details = format!(
         "MCP server {}\nState: {}\nPublished tools: {} direct · {} deferred · {} hidden\nResource access: {}\nCaptured availability, not a remote health check. Counts precede application loadout selection. Configuration and trust are not reloaded.",
         server.name,
         status(server.status),
@@ -45,7 +46,12 @@ fn details(server: &McpServerSnapshot) -> String {
         } else {
             "not available"
         }
-    )
+    );
+    if let Some(diagnostic) = &server.diagnostic {
+        details.push_str("\nLast connection failure: ");
+        details.push_str(diagnostic);
+    }
+    details
 }
 
 fn list(control: &SessionControl<EditorDraft>, reconnect: bool) -> Result<Picker> {

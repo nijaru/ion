@@ -52,7 +52,9 @@ finally:
             }),
         )
         .unwrap();
-    let startup = McpTools::connect(&config, &fixture.root, CancellationToken::new()).await;
+    let startup = McpTools::start(&config, &fixture.root, CancellationToken::new())
+        .wait_for_all()
+        .await;
     assert!(startup.diagnostics.is_empty(), "{:?}", startup.diagnostics);
     let tools = startup.tools.unwrap();
     let mut setup = crate::CodingApplication::new(fixture.host.clone(), None)

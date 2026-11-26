@@ -16,6 +16,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         self.setup.mcp_tools().map(|tools| tools.snapshot())
     }
 
+    /// Coalesced wakeups for passive management views. Resample with `mcp_servers`.
+    pub fn mcp_changes(&self) -> Option<tokio::sync::watch::Receiver<()>> {
+        self.setup.mcp_tools().map(|tools| tools.changes())
+    }
+
     /// Admit a reconnect without stopping any whole Turn. The eventual result
     /// has independent reliable custody; this return only acknowledges admission.
     pub fn reconnect_mcp(

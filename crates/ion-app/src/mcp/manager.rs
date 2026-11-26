@@ -1,7 +1,10 @@
-//! Admitted definitions, frozen generations and retained reconnect custody.
+//! Admitted definitions, frozen generations and retained connection custody.
 use std::{
     path::Path,
-    sync::{Arc, RwLock as SyncRwLock, atomic::Ordering},
+    sync::{
+        Arc, RwLock as SyncRwLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -10,7 +13,7 @@ use ion_ai::BoxFuture;
 use ion_core::{
     ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation, ToolRegistration, ToolSource,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, watch};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -37,11 +40,13 @@ pub struct McpTools {
     catalog: Arc<SyncRwLock<Catalog>>,
     refresh_gate: Mutex<()>,
     closing: CancellationToken,
+    startup_stop: CancellationToken,
+    changes: watch::Sender<()>,
 }
 #[derive(Default)]
 struct ManagerState {
     servers: std::collections::BTreeMap<String, Arc<Server>>,
-    reconnects: std::collections::BTreeMap<String, Arc<ReconnectWork>>,
+    connections: std::collections::BTreeMap<String, Arc<ConnectionWork>>,
     cleanup_failures: std::collections::BTreeMap<String, String>,
 }
 impl ManagerState {
@@ -68,7 +73,7 @@ pub struct McpReconnectReport {
 /// Retained reconnect custody. Drop requests cancellation; explicit joining
 /// retrieves its outcome. The manager also joins this work on controlled exit.
 pub struct McpReconnect {
-    work: Arc<ReconnectWork>,
+    work: Arc<ConnectionWork>,
 }
 #[derive(Clone, Debug)]
 struct ReconnectFailure {
@@ -88,17 +93,39 @@ struct ReconnectJoin {
     task: tokio::task::JoinHandle<()>,
     result: Option<std::result::Result<(), String>>,
 }
-struct ReconnectWork {
+struct ConnectionWork {
+    initial: bool,
+    diagnostics_reported: AtomicBool,
     stop: CancellationToken,
     completion: Arc<SyncRwLock<Option<ReconnectResult>>>,
     join: Mutex<ReconnectJoin>,
 }
-impl ReconnectWork {
+impl ConnectionWork {
+    fn take_startup_diagnostics(&self) -> Vec<String> {
+        if !self.initial || self.diagnostics_reported.load(Ordering::Acquire) {
+            return Vec::new();
+        }
+        let completion = self
+            .completion
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(outcome) = completion.as_ref() else {
+            return Vec::new();
+        };
+        if self.diagnostics_reported.swap(true, Ordering::AcqRel) {
+            return Vec::new();
+        }
+        match outcome {
+            Ok(report) => report.diagnostics.clone(),
+            Err(failure) => vec![failure.message.clone()],
+        }
+    }
+
     async fn joined(&self) -> std::result::Result<ReconnectResult, String> {
         let mut join = self.join.lock().await;
         if join.result.is_none() {
             join.result = Some((&mut join.task).await.map_err(|error| {
-                format!("MCP reconnect task failed; effects may be unknown: {error}")
+                format!("MCP connection task failed; effects may be unknown: {error}")
             }));
         }
         join.result
@@ -135,9 +162,49 @@ impl Drop for McpReconnect {
     }
 }
 
+impl McpStartup {
+    /// Join initial generations that may publish direct model tools.
+    /// Other attempts stay owned by the returned manager, not this wait.
+    pub async fn wait_for_direct(self) -> Self {
+        self.wait(true).await
+    }
+
+    /// Wait for every initial generation (for hosts requiring a complete inventory).
+    pub async fn wait_for_all(self) -> Self {
+        self.wait(false).await
+    }
+
+    async fn wait(mut self, direct_only: bool) -> Self {
+        let Some(tools) = self.tools.as_ref() else {
+            return self;
+        };
+        let work = tools.initial_work(direct_only);
+        for result in join_all(work.iter().map(|work| work.joined())).await {
+            if let Err(error) = result {
+                self.diagnostics.push(error);
+            }
+        }
+        for work in work {
+            self.diagnostics.extend(work.take_startup_diagnostics());
+        }
+        if tools.startup_stop.is_cancelled() {
+            if let Err(error) = tools.shutdown().await {
+                self.diagnostics.push(format!("{error:#}"));
+            }
+            for work in tools.initial_work(false) {
+                self.diagnostics.extend(work.take_startup_diagnostics());
+            }
+            self.tools = None;
+        }
+        self
+    }
+}
+
 impl McpTools {
-    pub async fn connect(config: &McpConfig, cwd: &Path, stop: CancellationToken) -> McpStartup {
-        let (saved, mut diagnostics) = match config.load_startup() {
+    /// Admit the trusted definitions and start their owned connection workers.
+    /// A host that starts a manager must shut it down and join before exit.
+    pub fn start(config: &McpConfig, cwd: &Path, stop: CancellationToken) -> McpStartup {
+        let (saved, diagnostics) = match config.load_startup() {
             Ok(saved) => saved,
             Err(error) => {
                 return McpStartup {
@@ -146,85 +213,63 @@ impl McpTools {
                 };
             }
         };
-        // Capture admitted definitions even when their initial transport fails.
-        // Explicit reconnect is not configuration or trust reload.
         let definitions: std::collections::BTreeMap<_, _> = saved
             .into_iter()
             .filter(|(_, definition)| definition.enabled())
             .collect();
-        let catalog = Arc::new(SyncRwLock::new(Catalog::new()));
-        let mut state = ManagerState::default();
-        let attempts = definitions.iter().map(|(name, definition)| {
-            let catalog = catalog.clone();
-            let stop = stop.clone();
-            async move {
-                (
-                    name,
-                    Server::connect(name.clone(), definition.clone(), cwd, catalog, stop).await,
-                )
-            }
-        });
-        for (name, attempt) in join_all(attempts).await {
-            let failure = match attempt {
-                Ok((server, _)) if stop.is_cancelled() => Some(
-                    combine_cleanup::<()>(
-                        Err(anyhow!("MCP startup cancelled")),
-                        server.shutdown().await,
-                    )
-                    .unwrap_err(),
-                ),
-                Ok((server, discovered)) => {
-                    match publish_tools(&catalog, &server.name, discovered.tools) {
-                        Ok(()) => {
-                            diagnostics.extend(discovered.diagnostics);
-                            if let Some(notice) = server
-                                .stderr
-                                .as_ref()
-                                .and_then(|log| log.notice(&server.name))
-                            {
-                                diagnostics.push(notice);
-                            }
-                            state.servers.insert(server.name.clone(), Arc::new(server));
-                            None
-                        }
-                        Err(error) => Some(
-                            combine_cleanup::<()>(Err(error), server.shutdown().await).unwrap_err(),
-                        ),
-                    }
-                }
-                Err(error) => Some(error),
-            };
-            if let Some(error) = failure {
-                let failure = ReconnectFailure::from(error);
-                state.retain_failure(name, &failure);
-                diagnostics.push(failure.message);
-            }
-        }
-        let cancelled = stop.is_cancelled();
-        if cancelled {
-            // Cancellation may arrive while closing another failed startup.
-            // Join accumulated successes before discarding their manager.
-            for server in state.servers.values() {
-                server.retire();
-            }
-            for result in join_all(state.servers.values().map(|server| server.shutdown())).await {
-                if let Err(error) = result {
-                    diagnostics.push(format!("{error:#}"));
-                }
-            }
-            state.servers.clear();
-        }
-        let tools = (!definitions.is_empty() && !cancelled).then(|| {
-            Arc::new(Self {
+        let tools = (!definitions.is_empty() && !stop.is_cancelled()).then(|| {
+            let manager = Arc::new(Self {
                 definitions,
                 cwd: cwd.to_owned(),
-                state: SyncRwLock::new(state),
-                catalog,
+                state: SyncRwLock::new(ManagerState::default()),
+                catalog: Arc::new(SyncRwLock::new(Catalog::new())),
                 refresh_gate: Mutex::new(()),
                 closing: CancellationToken::new(),
-            })
+                startup_stop: stop,
+                changes: watch::Sender::new(()),
+            });
+            {
+                let mut state = manager
+                    .state
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for (name, definition) in &manager.definitions {
+                    let work = manager.start_connection(
+                        name,
+                        definition.clone(),
+                        manager.startup_stop.child_token(),
+                        true,
+                    );
+                    state.connections.insert(name.clone(), work);
+                }
+            }
+            manager
         });
         McpStartup { tools, diagnostics }
+    }
+
+    fn initial_work(&self, direct_only: bool) -> Vec<Arc<ConnectionWork>> {
+        self.connection_work(|work, definition| {
+            work.initial && (!direct_only || may_publish_direct(definition))
+        })
+    }
+
+    fn connection_work(
+        &self,
+        include: impl Fn(&ConnectionWork, &McpServer) -> bool,
+    ) -> Vec<Arc<ConnectionWork>> {
+        self.state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .connections
+            .iter()
+            .filter(|(name, work)| include(work, &self.definitions[*name]))
+            .map(|(_, work)| work.clone())
+            .collect()
+    }
+    /// Wake passive clients to resample the published connection state.
+    pub fn changes(&self) -> watch::Receiver<()> {
+        self.changes.subscribe()
     }
 
     pub(super) fn servers(&self) -> Vec<Arc<Server>> {
@@ -263,7 +308,7 @@ impl McpTools {
             .get(name)
             .with_context(|| format!("MCP server {name} was not admitted at startup"))?
             .clone();
-        if let Some(work) = state.reconnects.get(name) {
+        if let Some(work) = state.connections.get(name) {
             let completed = work
                 .completion
                 .read()
@@ -272,7 +317,20 @@ impl McpTools {
                 format!("MCP server {name} already has a reconnect in progress")
             })?;
         }
-        let stop = parent_stop.child_token();
+        let work = self.start_connection(name, definition, parent_stop.child_token(), false);
+        state.connections.insert(name.to_owned(), work.clone());
+        drop(state);
+        self.changes.send_replace(());
+        Ok(McpReconnect { work })
+    }
+
+    fn start_connection(
+        self: &Arc<Self>,
+        name: &str,
+        definition: McpServer,
+        stop: CancellationToken,
+        initial: bool,
+    ) -> Arc<ConnectionWork> {
         let completion = Arc::new(SyncRwLock::new(None));
         let owner = self.clone();
         let server = name.to_owned();
@@ -293,14 +351,15 @@ impl McpTools {
             *task_completion
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(result);
+            owner.changes.send_replace(());
         });
-        let work = Arc::new(ReconnectWork {
+        Arc::new(ConnectionWork {
+            initial,
+            diagnostics_reported: AtomicBool::new(false),
             stop,
             completion,
             join: Mutex::new(ReconnectJoin { task, result: None }),
-        });
-        state.reconnects.insert(name.to_owned(), work.clone());
-        Ok(McpReconnect { work })
+        })
     }
 
     async fn replace(
@@ -325,11 +384,6 @@ impl McpTools {
                 .await
                 .map_err(connection::mark_cleanup_failure)?;
         }
-        let _gate = tokio::select! {
-            biased;
-            () = stop.cancelled() => return Err(anyhow!("MCP reconnect cancelled")),
-            gate = self.refresh_gate.lock() => gate,
-        };
         let (server, discovered) = Server::connect(
             name.to_owned(),
             definition,
@@ -339,7 +393,13 @@ impl McpTools {
         )
         .await?;
         let server = Arc::new(server);
-        let publication = {
+        let publication = async {
+            // Slow handshakes must not hold the refresh/publication gate.
+            let _gate = tokio::select! {
+                biased;
+                () = stop.cancelled() => return Err(anyhow!("MCP connection cancelled")),
+                gate = self.refresh_gate.lock() => gate,
+            };
             // Snapshots use the same lock order. Shutdown fencing and publication
             // of the generation and its definitions are one synchronous boundary.
             let mut state = self
@@ -358,7 +418,8 @@ impl McpTools {
                     McpReconnectReport { diagnostics }
                 })
             }
-        };
+        }
+        .await;
         match publication {
             Ok(report) => Ok(report),
             Err(error) => combine_cleanup(Err(error), server.shutdown().await),
@@ -366,7 +427,31 @@ impl McpTools {
     }
 
     async fn refresh_changed(&self, stop: CancellationToken) -> Vec<String> {
-        let mut diagnostics = Vec::new();
+        // A direct replacement has retired the old generation. Preserve the
+        // request boundary for that route without blocking on optional peers,
+        // holding the catalog gate, or cancelling a shared reconnect on Stop.
+        let replacements = self.connection_work(|work, definition| {
+            !work.initial
+                && may_publish_direct(definition)
+                && work
+                    .completion
+                    .read()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .is_none()
+        });
+        tokio::select! {
+            biased;
+            () = stop.cancelled() => return Vec::new(),
+            _ = join_all(replacements.iter().map(|work| work.joined())) => {},
+        }
+        let mut diagnostics = self
+            .state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .connections
+            .values()
+            .flat_map(|work| work.take_startup_diagnostics())
+            .collect::<Vec<_>>();
         let _gate = tokio::select! {
             () = stop.cancelled() => return diagnostics,
             guard = self.refresh_gate.lock() => guard,
@@ -404,7 +489,10 @@ impl McpTools {
             }
             match updated {
                 Ok(updated) => match publish_tools(&self.catalog, &server.name, updated.tools) {
-                    Ok(()) => diagnostics.extend(updated.diagnostics),
+                    Ok(()) => {
+                        diagnostics.extend(updated.diagnostics);
+                        self.changes.send_replace(());
+                    }
                     Err(error) => diagnostics.push(format!("{error:#}")),
                 },
                 Err(error) => diagnostics.push(format!("{error:#}")),
@@ -417,24 +505,25 @@ impl McpTools {
         diagnostics
     }
 
-    /// Fence replacement publication, then join retained workers and connections.
+    /// Fence publication, then join startup/replacement workers and connections.
     pub async fn shutdown(&self) -> Result<()> {
-        let reconnects = {
+        let attempts = {
             let state = self
                 .state
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.closing.cancel();
-            for work in state.reconnects.values() {
+            for work in state.connections.values() {
                 work.stop.cancel();
             }
             for server in state.servers.values() {
                 server.retire();
             }
-            state.reconnects.values().cloned().collect::<Vec<_>>()
+            state.connections.values().cloned().collect::<Vec<_>>()
         };
+        self.changes.send_replace(());
         let mut errors = Vec::new();
-        for work in reconnects {
+        for work in attempts {
             // A failed/cancelled operation has its own retained outcome; joining
             // the task is separate from turning it into a shutdown failure.
             if let Err(error) = work.joined().await {
@@ -460,6 +549,14 @@ impl McpTools {
         ensure!(errors.is_empty(), "{}", errors.join("; "));
         Ok(())
     }
+}
+
+fn may_publish_direct(definition: &McpServer) -> bool {
+    definition.exposure() == McpExposure::Direct
+        || definition
+            .tool_exposure()
+            .values()
+            .any(|exposure| *exposure == McpExposure::Direct)
 }
 
 impl ToolSource for McpTools {

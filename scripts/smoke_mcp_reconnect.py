@@ -351,7 +351,10 @@ def inspect(fixture, rpc, peer_status="available", steady=True):
         expected.append({"name": "steady", "status": "available",
                          "tools": {"direct": 1, "deferred": 0, "hidden": 0}, "resources": False})
     for _ in range(3):
-        assert rpc.request("get_state")["data"]["mcp_servers"] == expected
+        servers = rpc.request("get_state")["data"]["mcp_servers"]
+        if peer_status == "unavailable":
+            assert servers[0].pop("diagnostic"), "unavailable peer should report its connection failure"
+        assert servers == expected, servers
     after = (fixture.events(), fixture.events("steady"), list(fixture.remote_requests),
              fixture.facts(), len(fixture.requests), (fixture.workspace / "helpers").read_text())
     assert after == before, "inspection must not refresh, capture values, call models or change facts"
