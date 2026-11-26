@@ -117,25 +117,109 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
     }
 
     fn reply(&mut self, sender: oneshot::Sender<CodeReply>, value: &impl Serialize) {
-        // An unawaited result still commits, but a departed guest needs no
-        // serialization or reply budget. This is not discarded observation.
+        self.reply_with_retention(sender, value, 0);
+    }
+
+    /// Charge both bytes sent to the guest and bytes held behind opaque handles.
+    /// Caller retains payloads only after the reply was delivered.
+    fn reply_with_retention(
+        &mut self,
+        sender: oneshot::Sender<CodeReply>,
+        value: &impl Serialize,
+        retained_bytes: usize,
+    ) -> bool {
+        if sender.is_closed() {
+            return false;
+        }
+        let remaining = self.limits.max_host_bytes - self.host_bytes;
+        let mut writer = BoundedJson {
+            data: Vec::new(),
+            limit: remaining
+                .saturating_sub(retained_bytes)
+                .min(self.limits.max_json_bytes),
+        };
+        if serde_json::to_writer(&mut writer, value).is_err() {
+            self.reject_reply_limit(sender);
+            return false;
+        }
+        let bytes = writer.data.len();
+        if sender
+            .send(Ok(String::from_utf8(writer.data).expect("JSON is UTF-8")))
+            .is_err()
+        {
+            return false;
+        }
+        self.host_bytes += bytes + retained_bytes;
+        true
+    }
+
+    fn reject_reply_limit(&mut self, sender: oneshot::Sender<CodeReply>) {
+        let reason = "code_mode host reply byte limit exceeded";
+        self.close(reason);
+        let _ = sender.send(Err(reason.into()));
+    }
+
+    fn reply_child(
+        &mut self,
+        sender: oneshot::Sender<CodeReply>,
+        child: usize,
+        output: &ToolOutput,
+    ) {
+        // Already committed; skipping the guest delivery can't discard the observation.
         if sender.is_closed() {
             return;
         }
-        let limit = self
-            .limits
-            .max_json_bytes
-            .min(self.limits.max_host_bytes.saturating_sub(self.host_bytes));
-        let mut writer = BoundedJson {
-            data: Vec::new(),
-            limit,
+        if self.stop.is_cancelled() {
+            let _ = sender.send(Err("code_mode admission is closed".into()));
+            return;
+        }
+        let retained_bytes = output.images.iter().fold(0usize, |bytes, image| {
+            bytes.saturating_add(image.data().len())
+        });
+        if retained_bytes > self.limits.max_host_bytes - self.host_bytes {
+            self.reject_reply_limit(sender);
+            return;
+        }
+        #[derive(Serialize)]
+        struct ImageHandle {
+            #[serde(rename = "type")]
+            kind: &'static str,
+            id: uuid::Uuid,
+            mime_type: ion_ai::ImageMime,
+        }
+        let images = output
+            .images
+            .iter()
+            .map(|image| ImageHandle {
+                kind: "image",
+                id: uuid::Uuid::new_v4(),
+                mime_type: image.mime_type(),
+            })
+            .collect::<Vec<_>>();
+        #[derive(Serialize)]
+        struct Reply<'a> {
+            value: &'a Value,
+            is_error: bool,
+            images: &'a [ImageHandle],
+            artifacts: &'a [crate::ArtifactRef],
+            parent: ToolOccurrence,
+            child: usize,
+        }
+        let reply = Reply {
+            value: &output.value,
+            is_error: output.is_error,
+            images: &images,
+            artifacts: &output.artifacts,
+            parent: self.parent,
+            child,
         };
-        if serde_json::to_writer(&mut writer, value).is_err() {
-            self.close("code_mode host reply byte limit exceeded");
-            let _ = sender.send(Err("code_mode host reply byte limit exceeded".into()));
-        } else {
-            self.host_bytes += writer.data.len();
-            let _ = sender.send(Ok(String::from_utf8(writer.data).expect("JSON is UTF-8")));
+        if self.reply_with_retention(sender, &reply, retained_bytes) {
+            self.images.extend(
+                images
+                    .into_iter()
+                    .zip(&output.images)
+                    .map(|(handle, image)| (handle.id.to_string(), image.clone())),
+            );
         }
     }
 
@@ -336,45 +420,7 @@ impl<F: FnMut(AgentEvent)> Gate<'_, F> {
                 self.audit(&outcome);
                 match &outcome {
                     ChildOutcome::Observed { output } => {
-                        #[derive(Serialize)]
-                        struct Reply<'a> {
-                            value: &'a Value,
-                            is_error: bool,
-                            images: Vec<Value>,
-                            artifacts: &'a [crate::ArtifactRef],
-                            parent: ToolOccurrence,
-                            child: usize,
-                        }
-                        let images = output
-                            .images
-                            .iter()
-                            .map(|image| {
-                                // A fresh ID prevents a copied or earlier invocation's
-                                // block from accidentally selecting a different image.
-                                let id = uuid::Uuid::new_v4().to_string();
-                                let block =
-                                    json!({"type":"image", "id":id, "mime_type":image.mime_type()});
-                                self.images.insert(id, image.clone());
-                                block
-                            })
-                            .collect();
-                        let value = Reply {
-                            value: &output.value,
-                            is_error: output.is_error,
-                            artifacts: &output.artifacts,
-                            parent: self.parent,
-                            child: admitted.intent.child,
-                            images,
-                        };
-                        if self.stop.is_cancelled() {
-                            // The observation remains committed/inspectable, but
-                            // no successful consumption follows a fault or stop.
-                            let _ = admitted
-                                .reply
-                                .send(Err("code_mode admission is closed".into()));
-                        } else {
-                            self.reply(admitted.reply, &value);
-                        }
+                        self.reply_child(admitted.reply, child, output);
                     }
                     ChildOutcome::NotDispatched { reason } => {
                         let _ = admitted.reply.send(Err(reason.clone()));

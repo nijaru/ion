@@ -28,7 +28,7 @@ pub struct CodeLimits {
     pub max_output_bytes: usize,
     pub max_calls: usize,
     pub max_concurrency: usize,
-    /// Encoded callable-name manifest plus cumulative JSON replies delivered to the VM.
+    /// Encoded callable-name manifest, delivered JSON replies and retained base64 image payloads.
     pub max_host_bytes: usize,
     /// Stop further dispatch after this much child audit. Already started
     /// outcomes still commit: this admission threshold can overshoot, not cut.
@@ -177,7 +177,7 @@ pub(crate) fn definition(limits: CodeLimits) -> ToolDefinition {
                     "Observed native tool failures set is_error in the reply envelope; invalid bridge requests, unknown/non-guest capabilities and gateway faults reject rather than return envelopes. ",
                     "Transferred requests settle even if unawaited. ",
                     "Failure/cancellation stops new dispatch and awaits started effects; no rollback or script replay. ",
-                    "Limits: {}ms cumulative runnable guest budget (idle bridge waits excluded), {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host JSON bytes including the name manifest. ",
+                    "Limits: {}ms cumulative runnable guest budget (idle bridge waits excluded), {} bridge requests, {} concurrent tools, {} byte JS heap, {} byte JSON value, {} cumulative host reply and retained image bytes including the name manifest. ",
                     "Selected return, text and image attachments share a {} byte output limit. Exceeding output limits fails the script even if caught. ",
                     "Direct tools remain available.",
                 ),

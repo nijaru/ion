@@ -46,7 +46,9 @@ before treating an empty result as evidence that the pattern is absent.
 
 ## Code Mode recovery
 
-`--code-mode` enables bounded JavaScript composition alongside direct tools. When a script fails after admitting child calls, its error result includes `recovery.query`. Inside a later Code Mode call, pass that query to the global `inspectSaved` helper to inspect saved child outcomes before retrying. A script failure does not undo effects or require rerunning tools to recover output. See [Session captures](sessions.md#retained-evidence-and-captures) for artifact paging and access limits.
+`--code-mode` enables bounded JavaScript composition alongside direct tools. Images returned to a script count against its bridge budget even if the script never passes them to the model. If delivery exceeds that budget, Ion stops the script without discarding the saved child result.
+
+When a script fails after admitting child calls, its error result includes `recovery.query`. Inside a later Code Mode call, pass that query to `inspectSaved` to check saved child outcomes before retrying. A script failure does not undo earlier effects. See [Session captures](sessions.md#retained-evidence-and-captures) for artifact paging and access limits.
 
 ## Configure a veto program
 

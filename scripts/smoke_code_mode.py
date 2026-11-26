@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pty
+import random
 import select
 import shlex
 import shutil
@@ -20,6 +21,7 @@ import tempfile
 import termios
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -62,6 +64,8 @@ def program(prompt):
         return "await Promise.all(['a','b'].map(x=>tools.exec({command:`touch ${x}.ready; sleep 1.5; printf done`}))); return true;"
     if prompt == "SELECT":
         return "const report=await tools.read({path:'one'}); text({length:report.value.content.length}); const picture=await tools.read({path:'pixel.png'}); image(picture.images[0]);"
+    if prompt == "IMAGE_BUDGET":
+        return "const first=await tools.read({path:'large.png'}); if(first.images.length!==1) throw new Error('first image missing'); try { await tools.read({path:'large.png'}); } catch (_) {} await tools.write({path:'over-budget',content:'unexpected effect'}); return true;"
     if prompt == "HISTORY_RECOVERY":
         return "const self=await tools.history({action:'search',query:'OWN_QUERY_ONLY_SMOKE'}); if(self.is_error||self.value.entries.length) throw new Error('query matched itself'); const found=await tools.history({action:'search',query:'HISTORY_NEEDLE_SMOKE',tool:'exec'}); if(found.is_error) throw new Error(JSON.stringify(found.value)); if(found.value.provenance.through_entry!==self.value.provenance.through_entry) throw new Error('snapshot changed between children'); const [target]=found.value.entries; if(found.value.entries.length!==1||target.tool.name!=='exec') throw new Error('missing original exec result'); const page=await tools.history({action:'read',entry:target.entry,limit:512}); if(page.is_error) throw new Error(JSON.stringify(page.value)); if(page.value.provenance.through_entry!==found.value.provenance.through_entry) throw new Error('read changed snapshot'); return {entry:target.entry,state:target.state,content:page.value.entry.content,next:page.value.entry.next_offset};"
     if prompt == "MCP":
@@ -97,7 +101,7 @@ class Provider(BaseHTTPRequestHandler):
         elif enabled and prompt == "HISTORY_SOURCE" and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "history-source", "type": "function", "function": {"name": "exec", "arguments": json.dumps({"command": "printf 'HISTORY_NEEDLE_SMOKE\\n' >> effects; printf 'HISTORY_NEEDLE_SMOKE\\n'"})}}]}
             reason = "tool_calls"
-        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL", "BINARY_CAPTURE", "HISTORY_RECOVERY") and fresh:
+        elif enabled and prompt in ("FANOUT", "GUARD", "MCP", "SELECT", "IMAGE_BUDGET", "IO", "STDERR", "ACTIVE", "RECOVER_FAIL", "BINARY_CAPTURE", "HISTORY_RECOVERY") and fresh:
             delta = {"tool_calls": [{"index": 0, "id": "parent", "type": "function", "function": {"name": "code_mode", "arguments": json.dumps({"code": program(prompt)})}}]}
             reason = "tool_calls"
         else:
@@ -208,6 +212,29 @@ with tempfile.TemporaryDirectory(prefix="ion-code-mode-") as temporary:
         assert parent["image_mime_types"] == ["image/png"], parent
         image_parts = [part for message in requests[-1]["messages"] if isinstance(message["content"], list) for part in message["content"] if part["type"] == "image_url"]
         assert len(image_parts) == 1 and image_parts[0]["image_url"]["url"].startswith("data:image/png;base64,"), requests[-1]
+
+        # Each raw image fits native reading and the bridge; two exceed the
+        # cumulative bridge budget even though the guest never emits either one.
+        def chunk(kind, data):
+            return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+        edge = 1200
+        noise = random.Random(0)
+        rows = b"".join(b"\0" + noise.randbytes(edge * 3) for _ in range(edge))
+        (workspace / "large.png").write_bytes(b"\x89PNG\r\n\x1a\n" +
+            chunk(b"IHDR", struct.pack(">IIBBBBB", edge, edge, 8, 2, 0, 0, 0)) +
+            chunk(b"IDAT", zlib.compress(rows, level=0)) + chunk(b"IEND", b""))
+        image_session = work / "image-budget.sqlite"
+        limited = [json.loads(line) for line in run(env, workspace, "--session", image_session, "--code-mode", "--json", "run", "IMAGE_BUDGET").stdout.splitlines()]
+        parent = next(record for record in limited if record["type"] == "tool_finished")
+        assert parent["is_error"] and "host reply byte limit exceeded" in parent["output"]["error"], parent
+        assert parent["output"]["calls"] == 2 and not (workspace / "over-budget").exists()
+        children = [record for record in limited if record["type"] == "child_tool_finished"]
+        assert len(children) == 2 and all(record["state"] == "observed" and record["image_mime_types"] == ["image/png"] for record in children), children
+        with sqlite3.connect(image_session) as db:
+            observed = db.execute("""SELECT length(json_extract(body,'$.data.outcome.output.images[0].data'))
+                FROM entries WHERE json_extract(body,'$.kind') = 'child_tool_result' ORDER BY seq""").fetchall()
+        assert len(observed) == 2 and all(size and size > 4 * 1024 * 1024 for size, in observed), observed
+        print("Code Mode image bridge budget: two saved observations, bounded delivery, no later effect: OK", flush=True)
 
         # The nonce is inside the omitted middle of the command preview,
         # not in any model-visible parent output.
