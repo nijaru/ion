@@ -1,8 +1,26 @@
 //! The Session's durable SQLite store: prepare a candidate, commit, then publish it.
 //! The Store holds derived in-memory projections beside the authoritative journal.
 
-use super::journal::{AppendBatch, JournalIdentity, encode_entry};
-use super::*;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::Duration,
+};
+
+use ion_ai::ModelContextChange;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
+
+use crate::request::RequestCalibration;
+
+use super::{
+    HistoryProjection, SessionEntry, SessionError, State, artifacts,
+    code_inspection::ChildRecordIndex,
+    context::ProjectedMessage,
+    context_index::{ContextIndex, WorkingContext},
+    journal::{self, AppendBatch, JournalIdentity, encode_entry},
+    projection::{ProjectionMode, project},
+};
 
 pub(super) const FORMAT_VERSION: u32 = 19;
 
@@ -25,132 +43,53 @@ impl Header {
     }
 }
 
-/// Owns both the physical database and the exclusive writer lease. Field
-/// order closes SQLite before releasing the lease, including during retirement.
-pub(super) struct NativeStore {
-    pub store: Mutex<Store>,
-    _lock: SessionLock,
+/// A checked journal prefix, ready to install in a newly acquired SQLite connection.
+/// File creation, leases and WAL policy belong to the connection owner.
+pub(super) struct StoreSeed<'a> {
+    entries: &'a [SessionEntry],
+    projection: HistoryProjection,
+    encoded: Vec<Vec<u8>>,
 }
 
-#[cfg(test)]
-impl NativeStore {
-    pub fn duplicate_lease_descriptor(&self) -> std::io::Result<File> {
-        self._lock.0.try_clone()
-    }
-}
-
-pub(super) struct OpenedStore {
-    pub native: NativeStore,
-    pub header: Header,
-    pub path: PathBuf,
-}
-
-impl OpenedStore {
-    pub fn create(
-        path: &Path,
-        cwd: Option<&Path>,
-        id: uuid::Uuid,
-        entries: &[SessionEntry],
-        artifact_source: Option<(&Path, uuid::Uuid)>,
-    ) -> Result<Self, SessionError> {
+impl<'a> StoreSeed<'a> {
+    pub fn prepare(entries: &'a [SessionEntry]) -> Result<Self, SessionError> {
         let projection = project(entries.iter().map(Ok), ProjectionMode::Working, &|entry| {
             Ok(entries[(entry - 1) as usize].clone())
         })?;
-        let encoded = entries
-            .iter()
-            .map(encode_entry)
-            .collect::<Result<Vec<_>, _>>()?;
-        let cwd = cwd.map(Path::canonicalize).transpose()?;
-        if cwd.as_ref().is_some_and(|cwd| !cwd.is_dir()) {
-            return Err(SessionError::InvalidWorkingDirectory);
-        }
-        let filename = path.file_name().ok_or(SessionError::InvalidPath)?;
-        let parent = path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        fs::create_dir_all(parent)?;
-        let path = parent.canonicalize()?.join(filename);
-        // Hold the canonical lease through creation and failed-initialization
-        // cleanup; another opener must never own a database we are removing.
-        let lock = lock(&path)?;
-        let mut creation = create_database_file(&path)?;
-        let path = database_path(&path)?;
-        let mut connection = Connection::open(&path)?;
-        initialize_new(&connection)?;
-        let header = Header {
-            version: FORMAT_VERSION,
-            // Random prefixes remain useful as catalog selectors and short UI labels.
-            id,
-            provider_session_id: uuid::Uuid::now_v7(),
-            cwd,
-            name: None,
-        };
+        let encoded = entries.iter().map(encode_entry).collect::<Result<_, _>>()?;
+        Ok(Self {
+            entries,
+            projection,
+            encoded,
+        })
+    }
+
+    pub fn initialize(
+        self,
+        mut connection: Connection,
+        header: &Header,
+        install_artifacts: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), SessionError>,
+    ) -> Result<Store, SessionError> {
         write_transaction(&mut connection, |tx| {
-            if let Some((path, id)) = artifact_source {
-                let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                configure_connection(&source)?;
-                let snapshot = source.unchecked_transaction()?;
-                if read_header(&snapshot)?.provider_session_id != id {
-                    return Err(SessionError::InvalidDatabase);
-                }
-                artifacts::copy(&snapshot, tx, entries)?;
-            }
-            for reference in entries.iter().flat_map(artifacts::references) {
+            initialize_schema(tx)?;
+            install_artifacts(tx)?;
+            for reference in self.entries.iter().flat_map(artifacts::references) {
                 artifacts::validate(tx, reference)?;
             }
             tx.execute(
                 "INSERT INTO session(id, header) VALUES (1, ?1)",
-                params![serde_json::to_vec(&header)?],
+                params![serde_json::to_vec(header)?],
             )?;
-            for body in encoded {
+            for body in self.encoded {
                 tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
             }
             Ok(())
         })?;
-        creation.publish();
-        Ok(Self {
-            native: NativeStore {
-                store: Mutex::new(Store::from_projection(
-                    connection,
-                    header.identity(),
-                    projection,
-                )),
-                _lock: lock,
-            },
-            header,
-            path,
-        })
-    }
-
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let path = database_path(path.as_ref())?;
-        let lock = lock(&path)?;
-        // A disappearing resume target must fail, not create a new empty file
-        // between path validation and SQLite opening it.
-        let connection = Connection::open_with_flags(
-            &path,
-            OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE),
-        )?;
-        configure_connection(&connection)?;
-        let (header, projection) = {
-            let checkpoint = ReadCheckpoint::pin(&connection)?;
-            let projection = checkpoint.project(ProjectionMode::Working)?;
-            (checkpoint.header, projection)
-        };
-        prepare_writer(&connection)?;
-        Ok(Self {
-            native: NativeStore {
-                store: Mutex::new(Store::from_projection(
-                    connection,
-                    header.identity(),
-                    projection,
-                )),
-                _lock: lock,
-            },
-            header,
-            path,
-        })
+        Ok(Store::from_projection(
+            connection,
+            header.identity(),
+            self.projection,
+        ))
     }
 }
 
@@ -173,66 +112,21 @@ pub(super) struct Store {
     pub(super) live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
 }
 
-struct SessionLock(File);
-
-struct CreatedDatabase {
-    path: PathBuf,
-    identity: (u64, u64),
-    keep: bool,
-}
-impl CreatedDatabase {
-    fn publish(&mut self) {
-        self.keep = true;
-    }
-}
-impl Drop for CreatedDatabase {
-    fn drop(&mut self) {
-        if self.keep {
-            return;
-        }
-        if let Ok(metadata) = fs::symlink_metadata(&self.path)
-            && (metadata.dev(), metadata.ino()) == self.identity
-        {
-            let _ = fs::remove_file(&self.path);
-            for suffix in ["-wal", "-shm"] {
-                let mut path = self.path.as_os_str().to_os_string();
-                path.push(suffix);
-                let _ = fs::remove_file(PathBuf::from(path));
-            }
-        }
-        // The lock file's stable inode belongs to future attempts as well.
-    }
-}
-
-fn create_database_file(path: &Path) -> Result<CreatedDatabase, SessionError> {
-    let file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)?;
-    let metadata = match file.metadata() {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            let _ = fs::remove_file(path);
-            return Err(error.into());
-        }
-    };
-    Ok(CreatedDatabase {
-        path: path.to_path_buf(),
-        identity: (metadata.dev(), metadata.ino()),
-        keep: false,
-    })
-}
-
-impl Drop for SessionLock {
-    fn drop(&mut self) {
-        // A child may briefly inherit a duplicate file description. Release
-        // this writer's lease explicitly before closing our descriptor.
-        let _ = self.0.unlock();
-    }
-}
-
 impl Store {
+    /// Rebuild from one pinned read of an already acquired, configured connection.
+    /// This neither acquires ownership nor repairs unfinished work.
+    pub(super) fn reopen(connection: Connection) -> Result<(Self, Header), SessionError> {
+        let (header, projection) = {
+            let checkpoint = ReadCheckpoint::pin(&connection)?;
+            let projection = checkpoint.project(ProjectionMode::Working)?;
+            (checkpoint.header, projection)
+        };
+        Ok((
+            Self::from_projection(connection, header.identity(), projection),
+            header,
+        ))
+    }
+
     fn from_projection(
         connection: Connection,
         identity: JournalIdentity,
@@ -392,7 +286,7 @@ impl Store {
             self.calibration = None;
         }
         self.state = candidate;
-        if let Some(context_index::WorkingContext {
+        if let Some(WorkingContext {
             messages,
             settled,
             changes,
@@ -456,7 +350,7 @@ fn write_transaction_with<T>(
     }
 }
 
-/// The native read transaction owns the cut from the header SELECT through
+/// The SQLite read transaction owns the cut from the header SELECT through
 /// replay and any point reads needed to materialize the working context.
 pub(super) struct ReadCheckpoint<'a> {
     snapshot: rusqlite::Transaction<'a>,
@@ -502,7 +396,6 @@ pub(super) fn shell_settlement(
     admission: u64,
     upper: u64,
 ) -> Result<Option<(u64, usize)>, SessionError> {
-    use rusqlite::OptionalExtension;
     let row: Option<(i64,i64)> = connection.query_row("SELECT seq,length(body) FROM entries WHERE json_extract(body,'$.kind')='user_shell_settled' AND json_extract(body,'$.data.admission_entry')=?1 AND seq<=?2", params![i64::try_from(admission).map_err(|_| SessionError::InvalidHistory)?, i64::try_from(upper).map_err(|_| SessionError::InvalidHistory)?], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
     row.map(|(coordinate, bytes)| {
         Ok((
@@ -564,15 +457,7 @@ pub(super) fn configure_connection(connection: &Connection) -> Result<(), Sessio
     Ok(())
 }
 
-fn prepare_writer(connection: &Connection) -> Result<(), SessionError> {
-    connection.pragma_update(None, "journal_mode", "WAL")?;
-    connection.pragma_update(None, "synchronous", "FULL")?;
-    Ok(())
-}
-
-pub(super) fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
-    configure_connection(connection)?;
-    prepare_writer(connection)?;
+pub(super) fn initialize_schema(connection: &Connection) -> Result<(), SessionError> {
     connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);
 CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.scope'), json_extract(body, '$.data.request.id')) WHERE json_extract(body, '$.kind') = 'turn_started' AND json_extract(body, '$.data.request') IS NOT NULL;
 CREATE UNIQUE INDEX delegation_runs ON entries(json_extract(body, '$.data.record.run')) WHERE json_extract(body, '$.kind') = 'delegation_admitted';
@@ -582,41 +467,4 @@ CREATE INDEX turn_ends ON entries(json_extract(body, '$.data.turn')) WHERE json_
 CREATE UNIQUE INDEX shell_results ON entries(json_extract(body,'$.data.admission_entry')) WHERE json_extract(body,'$.kind')='user_shell_settled';")?;
     super::artifacts::initialize(connection)?;
     Ok(())
-}
-
-pub(super) fn database_path(path: &Path) -> Result<PathBuf, SessionError> {
-    let path = path.canonicalize().map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            SessionError::NotFound
-        } else {
-            SessionError::Io(error)
-        }
-    })?;
-    let metadata = fs::metadata(&path)?;
-    if !metadata.is_file() {
-        return Err(SessionError::NotFound);
-    }
-    // SQLite resolves symlinks, but cannot unify hard-linked journal/WAL names.
-    // Reject those aliases rather than claiming lock normalization makes them safe.
-    // https://www.sqlite.org/howtocorrupt.html#multiple_links_to_the_same_file
-    if metadata.nlink() != 1 {
-        return Err(SessionError::HardLinkedDatabase);
-    }
-    Ok(path)
-}
-
-fn lock(path: &Path) -> Result<SessionLock, SessionError> {
-    let mut sidecar = path.as_os_str().to_os_string();
-    sidecar.push(".lock");
-    let file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(PathBuf::from(sidecar))?;
-    file.try_lock().map_err(|error| match error {
-        fs::TryLockError::WouldBlock => SessionError::AlreadyOpen,
-        fs::TryLockError::Error(error) => SessionError::Io(error),
-    })?;
-    Ok(SessionLock(file))
 }

@@ -25,6 +25,67 @@ impl Drop for Fixture {
     }
 }
 
+#[test]
+fn seed_append_and_reopen_use_only_the_acquired_connection() {
+    let header = Header {
+        version: FORMAT_VERSION,
+        id: uuid::Uuid::new_v4(),
+        provider_session_id: uuid::Uuid::now_v7(),
+        cwd: None,
+        name: None,
+    };
+    let initial = [SessionEntry::ModelSelected {
+        model: model("fixture"),
+    }];
+    let connection = Connection::open_in_memory().unwrap();
+    configure_connection(&connection).unwrap();
+    let mut working = store::StoreSeed::prepare(&initial)
+        .unwrap()
+        .initialize(connection, &header, |_| Ok(()))
+        .unwrap();
+    let key = RequestKey::new("connection".into(), "once".into()).unwrap();
+    let input = Message::user_input("accepted once".into(), []);
+    working
+        .append(&[SessionEntry::TurnStarted {
+            turn: 1,
+            input: input.clone(),
+            model: model("fixture"),
+            completion: Vec::new(),
+            request: Some(key.clone()),
+            recovery: None,
+        }])
+        .unwrap();
+
+    // Discard the live projection but keep the database. No file or writer
+    // lease exists, and no synthetic repair may be appended on reconstruction.
+    let (mut reopened, retained) = Store::reopen(working.connection).unwrap();
+    assert_eq!(retained.identity(), header.identity());
+    assert_eq!(reopened.state.sequence, 2);
+    assert_eq!(reopened.state.active, Some(1));
+    assert_eq!(reopened.messages[0].message, input);
+    let accepted = submission::request_receipt(&reopened.connection, header.id, &key, Some(&input))
+        .unwrap()
+        .unwrap();
+    assert_eq!(accepted.turn, 1);
+    assert!(accepted.end.is_none());
+
+    reopened
+        .append(&[SessionEntry::TurnEnded {
+            turn: 1,
+            reason: TurnEndReason::Interrupted,
+        }])
+        .unwrap();
+    let (final_store, _) = Store::reopen(reopened.connection).unwrap();
+    assert_eq!(final_store.state.sequence, 3);
+    assert_eq!(final_store.state.active, None);
+    let settled =
+        submission::request_receipt(&final_store.connection, header.id, &key, Some(&input))
+            .unwrap()
+            .unwrap();
+    assert_eq!(settled.turn, accepted.turn);
+    assert_eq!(settled.end, Some(TurnEndReason::Interrupted));
+}
+
 #[tokio::test]
 async fn pinned_view_does_not_block_commits_or_mix_journal_versions() {
     let fixture = Fixture::new();

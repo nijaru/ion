@@ -9,7 +9,7 @@ use crate::{
     operation::{OperationError, OperationOwner},
 };
 
-use super::{Session, SessionError, storage::StorageWork, store::NativeStore};
+use super::{Session, SessionError, storage::StorageWork};
 
 #[derive(Default)]
 pub(super) struct RetirementWork {
@@ -23,7 +23,7 @@ enum State {
     #[default]
     Unmanaged,
     Waiting,
-    Queued(Box<NativeStore>),
+    Queued(Box<dyn Send>),
     Starting,
     Started {
         fence: OperationFence,
@@ -76,18 +76,19 @@ impl Session {
 }
 
 impl RetirementWork {
-    pub(super) fn release(&self, native: NativeStore) {
+    /// Transfer ownership as a unit; the resource decides its own drop order.
+    pub(super) fn release(&self, resources: impl Send + 'static) {
         let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if matches!(*state, State::Unmanaged) {
             drop(state);
-            drop(native);
+            drop(resources);
             return;
         }
         assert!(matches!(*state, State::Waiting), "Store released once");
-        *state = State::Queued(Box::new(native));
+        *state = State::Queued(Box::new(resources));
         drop(state);
         self.changed.notify_waiters();
     }
@@ -115,7 +116,7 @@ impl RetirementWork {
                 Err(error) => io_errors.push(error.to_string()),
             }
         }
-        let native = {
+        let resources = {
             let mut state = self
                 .state
                 .lock()
@@ -123,10 +124,10 @@ impl RetirementWork {
             if !matches!(*state, State::Queued(_)) {
                 return;
             }
-            let State::Queued(native) = std::mem::replace(&mut *state, State::Starting) else {
+            let State::Queued(resources) = std::mem::replace(&mut *state, State::Starting) else {
                 unreachable!()
             };
-            native
+            resources
         };
         // With no Session references, no new lane can appear. All actual I/O
         // tasks have joined above. Their unread outcomes can themselves own
@@ -138,7 +139,7 @@ impl RetirementWork {
             .owner
             .start_blocking(CancellationToken::new(), move || {
                 drop(retained);
-                drop(native);
+                drop(resources);
                 Ok::<_, SessionError>(())
             });
         let fence = operation.fence();

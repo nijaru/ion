@@ -3,12 +3,11 @@
 use std::{
     borrow::Borrow,
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
-    time::Duration,
 };
+#[cfg(test)]
+use std::{fs, time::Duration};
 
 use crate::operation::{
     Executor, IdleSession, Operation, OperationError, OperationFailure, OperationOwner,
@@ -65,6 +64,7 @@ pub use retirement::SessionRetirement;
 pub use retirements::SessionRetirements;
 pub use storage::{SessionIo, SessionReader};
 mod journal;
+mod native;
 mod store;
 mod submission;
 #[cfg(test)]
@@ -75,6 +75,7 @@ use context::{ProjectedMessage, context_projection};
 pub(crate) use journal::MAX_ENTRY_BYTES;
 #[cfg(test)]
 use journal::encode_entry;
+use native::{NativeStore, OpenedStore, database_path};
 use projection::{
     MessageAudience, ProjectionMode, model_context_state, project, selected_messages,
     shell_message, shell_outcome_at, valid_model_context,
@@ -87,10 +88,9 @@ pub use records::{
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 #[cfg(test)]
-use store::{FORMAT_VERSION, initialize_new};
+use store::FORMAT_VERSION;
 use store::{
-    Header, NativeStore, OpenedStore, ReadCheckpoint, Store, configure_connection, database_path,
-    read_entries, read_entry, read_header,
+    Header, ReadCheckpoint, Store, configure_connection, read_entries, read_entry, read_header,
 };
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SessionHistory, SubmissionRequest};
@@ -698,7 +698,7 @@ impl Session {
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let opened = OpenedStore::open(path)?;
+        let opened = OpenedStore::open(path.as_ref())?;
         Ok(Self::from_native(opened, Executor::default()))
     }
 

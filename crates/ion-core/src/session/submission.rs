@@ -91,7 +91,7 @@ impl SessionHistory {
         // Abandoning this wait can leave a short read running, but no write or
         // application work is retained and no writer lease is held.
         tokio::task::spawn_blocking(move || {
-            let path = super::store::database_path(&history.path)?;
+            let path = super::database_path(&history.path)?;
             let connection =
                 Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             super::store::configure_connection(&connection)?;

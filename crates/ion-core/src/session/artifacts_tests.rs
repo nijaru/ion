@@ -3,6 +3,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::io::Write;
+use std::os::unix::fs::MetadataExt;
 
 fn fixture() -> (PathBuf, PathBuf, Arc<Session>) {
     let root = std::env::temp_dir().join(format!("ion-artifacts-{}", uuid::Uuid::new_v4()));

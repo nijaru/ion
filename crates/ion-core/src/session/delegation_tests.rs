@@ -226,7 +226,7 @@ fn materialization_uses_only_the_committed_identity_and_binding() {
     assert_eq!(Session::inspect_id(&record.path).unwrap(), unrelated_id);
     fs::remove_file(&record.path).unwrap();
     let partial = Connection::open(&record.path).unwrap();
-    initialize_new(&partial).unwrap();
+    store::initialize_schema(&partial).unwrap();
     drop(partial);
     assert!(materialize(&record).is_err());
     let partial = Connection::open(&record.path).unwrap();

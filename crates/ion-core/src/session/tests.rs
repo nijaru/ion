@@ -1243,7 +1243,7 @@ fn failed_copy_retains_lock_identity_for_waiting_writers() {
     let source = Session::create(&path, Some(&root)).unwrap();
     let destination = root.join("copy.sqlite");
     // A contender can open the lock inode before actually requesting its lease.
-    let waiting = OpenOptions::new()
+    let waiting = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(root.join("copy.sqlite.lock"))
