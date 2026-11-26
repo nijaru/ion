@@ -534,16 +534,19 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         activity::combine_error(&mut outcome, error.into());
     }
     if outcome.is_ok() {
-        match session_io::final_history(
-            runtime.session(),
-            ui.conversation.checkpoint(runtime.session()),
-        )
-        .await
-        {
-            Ok(history) => ui.apply_history(runtime.session().path(), history),
-            Err(error) => {
-                activity::combine_error(&mut outcome, error.context("final Session refresh failed"))
-            }
+        let refreshed: Result<()> = async {
+            let path = runtime.session().file_path()?;
+            let history = session_io::final_history(
+                runtime.session(),
+                ui.conversation.checkpoint(runtime.session()),
+            )
+            .await?;
+            ui.apply_history(path, history);
+            Ok(())
+        }
+        .await;
+        if let Err(error) = refreshed {
+            activity::combine_error(&mut outcome, error.context("final Session refresh failed"));
         }
     }
     for cleanup in [
@@ -589,11 +592,12 @@ fn resume_command(
     catalog: &ion_app::SessionCatalog,
     session: &ion_core::Session,
 ) -> Option<String> {
-    if catalog.is_managed_path(session.path()) {
+    let path = session.file_path().ok()?;
+    if catalog.is_managed_path(path) {
         return Some(format!("ion --session {} chat", session.id()));
     }
     // Custom saves outside the catalog still need the explicit database path.
-    let path = session.path().to_str()?;
+    let path = path.to_str()?;
     if path.chars().any(char::is_control) {
         return None;
     }

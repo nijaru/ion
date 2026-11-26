@@ -93,7 +93,7 @@ async fn released_writer_close_is_awaited_before_reopen_without_blocking_native_
     let mut fixture = Fixture::new();
     let mut control = fixture.setup().into_control::<Cell<u8>>();
     let old_id = fixture.session.id();
-    let old_path = fixture.session.path().to_owned();
+    let old_path = fixture.session.file_path().unwrap().to_owned();
     let close = Release(Gate::new());
     let hold = Hold(close.0.clone());
     let reader = fixture.session.reader().unwrap();
@@ -151,7 +151,7 @@ async fn historical_read_failure_is_retained_without_poisoning_unrelated_switche
     let mut fixture = Fixture::new();
     let target = Session::create(fixture.catalog.new_path().unwrap(), None).unwrap();
     let target_id = target.id();
-    let target_path = target.path().to_owned();
+    let target_path = target.file_path().unwrap().to_owned();
     drop(target);
     let reader = fixture.session.reader().unwrap();
     let error = reader
@@ -326,7 +326,7 @@ async fn abandoned_selection_wait_adopts_native_commit_even_after_shutdown() {
     let fixture = Fixture::new();
     // Cell is Send, not Sync. No immutable Controller borrow may cross await.
     let mut control = fixture.setup().into_control::<Cell<u8>>();
-    let blocker = rusqlite::Connection::open(fixture.session.path()).unwrap();
+    let blocker = rusqlite::Connection::open(fixture.session.file_path().unwrap()).unwrap();
     blocker.execute_batch("BEGIN IMMEDIATE").unwrap();
     let operation = control
         .start_binding(BindingChange::SelectModel(model("second")))
@@ -588,7 +588,7 @@ async fn owned_setup_retains_actual_worker_and_writer_lease_across_abandoned_wai
             .is_err()
     );
     assert!(matches!(
-        Session::open(fixture.session.path()),
+        Session::open(fixture.session.file_path().unwrap()),
         Err(ion_core::SessionError::AlreadyOpen)
     ));
     release.0.release();
@@ -608,7 +608,7 @@ async fn dropped_setup_releases_writer_after_actual_leaf_without_registry_cycle(
         session,
         application,
     } = Fixture::new();
-    let path = session.path().to_path_buf();
+    let path = session.file_path().unwrap().to_path_buf();
     let release = application.gate_resources();
     let preparation = prepare_setup(session.clone(), catalog, application);
     tokio::time::timeout(DEADLINE, release.0.entered.notified())

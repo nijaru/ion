@@ -178,7 +178,7 @@ impl Fixture {
     }
 
     fn writer(&self) -> rusqlite::Connection {
-        let connection = rusqlite::Connection::open(self.session.path()).unwrap();
+        let connection = rusqlite::Connection::open(self.session.file_path().unwrap()).unwrap();
         connection.execute_batch("BEGIN IMMEDIATE").unwrap();
         connection
     }

@@ -21,14 +21,14 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Serialize)]
 pub(super) struct Origin {
     pub(super) session: uuid::Uuid,
-    pub(super) path: PathBuf,
+    pub(super) path: Option<PathBuf>,
 }
 
 impl Origin {
     pub(super) fn capture(session: &ion_core::Session) -> Self {
         Self {
             session: session.id(),
-            path: session.path().to_owned(),
+            path: session.file_path().ok().map(std::path::Path::to_path_buf),
         }
     }
 }
@@ -195,7 +195,11 @@ impl Recovery {
             "Recovery {}\nSession: {}\nPath: {}\nStatus: {}\nCause: {}\n",
             id,
             record.origin.session,
-            record.origin.path.display(),
+            record
+                .origin
+                .path
+                .as_deref()
+                .map_or_else(|| "(no file)".into(), |path| path.to_string_lossy()),
             disposition_label(record.disposition()),
             record.cause
         );

@@ -161,8 +161,7 @@ impl Session {
         &self,
         before: Option<TranscriptCursor>,
     ) -> Result<Option<TranscriptPage>, SessionError> {
-        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        configure_connection(&connection)?;
+        let connection = self.open_file_reader()?;
         let (snapshot, cursor, bundles) = {
             let store = self.lock_store()?;
             let index = &store.context_index;
@@ -265,8 +264,7 @@ impl Session {
         page: TranscriptCursor,
         source: TranscriptSource,
     ) -> Result<Option<TranscriptProjection>, SessionError> {
-        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        configure_connection(&connection)?;
+        let connection = self.open_file_reader()?;
         let (snapshot, records) = {
             let store = self.lock_store()?;
             let index = &store.context_index;
@@ -312,8 +310,7 @@ impl Session {
         cursor: Option<ToolEvidenceCursor>,
         target: ToolEvidenceTarget,
     ) -> Result<Option<ToolEvidence>, SessionError> {
-        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        configure_connection(&connection)?;
+        let connection = self.open_file_reader()?;
         let (snapshot, cursor, number, total, occurrence, records) = {
             let store = self.lock_store()?;
             let index = &store.context_index;
@@ -383,8 +380,7 @@ impl Session {
         &self,
         mut visit: impl FnMut(NonZeroUsize, &TranscriptActivity),
     ) -> Result<(), SessionError> {
-        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        configure_connection(&connection)?;
+        let connection = self.open_file_reader()?;
         let (snapshot, cut, mut head) = {
             let store = self.lock_store()?;
             let cut = store.state.sequence;
@@ -500,8 +496,7 @@ impl Session {
         &self,
         after: Option<PresentationCursor>,
     ) -> Result<SessionPresentation, SessionError> {
-        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        configure_connection(&connection)?;
+        let connection = self.open_file_reader()?;
         let (
             snapshot,
             header,

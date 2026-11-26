@@ -20,7 +20,7 @@ async fn committed_receipt_handle_outlives_the_writer_but_not_its_identity() {
     let path = root.join("session.db");
     let session = Session::create(&path, None).unwrap();
     let key = RequestKey::new("history".into(), "persisted".into()).unwrap();
-    let history = session.history();
+    let history = session.history().unwrap();
     assert!(history.request_receipt(&key).await.unwrap().is_none());
     session
         .admit_turn(input("accepted"), model(), Some(key.clone()), None)

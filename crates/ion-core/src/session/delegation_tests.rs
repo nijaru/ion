@@ -361,7 +361,10 @@ fn partial_reports_require_failed_bounded_observations_and_survive_inspection() 
         if valid {
             result.unwrap();
             assert_eq!(
-                Session::inspect(session.path()).unwrap().delegations()[0].outcome,
+                Session::inspect(session.file_path().unwrap())
+                    .unwrap()
+                    .delegations()[0]
+                    .outcome,
                 Some(outcome)
             );
         } else {

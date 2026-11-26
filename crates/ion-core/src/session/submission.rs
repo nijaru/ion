@@ -112,12 +112,13 @@ impl SessionHistory {
 }
 
 impl Session {
-    pub fn history(&self) -> SessionHistory {
-        SessionHistory {
-            path: self.path().to_owned(),
+    /// Detached read access to a file journal. This does not take its lease.
+    pub fn history(&self) -> Result<SessionHistory, SessionError> {
+        Ok(SessionHistory {
+            path: self.file_path()?.to_owned(),
             session: self.id(),
             provider_session: self.provider_session_id(),
-        }
+        })
     }
 
     /// Inspect acceptance without repairing history, requiring an idle Session,

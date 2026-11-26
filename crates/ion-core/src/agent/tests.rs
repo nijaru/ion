@@ -5512,7 +5512,7 @@ async fn compaction_projects_images_and_excludes_opaque_replay_from_its_budget()
         assert_eq!(&after.entries[..before.len()], before.as_slice());
         assert!(after.compacted_through.is_some());
         let context_before_reopen = session.context_messages().unwrap();
-        let path = session.path().to_path_buf();
+        let path = session.file_path().unwrap().to_path_buf();
         drop(session);
         let reopened = Arc::new(Session::open(&path).unwrap());
         assert_eq!(reopened.context_messages().unwrap(), context_before_reopen);

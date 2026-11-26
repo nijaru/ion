@@ -112,7 +112,7 @@ async fn keyed_admission_waits_for_sqlite_off_executor_and_reconciles_busy_and_c
         },
     );
     let (root, session, agent) = fixture(service.clone());
-    let connection = rusqlite::Connection::open(session.path()).unwrap();
+    let connection = rusqlite::Connection::open(session.file_path().unwrap()).unwrap();
     connection.execute_batch("BEGIN IMMEDIATE").unwrap();
     let released = Arc::new(AtomicBool::new(false));
     let release_flag = released.clone();
@@ -344,7 +344,7 @@ async fn automated_admission_classifies_owned_claims_and_preserves_first_withdra
             service: service.clone(),
             ..agent
         };
-        let connection = rusqlite::Connection::open(session.path()).unwrap();
+        let connection = rusqlite::Connection::open(session.file_path().unwrap()).unwrap();
         match failure {
             Failure::None => {},
             Failure::Known => connection.execute_batch("CREATE TRIGGER refuse BEFORE INSERT ON entries BEGIN SELECT RAISE(FAIL, 'known rejection'); END;").unwrap(),
@@ -475,7 +475,7 @@ async fn abandoned_keyed_admission_still_commits_and_retry_does_not_restart_it()
     let (lock, changed) = &*gate;
     *lock.lock().unwrap() = true;
     changed.notify_one();
-    let history = session.history();
+    let history = session.history().unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if history
@@ -520,7 +520,7 @@ async fn abandoned_keyed_admission_still_commits_and_retry_does_not_restart_it()
 #[tokio::test]
 async fn keyed_uncertain_commit_is_not_replaced_by_faulted_reconciliation() {
     let (root, session, agent) = fixture(PreflightService::new(|| false, || {}));
-    let connection = rusqlite::Connection::open(session.path()).unwrap();
+    let connection = rusqlite::Connection::open(session.file_path().unwrap()).unwrap();
     connection.execute_batch("CREATE TRIGGER refuse BEFORE INSERT ON entries BEGIN SELECT RAISE(ROLLBACK, 'uncertain rollback'); END;").unwrap();
     let result = agent
         .submit_request::<_, ()>(

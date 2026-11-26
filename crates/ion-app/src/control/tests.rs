@@ -282,7 +282,7 @@ impl<M: Serialize + Send + 'static> Fixture<M> {
         }
     }
     fn fault(&self, predicate: &str) {
-        rusqlite::Connection::open(self.control.session().path()).unwrap().execute_batch(&format!(
+        rusqlite::Connection::open(self.control.session().file_path().unwrap()).unwrap().execute_batch(&format!(
             "CREATE TRIGGER injected_fault BEFORE INSERT ON entries WHEN {predicate} BEGIN SELECT RAISE(ABORT, 'injected storage fault'); END;"
         )).unwrap();
     }

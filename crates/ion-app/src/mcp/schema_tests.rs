@@ -35,7 +35,7 @@ fn conformance_and_raw_observation_survive_inline_truncation() {
     assert_eq!(saved_full["output_schema_validation"]["status"], "invalid");
     assert_eq!(saved_full["is_error"], false);
     assert_eq!(
-        fs::metadata(owner.session.path())
+        fs::metadata(owner.session.file_path().unwrap())
             .unwrap()
             .permissions()
             .mode()
@@ -193,7 +193,7 @@ for line in sys.stdin:
         let raw = owner.json(output, "raw_result_artifact");
         assert!(output.value["raw_result_error"].is_null());
         assert_eq!(
-            fs::metadata(owner.session.path())
+            fs::metadata(owner.session.file_path().unwrap())
                 .unwrap()
                 .permissions()
                 .mode()

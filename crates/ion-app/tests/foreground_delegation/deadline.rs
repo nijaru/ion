@@ -131,7 +131,10 @@ async fn deadline_stops_but_joins_and_retains_provenance_after_infrastructure_fa
             );
         }
         assert_eq!(
-            Session::inspect(f.session.path()).unwrap().delegations()[0].outcome,
+            Session::inspect(f.session.file_path().unwrap())
+                .unwrap()
+                .delegations()[0]
+                .outcome,
             outcome,
         );
         assert_eq!(f.effect.calls.load(Ordering::SeqCst), 1);

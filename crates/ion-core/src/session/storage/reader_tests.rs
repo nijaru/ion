@@ -141,7 +141,7 @@ async fn completed_shutdown_allows_typed_reads_but_never_reopens_write_lanes() {
     let status = reader.status().await.unwrap();
     assert_eq!(status.name.as_deref(), Some("final snapshot"));
     assert_eq!(status.entries, 1);
-    let history = session.history();
+    let history = session.history().unwrap();
     let receipt = history.request_receipt(&key).await.unwrap().unwrap();
     assert_eq!(receipt.session, session.id());
     assert_eq!(receipt.turn, 1);
@@ -212,7 +212,7 @@ async fn abandoned_post_shutdown_read_retains_lease_and_is_joined_before_reopeni
         Err(SessionError::Operation(OperationError::Closed))
     ));
     assert!(matches!(
-        Session::open(session.path()),
+        Session::open(session.file_path().unwrap()),
         Err(SessionError::AlreadyOpen)
     ));
 
@@ -225,7 +225,7 @@ async fn abandoned_post_shutdown_read_retains_lease_and_is_joined_before_reopeni
     drop(hold);
     session.shutdown().await.unwrap();
     assert!(reader.view().await.unwrap().entries.is_empty());
-    let path = session.path().to_owned();
+    let path = session.file_path().unwrap().to_owned();
     drop(session);
     assert!(matches!(
         Session::open(&path),
@@ -318,7 +318,7 @@ async fn abandoned_read_failure_survives_join_and_diagnostics_remain_available()
 #[tokio::test(flavor = "current_thread")]
 async fn actual_read_retains_writer_lease_after_all_public_handles_are_dropped() {
     let (root, session) = fixture();
-    let path = session.path().to_owned();
+    let path = session.file_path().unwrap().to_owned();
     session.shutdown().await.unwrap();
     let reader = session.reader().unwrap();
     let (entered, ready) = oneshot::channel();

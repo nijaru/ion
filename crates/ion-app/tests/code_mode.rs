@@ -956,7 +956,7 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
  {
     let root = Workspace::new();
     let session = root.session();
-    let connection = rusqlite::Connection::open(session.path()).unwrap();
+    let connection = rusqlite::Connection::open(session.file_path().unwrap()).unwrap();
     connection.execute_batch("CREATE TRIGGER reject_child BEFORE INSERT ON entries
         WHEN json_extract(NEW.body,'$.kind')='child_tool_result' AND json_extract(NEW.body,'$.data.child')=0 AND json_extract(NEW.body,'$.data.outcome.state')='observed'
         BEGIN SELECT RAISE(ABORT,'child observation fault'); END;").unwrap();
@@ -1028,7 +1028,7 @@ async fn child_commit_failure_blocks_consumption_drains_started_work_and_reopens
 async fn child_intent_fault_prevents_native_dispatch() {
     let root = Workspace::new();
     let session = root.session();
-    let connection = rusqlite::Connection::open(session.path()).unwrap();
+    let connection = rusqlite::Connection::open(session.file_path().unwrap()).unwrap();
     connection
         .execute_batch(
             "CREATE TRIGGER reject_intent BEFORE INSERT ON entries

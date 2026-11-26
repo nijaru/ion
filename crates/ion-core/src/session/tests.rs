@@ -15,32 +15,100 @@ fn test_execution() -> ModelExecution {
 }
 
 #[test]
-fn keyed_turn_and_storage_lanes_run_without_a_tokio_runtime() {
-    use crate::operation::executor_tests::ManualExecutor;
-    use ion_ai::{
-        ModelResponse, ModelStreamEvent, ResponseTermination, Script, ScriptedModelService,
+fn keyed_turn_and_storage_lanes_run_without_a_file_or_tokio_runtime() {
+    use crate::{
+        ToolDefinition, ToolExecutor, ToolInvocation, ToolOutput, ToolRegistration, ToolSource,
+        operation::executor_tests::ManualExecutor,
     };
+    use ion_ai::{
+        BoxFuture, ModelResponse, ModelStreamEvent, ResponseTermination, Script,
+        ScriptedModelService,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let (root, path) = fixture();
+    #[derive(Default)]
+    struct CountEffect(AtomicUsize);
+
+    impl ToolSource for CountEffect {
+        fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+            vec![ToolRegistration::new(
+                ToolDefinition::external(ToolSpec {
+                    name: "count_effect".into(),
+                    description: "Record one effect".into(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                }),
+                self,
+            )]
+        }
+    }
+
+    impl ToolExecutor for CountEffect {
+        fn execute<'a>(&'a self, _: ToolInvocation<'a>) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async move {
+                let calls = self.0.fetch_add(1, Ordering::SeqCst) + 1;
+                ToolOutput::success(serde_json::json!({"calls": calls}))
+            })
+        }
+    }
+
     let executor = Arc::new(ManualExecutor::default());
-    let opened = OpenedStore::create(&path, Some(&root), uuid::Uuid::new_v4(), &[], None).unwrap();
-    let session = Arc::new(Session::from_native(opened, executor.executor()));
+    let header = Header {
+        version: FORMAT_VERSION,
+        id: uuid::Uuid::new_v4(),
+        provider_session_id: uuid::Uuid::now_v7(),
+        cwd: None,
+        name: None,
+    };
+    let connection = Connection::open_in_memory().unwrap();
+    configure_connection(&connection).unwrap();
+    let journal = store::StoreSeed::prepare(&[])
+        .unwrap()
+        .initialize(connection, &header, |_| Ok(()))
+        .unwrap();
+    let session = Arc::new(Session::from_store(
+        journal,
+        header,
+        None,
+        executor.executor(),
+    ));
+    assert!(matches!(
+        session.file_path(),
+        Err(SessionError::FileLocationRequired)
+    ));
+    assert!(matches!(
+        session.history(),
+        Err(SessionError::FileLocationRequired)
+    ));
     let message = |role, text: &str| Message {
         role,
         content: vec![Content::Text(text.into())],
         provider_replay: None,
     };
-    let provider = Arc::new(ScriptedModelService::new([Script::Stream(vec![
-        ModelStreamEvent::Completed(ModelResponse {
-            message: message(Role::Assistant, "done"),
+    let response = |content| {
+        Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content,
+                provider_replay: None,
+            },
             usage: Usage::unknown(),
             termination: ResponseTermination::Completed,
             returned_model: None,
-        }),
-    ])]));
-    let agent = crate::Agent::with_tool_set(
+        })])
+    };
+    let provider = Arc::new(ScriptedModelService::new([
+        response(vec![Content::ToolCall(ToolCall {
+            id: "once".into(),
+            name: "count_effect".into(),
+            arguments: serde_json::json!({}),
+            raw_arguments: None,
+        })]),
+        response(vec![Content::Text("done".into())]),
+    ]));
+    let effect = Arc::new(CountEffect::default());
+    let agent = crate::Agent::new(
         provider.clone(),
-        Arc::new(crate::ToolSet::new([])),
+        effect.clone(),
         test_execution().route.logical,
     );
     let request = SubmissionRequest {
@@ -64,7 +132,11 @@ fn keyed_turn_and_storage_lanes_run_without_a_tokio_runtime() {
         "dispatch was not driven yet"
     );
     assert!(!operation.fence().is_finished());
-    let committed = Session::inspect(&path).unwrap();
+    let committed = session.view().unwrap();
+    assert_eq!(
+        session.request_receipt(&request.key).unwrap(),
+        Some(submitted.receipt.clone())
+    );
     assert!(committed.entries.iter().any(|entry| matches!(entry,
         SessionEntry::TurnStarted { turn, request: Some(key), .. }
             if *turn == submitted.receipt.turn && *key == request.key
@@ -79,11 +151,18 @@ fn keyed_turn_and_storage_lanes_run_without_a_tokio_runtime() {
     assert!(duplicate.operation.is_none());
     assert_eq!(duplicate.receipt.turn, submitted.receipt.turn);
     assert_eq!(duplicate.receipt.end, Some(TurnEndReason::Completed));
-    assert_eq!(provider.requests().len(), 1);
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].messages.iter().flat_map(|m| &m.content).any(|part|
+        matches!(part, Content::ToolResult(result) if !result.is_error && result.result == serde_json::json!({"calls": 1}))
+    ));
+    assert_eq!(effect.0.load(Ordering::SeqCst), 1);
     executor.complete(session.shutdown()).unwrap();
-    drop(session);
-    assert!(Session::open(&path).is_ok());
-    fs::remove_dir_all(root).unwrap();
+    let settled = executor.complete(session.reader().unwrap().view()).unwrap();
+    assert_eq!(
+        settled.last_end,
+        Some((duplicate.receipt.turn, TurnEndReason::Completed))
+    );
 }
 
 #[tokio::test]
@@ -1183,7 +1262,7 @@ fn session_aliases_share_writer_identity_and_copies_normalize_paths() {
     }
     drop(session);
     let session = Session::open(&file_alias).unwrap();
-    assert_eq!(session.path(), path.canonicalize().unwrap());
+    assert_eq!(session.file_path().unwrap(), path.canonicalize().unwrap());
     assert!(matches!(
         Session::open(&path),
         Err(SessionError::AlreadyOpen)
@@ -1192,7 +1271,7 @@ fn session_aliases_share_writer_identity_and_copies_normalize_paths() {
         .clone_to(directory_alias.join("copy.sqlite"))
         .unwrap();
     assert_eq!(
-        copied.path(),
+        copied.file_path().unwrap(),
         root.join("copy.sqlite").canonicalize().unwrap()
     );
     assert!(matches!(
@@ -1282,7 +1361,8 @@ fn releasing_a_session_unlocks_an_inherited_file_description() {
         Err(SessionError::AlreadyOpen)
     ));
     let inherited = session
-        .native
+        .journal()
+        .file
         .as_ref()
         .unwrap()
         .duplicate_lease_descriptor()

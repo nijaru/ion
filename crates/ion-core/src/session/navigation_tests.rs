@@ -1139,7 +1139,7 @@ fn late_background_results_keep_the_initiating_path_and_live_ownership() {
     );
     select(&session, source_head);
     assert_eq!(session.view().unwrap().messages.len(), 3);
-    let path = session.path().to_path_buf();
+    let path = session.file_path().unwrap().to_path_buf();
     drop(session);
     let reopened = Session::open(path).unwrap();
     assert_eq!(reopened.view().unwrap().messages.len(), 3);

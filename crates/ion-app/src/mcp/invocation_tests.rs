@@ -792,7 +792,7 @@ fn embedded_resources_deliver_supplied_data_without_reading_uris() {
         .expect("binary resource artifact index");
     assert_eq!(owner.bytes(&output.artifacts[index as usize]), binary);
     assert_eq!(
-        fs::metadata(owner.session.path())
+        fs::metadata(owner.session.file_path().unwrap())
             .unwrap()
             .permissions()
             .mode()

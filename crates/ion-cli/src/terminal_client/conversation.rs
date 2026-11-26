@@ -247,7 +247,8 @@ impl Conversation {
 
     pub(super) fn checkpoint(&self, session: &Session) -> Option<PresentationCursor> {
         let scope = self.scope.as_ref()?;
-        if scope.path == session.path() && scope.session == session.id() {
+        if scope.session == session.id() && session.file_path().is_ok_and(|path| scope.path == path)
+        {
             self.checkpoint.map(|(cursor, _)| cursor)
         } else {
             None
@@ -402,7 +403,7 @@ impl Conversation {
 
     #[cfg(test)]
     pub(super) fn reconcile(&mut self, session: &Session, view: &SessionView) -> Change {
-        self.reconcile_prepared(session.path(), Prepared::new(view))
+        self.reconcile_prepared(session.file_path().unwrap(), Prepared::new(view))
     }
 
     pub(super) fn reconcile_prepared(

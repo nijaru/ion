@@ -106,7 +106,7 @@ fn transferred_children_reconcile_without_a_live_turn_and_copies_never_acquire_t
             !root.join("children").exists(),
             "recovery never materializes or replays the old child"
         );
-        let path = session.path().to_path_buf();
+        let path = session.file_path().unwrap().to_path_buf();
         drop(session);
         let reopened = Session::open(path).unwrap();
         assert_eq!(

@@ -446,7 +446,7 @@ for line in sys.stdin:
         let saved = owner.json(&output, "full_output_artifact");
         assert_eq!(saved["content"], full_text);
         assert_eq!(
-            fs::metadata(owner.session.path())
+            fs::metadata(owner.session.file_path().unwrap())
                 .unwrap()
                 .permissions()
                 .mode()

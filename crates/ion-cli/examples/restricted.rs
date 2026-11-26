@@ -178,7 +178,7 @@ async fn main() -> Result<()> {
     .join()
     .await?
     .into_control::<()>();
-    let path = control.session().path().to_owned();
+    let path = control.session().file_path()?.to_owned();
     let session_id = control.session().id();
     let result: Result<()> = async {
         if resume {

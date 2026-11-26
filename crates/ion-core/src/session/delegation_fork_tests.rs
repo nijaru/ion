@@ -248,7 +248,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
             },
         )
         .unwrap();
-        let child_path = child.path().to_path_buf();
+        let child_path = child.file_path().unwrap().to_path_buf();
         assert_eq!(
             child.read_artifact(&retained, 0, 16384).unwrap().bytes,
             b"original delegated bytes\0\xff"
@@ -328,7 +328,7 @@ fn fork_copies_literal_prefix_and_coordinates_but_not_parent_ownership_or_config
             ),
             Err(SessionError::InvalidHistory)
         ));
-        let parent_path = parent.path().to_path_buf();
+        let parent_path = parent.file_path().unwrap().to_path_buf();
         drop((parent, ancestor));
         fs::remove_file(parent_path).unwrap();
         let independent = Session::open(child_path).unwrap();

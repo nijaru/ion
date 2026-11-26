@@ -266,7 +266,7 @@ async fn inline_utf8_prefix_links_to_complete_private_snapshot_not_a_live_refetc
     assert_eq!(owner.bytes(reference), text.as_bytes());
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(
-        std::fs::metadata(owner.session.path())
+        std::fs::metadata(owner.session.file_path().unwrap())
             .unwrap()
             .permissions()
             .mode()

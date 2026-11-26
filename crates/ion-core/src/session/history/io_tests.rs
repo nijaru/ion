@@ -252,7 +252,7 @@ fn history_has_independent_read_capacity_with_one_occupied_blocking_thread() {
 async fn abandoned_actual_history_read_retains_writer_lease_and_shutdown_joins_it() {
     for abandon_session in [false, true] {
         let fixture = Fixture::new();
-        let path = fixture.session.path().to_owned();
+        let path = fixture.session.file_path().unwrap().to_owned();
         // Rollback-journal mode gives a real independent SQLite reader a lock
         // wait, without holding the Session Store or adding a reader test hook.
         fixture

@@ -470,7 +470,7 @@ pub(super) fn handle_builtin(
         }
         Builtin::Session => {
             let io = runtime.session().io()?;
-            let path = runtime.session().path().to_owned();
+            let path = runtime.session().file_path()?.to_owned();
             let agent = runtime.agent().clone();
             let instructions = runtime.instructions().to_owned();
             ui.session_io.start(runtime.session(), async move {

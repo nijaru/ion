@@ -138,7 +138,7 @@ fn history_can_retrieve_a_completed_background_result_after_reopen() {
         )
         .unwrap();
     let before = session.view().unwrap().entries;
-    let path = session.path().to_path_buf();
+    let path = session.file_path().unwrap().to_path_buf();
     drop(lease);
     drop(session);
     let reopened = Session::open(&path).unwrap();

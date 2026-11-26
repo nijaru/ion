@@ -90,7 +90,7 @@ async fn sql(session: &Arc<Session>, statement: &'static str) {
         .unwrap()
         .run(move |session| {
             Ok((|| -> Result<()> {
-                rusqlite::Connection::open(session.path())?.execute_batch(statement)?;
+                rusqlite::Connection::open(session.file_path()?)?.execute_batch(statement)?;
                 Ok(())
             })())
         })
@@ -337,7 +337,7 @@ async fn stale_read_cannot_retarget_a_replaced_session() {
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
     let old = fixture.control.session().id();
-    let old_path = fixture.control.session().path().to_owned();
+    let old_path = fixture.control.session().file_path().unwrap().to_owned();
     let switch_path = old_path.clone();
     let release = hold_read(&fixture.control, &mut ui, move |_| {
         ReadOutput::Switch(switch_path)
@@ -391,7 +391,7 @@ async fn stale_file_failure_and_late_binding_error_keep_original_scope_and_cause
     let mut fixture = Fixture::new();
     let mut ui = Frontend::default();
     let old = fixture.control.session().id();
-    let old_path = fixture.control.session().path().to_owned();
+    let old_path = fixture.control.session().file_path().unwrap().to_owned();
     ui.session_io
         .start_file_write(fixture.control.session(), async {
             anyhow::bail!("original disk failure")
@@ -543,7 +543,7 @@ async fn binding_changes_filesystem_scope_before_history_even_when_refresh_fails
     let mut ui = Frontend::default();
     ui.refresh_session(fixture.control.session()).unwrap();
     let old = fixture.control.session().id();
-    let old_path = fixture.control.session().path().to_owned();
+    let old_path = fixture.control.session().file_path().unwrap().to_owned();
     let retained = ui.recovery.command(
         EditorDraft::at_end("/export from-A.html".into()),
         super::super::recovery::Origin::capture(fixture.control.session()),

@@ -550,7 +550,11 @@ impl BindingSource {
             BindingChange::SwitchSession(path) => {
                 let _idle = self.session.reserve_idle()?;
                 let path = fs::canonicalize(self.catalog.resolve_explicit(path)?)?;
-                if self.session.path() == path {
+                if self
+                    .session
+                    .file_path()
+                    .is_ok_and(|current| current == path)
+                {
                     return self.reload(&stop, BindingResult::SessionSwitched);
                 }
                 let session = match self

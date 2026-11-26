@@ -579,7 +579,7 @@ mod tests {
                     .unwrap();
             } else {
                 // Reject before dispatch; this invariant test performs no network I/O.
-                rusqlite::Connection::open(fixture.control.session().path()).unwrap()
+                rusqlite::Connection::open(fixture.control.session().file_path().unwrap()).unwrap()
                     .execute_batch("CREATE TRIGGER no_request BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'fixture rejection'); END;").unwrap();
                 let plan = fixture
                     .control
@@ -680,7 +680,7 @@ mod tests {
     #[tokio::test]
     async fn uncertain_input_is_retained_separately_and_never_restored_or_resent() {
         let mut fixture = super::super::tests::Fixture::new();
-        rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
+        rusqlite::Connection::open(fixture.control.session().file_path().unwrap()).unwrap().execute_batch(
             "CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
              CREATE TABLE commit_child (parent INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
              CREATE TRIGGER uncertain_commit AFTER INSERT ON entries

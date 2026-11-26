@@ -24,7 +24,7 @@ pub(super) fn start(ui: &mut Frontend, session: &Arc<Session>) -> Result<()> {
     let cwd = ui.cwd.clone();
     let io = session.io()?;
     ui.session_io.start_file_write(session, async move {
-        io.run(move |session| Ok(save(session.path(), &cwd, &captures)))
+        io.run(move |session| Ok(save(session.file_path()?, &cwd, &captures)))
             .await?
     })
 }

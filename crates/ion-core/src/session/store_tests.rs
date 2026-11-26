@@ -99,8 +99,11 @@ async fn pinned_view_does_not_block_commits_or_mix_journal_versions() {
         .await
         .unwrap();
 
-    let connection =
-        Connection::open_with_flags(session.path(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let connection = Connection::open_with_flags(
+        session.file_path().unwrap(),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .unwrap();
     let (snapshot, view, sequence) = session.pin_view(&connection).unwrap();
     // Keep the durable snapshot open while independently committing both a
     // header update and an append through the normal writer lane.
@@ -339,9 +342,9 @@ fn assert_fenced(session: &Arc<Session>, reference: &ArtifactRef) {
     assert_faulted(session.set_name(Some("must not write")));
     assert_faulted(session.select_model(model("must not write")));
     assert_faulted(session.begin_turn("must not accept".into(), model("after")));
-    assert_faulted(session.clone_to(session.path().with_file_name("clone.sqlite")));
+    assert_faulted(session.clone_to(session.file_path().unwrap().with_file_name("clone.sqlite")));
     assert_faulted(session.fork_to(
-        session.path().with_file_name("fork.sqlite"),
+        session.file_path().unwrap().with_file_name("fork.sqlite"),
         ForkPoint::BeforeTurn(1),
     ));
     let key = RequestKey::new("fixture".into(), "delivery".into()).unwrap();
@@ -363,8 +366,20 @@ fn assert_fenced(session: &Arc<Session>, reference: &ArtifactRef) {
         .capture("refused", b"no write")
         .unwrap_err();
     assert_faulted::<()>(Err(artifact_error(error)));
-    assert!(!session.path().with_file_name("clone.sqlite").exists());
-    assert!(!session.path().with_file_name("fork.sqlite").exists());
+    assert!(
+        !session
+            .file_path()
+            .unwrap()
+            .with_file_name("clone.sqlite")
+            .exists()
+    );
+    assert!(
+        !session
+            .file_path()
+            .unwrap()
+            .with_file_name("fork.sqlite")
+            .exists()
+    );
 }
 
 // Deferred foreign keys fail at real COMMIT, after every statement succeeded.

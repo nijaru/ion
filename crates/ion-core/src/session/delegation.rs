@@ -177,6 +177,7 @@ impl Session {
         if site.session != self.id() {
             return Err(SessionError::InvalidHistory);
         }
+        let parent_path = self.file_path()?;
         // Acquire a resume writer before intent. Failed locators, live writers,
         // workspace mismatches and unfinished history are ordinary refusal, not
         // corruption of this parent's admission ledger. No target facts change.
@@ -243,7 +244,7 @@ impl Session {
                 Some(child) => ChildMaterialization::Resume(child),
                 None => ChildMaterialization::New {
                     entries: context,
-                    artifact_source: Some((self.path.clone(), self.provider_session_id())),
+                    artifact_source: Some((parent_path.to_owned(), self.provider_session_id())),
                 },
             },
         ))

@@ -283,7 +283,7 @@ async fn resources_list_templates_read_and_capability_gating() {
     assert!(reference.complete);
     assert_eq!(binary_owner.bytes(reference), b"\x00\x01binary");
     assert_eq!(
-        fs::metadata(binary_owner.session.path())
+        fs::metadata(binary_owner.session.file_path().unwrap())
             .unwrap()
             .permissions()
             .mode()

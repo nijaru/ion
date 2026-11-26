@@ -250,7 +250,7 @@ async fn missing_access_refuses_selection_and_returns_cold_compaction_source() {
     );
     assert_eq!(binding.agent().model(), &old);
     assert_eq!(
-        Session::inspect(binding.session().path())
+        Session::inspect(binding.session().file_path().unwrap())
             .unwrap()
             .last_model
             .as_ref(),

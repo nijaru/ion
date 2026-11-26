@@ -25,7 +25,7 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
         let base = session.presentation(None).unwrap();
         let checkpoint = base.checkpoint.expect("empty session is an idle cut");
         conversation.reconcile_prepared(
-            session.path(),
+            session.file_path().unwrap(),
             Prepared::committed(
                 base.transcript,
                 base.id,
@@ -94,7 +94,7 @@ async fn terminated_turn_publishes_once_and_survives_canonical_reconciliation() 
         ];
         view.context_path = vec![1, 2];
         conversation.reconcile_prepared(
-            session.path(),
+            session.file_path().unwrap(),
             Prepared::committed(
                 TranscriptProjection::from_session(&view),
                 base.id,

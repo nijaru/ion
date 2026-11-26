@@ -104,7 +104,7 @@ impl Session {
         reference: &ArtifactRef,
         output: impl Write,
     ) -> Result<(), SessionError> {
-        let connection = open_export_source(self.path())?;
+        let connection = open_export_source(self.file_path()?)?;
         let snapshot = connection.unchecked_transaction()?;
         if super::read_header(&snapshot)?.id != self.id() {
             return Err(SessionError::InvalidDatabase);

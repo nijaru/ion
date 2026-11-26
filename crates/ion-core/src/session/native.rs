@@ -3,7 +3,6 @@ use std::{
     fs::{self, File, OpenOptions},
     os::unix::fs::{MetadataExt, OpenOptionsExt},
     path::{Path, PathBuf},
-    sync::Mutex,
 };
 
 use rusqlite::{Connection, OpenFlags};
@@ -13,23 +12,24 @@ use super::{
     store::{FORMAT_VERSION, Header, Store, StoreSeed, configure_connection, read_header},
 };
 
-/// Field order closes SQLite before releasing the lease, including during retirement.
-pub(super) struct NativeStore {
-    pub store: Mutex<Store>,
+/// Native location and writer lease. Ownership moves with the live journal,
+/// never with a passive read handle.
+pub(super) struct FileBinding {
+    pub path: PathBuf,
     _lock: SessionLock,
 }
 
 #[cfg(test)]
-impl NativeStore {
+impl FileBinding {
     pub fn duplicate_lease_descriptor(&self) -> std::io::Result<File> {
         self._lock.0.try_clone()
     }
 }
 
 pub(super) struct OpenedStore {
-    pub native: NativeStore,
+    pub store: Store,
     pub header: Header,
-    pub path: PathBuf,
+    pub file: FileBinding,
 }
 
 impl OpenedStore {
@@ -102,12 +102,9 @@ impl OpenedStore {
 
     fn owned(path: PathBuf, lock: SessionLock, header: Header, store: Store) -> Self {
         Self {
-            native: NativeStore {
-                store: Mutex::new(store),
-                _lock: lock,
-            },
+            store,
             header,
-            path,
+            file: FileBinding { path, _lock: lock },
         }
     }
 }

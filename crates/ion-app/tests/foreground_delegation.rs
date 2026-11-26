@@ -521,7 +521,7 @@ impl Fixture {
         report
     }
     fn trigger(&self, kind: &str) {
-        rusqlite::Connection::open(self.session.path()).unwrap().execute_batch(&format!(
+        rusqlite::Connection::open(self.session.file_path().unwrap()).unwrap().execute_batch(&format!(
             "CREATE TRIGGER fail_delegation BEFORE INSERT ON entries WHEN json_extract(NEW.body,'$.kind') = '{kind}' BEGIN SELECT RAISE(FAIL, 'injected delegation fault'); END;"
         )).unwrap();
     }
@@ -552,7 +552,10 @@ async fn fresh_foreground_child_reconciles_without_inheriting_parent_configurati
     };
     assert_eq!(answer.as_deref(), Some("two"));
     assert_eq!(
-        Session::inspect(f.session.path()).unwrap().delegations()[0].outcome,
+        Session::inspect(f.session.file_path().unwrap())
+            .unwrap()
+            .delegations()[0]
+            .outcome,
         links[0].outcome
     );
     let child = Session::open(&links[0].record.path).unwrap();

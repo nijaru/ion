@@ -145,7 +145,7 @@ async fn owned_close_releases_writer_without_stopping_a_sibling_or_losing_histor
             _ => {}
         }
     }
-    let history = first.session().history();
+    let history = first.session().history().unwrap();
     let live = first.session().clone();
     let mut close = first.begin_close();
     assert!(
@@ -363,7 +363,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     *application.instructions.write().unwrap() = Some("Reloaded application instructions.".into());
     control.reload_resources().await.unwrap();
     let cloned = control.clone_session().await.unwrap();
-    let clone_path = control.session().path().to_owned();
+    let clone_path = control.session().file_path().unwrap().to_owned();
     assert_eq!(control.session_id(), cloned);
     assert_eq!(control.agent().model(), &model("second"));
     control.new_session().await.unwrap();
@@ -387,7 +387,7 @@ async fn workspace_free_application_keeps_its_authority_across_shared_lifecycle(
     control.select_model(model("second")).await.unwrap();
     let report = control.shutdown().await;
     assert!(report.cleanup_errors.is_empty());
-    let path = control.session().path().to_owned();
+    let path = control.session().file_path().unwrap().to_owned();
     let retirements = control.retirements();
     drop(control);
     retirements.join().await.unwrap();

@@ -370,7 +370,7 @@ impl BackgroundOwner {
         parents
             .into_iter()
             .filter_map(|parent| parent.upgrade())
-            .find(|parent| parent.path() == path)
+            .find(|parent| parent.file_path().is_ok_and(|current| current == path))
     }
     /// Cancellation-safe invalidation, including when every parent is idle.
     /// Results remain in custody; this never acknowledges them. No busy polling

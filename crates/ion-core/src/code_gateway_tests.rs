@@ -319,7 +319,7 @@ async fn namespace_and_replies_share_one_delivery_budget() {
 #[tokio::test(flavor = "current_thread")]
 async fn unawaited_inspection_fault_blocks_parent_success() {
     let (root, session, turn, call) = fixture();
-    rusqlite::Connection::open(session.path())
+    rusqlite::Connection::open(session.file_path().unwrap())
         .unwrap()
         // Syntactically valid JSON passes derived indexes but is not a SessionEntry.
         .execute(

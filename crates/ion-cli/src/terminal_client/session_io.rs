@@ -318,7 +318,7 @@ impl SessionIo {
         self.read = Some(Read {
             session: session.id(),
             generation: self.generation,
-            path: session.path().to_owned(),
+            path: session.file_path()?.to_owned(),
             future: Box::pin(future),
             source: None,
             projection_revision: None,
@@ -533,7 +533,7 @@ pub(super) fn apply(
                 source,
                 super::recovery::Origin {
                     session: read.session,
-                    path: read.path,
+                    path: Some(read.path),
                 },
                 cause,
             );
@@ -664,7 +664,7 @@ pub(super) fn apply(
                         source,
                         super::recovery::Origin {
                             session: read.session,
-                            path: read.path,
+                            path: Some(read.path),
                         },
                         format!("File operation failed: {error:#}"),
                     );
@@ -736,7 +736,7 @@ pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut R
             source,
             super::recovery::Origin {
                 session: read.session,
-                path: read.path,
+                path: Some(read.path),
             },
             cause,
         );
@@ -808,6 +808,6 @@ impl Frontend {
 
     #[cfg(test)]
     pub(super) fn load_history(&mut self, session: &Session, view: &SessionView) {
-        self.apply_history(session.path(), History::prepare(view.clone()));
+        self.apply_history(session.file_path().unwrap(), History::prepare(view.clone()));
     }
 }

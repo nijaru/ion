@@ -290,7 +290,7 @@ fn rejection_and_unbegun_drop_apply_first_withdrawal_or_requeue() {
 fn storage_rejection_can_retry_without_a_false_offer() {
     let root = TestDir::new();
     let session = root.session();
-    let connection = rusqlite::Connection::open(session.path()).unwrap();
+    let connection = rusqlite::Connection::open(session.file_path().unwrap()).unwrap();
     connection.execute_batch(
         "CREATE TRIGGER reject_completion BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END;"
     ).unwrap();
@@ -396,7 +396,7 @@ fn claims_remain_bounded_after_revoke_and_release_capacity_on_resolution() {
 fn batch_does_not_pin_session_writer() {
     let root = TestDir::new();
     let session = root.session();
-    let path = session.path().to_path_buf();
+    let path = session.file_path().unwrap().to_path_buf();
     let inbox = CompletionInbox::new(session.id());
     let permit = queued(&inbox);
     let mut batch = inbox.batch(&session, None, false).unwrap();

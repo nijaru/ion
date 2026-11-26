@@ -75,7 +75,7 @@ use context::{ProjectedMessage, context_projection};
 pub(crate) use journal::MAX_ENTRY_BYTES;
 #[cfg(test)]
 use journal::encode_entry;
-use native::{NativeStore, OpenedStore, database_path};
+use native::{FileBinding, OpenedStore, database_path};
 use projection::{
     MessageAudience, ProjectionMode, model_context_state, project, selected_messages,
     shell_message, shell_outcome_at, valid_model_context,
@@ -652,28 +652,37 @@ struct HistoryProjection {
     context_index: ContextIndex,
 }
 
-/// A writable Session holds a cross-process lock and retains its exclusive
-/// operation through started effects, observed-result commit and task joining.
+/// A live Session retains exclusive execution through effects, journal commit
+/// and actual task joining. A file-backed Session also holds its writer lease.
 pub struct Session {
-    native: Option<NativeStore>,
+    journal: Option<OwnedJournal>,
     header: Header,
-    path: PathBuf,
     pub(crate) operations: Arc<OperationOwner>,
     storage: Arc<storage::StorageWork>,
+}
+
+struct OwnedJournal {
+    // Rust drops fields in order: close SQLite before releasing the file lease.
+    store: Mutex<Store>,
+    file: Option<FileBinding>,
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
         self.storage
             .retirement
-            .release(self.native.take().expect("live Store"));
+            .release(self.journal.take().expect("live journal"));
         self.storage.retirement.start(&self.storage);
     }
 }
 
 impl Session {
+    fn journal(&self) -> &OwnedJournal {
+        self.journal.as_ref().expect("live journal")
+    }
+
     fn store(&self) -> &Mutex<Store> {
-        &self.native.as_ref().expect("live Store").store
+        &self.journal().store
     }
 
     fn lock_store(&self) -> Result<MutexGuard<'_, Store>, SessionError> {
@@ -703,10 +712,21 @@ impl Session {
     }
 
     fn from_native(opened: OpenedStore, executor: Executor) -> Self {
+        Self::from_store(opened.store, opened.header, Some(opened.file), executor)
+    }
+
+    fn from_store(
+        store: Store,
+        header: Header,
+        file: Option<FileBinding>,
+        executor: Executor,
+    ) -> Self {
         Self {
-            native: Some(opened.native),
-            header: opened.header,
-            path: opened.path,
+            journal: Some(OwnedJournal {
+                store: Mutex::new(store),
+                file,
+            }),
+            header,
             operations: Arc::new(OperationOwner::new(executor.clone())),
             storage: Arc::new(storage::StorageWork::new(executor)),
         }
@@ -762,7 +782,7 @@ impl Session {
             self.header.cwd.as_deref(),
             uuid::Uuid::new_v4(),
             &without_delivery_keys(entries),
-            Some((&self.path, self.provider_session_id())),
+            Some((self.file_path()?, self.provider_session_id())),
         )
     }
 
@@ -841,8 +861,13 @@ impl Session {
     pub fn id(&self) -> uuid::Uuid {
         self.header.id
     }
-    pub fn path(&self) -> &Path {
-        &self.path
+    /// Location of the native journal, for operations that require a file.
+    pub fn file_path(&self) -> Result<&Path, SessionError> {
+        self.journal()
+            .file
+            .as_ref()
+            .map(|file| file.path.as_path())
+            .ok_or(SessionError::FileLocationRequired)
     }
     pub fn cwd(&self) -> Option<&Path> {
         self.header.cwd.as_deref()
@@ -1182,15 +1207,30 @@ impl Session {
         })
     }
 
-    pub fn view(&self) -> Result<SessionView, SessionError> {
-        let connection = Connection::open_with_flags(&self.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    fn open_file_reader(&self) -> Result<Connection, SessionError> {
+        let connection =
+            Connection::open_with_flags(self.file_path()?, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
-        let (snapshot, mut view, sequence) = self.pin_view(&connection)?;
-        view.entries = read_entries(&snapshot)?;
+        Ok(connection)
+    }
+
+    pub fn view(&self) -> Result<SessionView, SessionError> {
+        let (mut view, sequence) = if self.journal().file.is_some() {
+            let connection = self.open_file_reader()?;
+            let (snapshot, mut view, sequence) = self.pin_view(&connection)?;
+            view.entries = read_entries(&snapshot)?;
+            (view, sequence)
+        } else {
+            // A pathless journal has no independent WAL reader. Keep the
+            // connection and projection at the same cut under its owner lock.
+            let store = self.lock_store()?;
+            let mut view = self.view_at(&store, read_header(&store.connection)?)?;
+            view.entries = read_entries(&store.connection)?;
+            (view, store.state.sequence)
+        };
         if view.entries.len() as u64 != sequence {
             return Err(SessionError::InvalidHistory);
         }
-        drop(snapshot);
         view.messages =
             selected_messages(&view.entries, &view.context_path, MessageAudience::Model);
         Ok(view)
@@ -1205,12 +1245,16 @@ impl Session {
         // that publishes writer state. Decode journal payloads only after it
         // is released; header, cursor and hot state belong to this one cut.
         let snapshot = connection.unchecked_transaction()?;
-        let header = read_header(&snapshot)?;
-        if header.id != self.id() || header.provider_session_id != self.provider_session_id() {
+        let view = self.view_at(&store, read_header(&snapshot)?)?;
+        Ok((snapshot, view, store.state.sequence))
+    }
+
+    fn view_at(&self, store: &Store, header: Header) -> Result<SessionView, SessionError> {
+        if header.identity() != self.header.identity() {
             return Err(SessionError::InvalidHistory);
         }
         let context_path = store.context_index.path(store.context_index.head());
-        let view = SessionView {
+        Ok(SessionView {
             id: header.id,
             cwd: header.cwd,
             name: header.name,
@@ -1231,8 +1275,7 @@ impl Session {
             compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
             last_execution: store.state.last_execution.clone(),
             last_usage: store.state.last_usage,
-        };
-        Ok((snapshot, view, store.state.sequence))
+        })
     }
 
     /// Commit display metadata and return its canonical name. History remains append-only.
@@ -1897,6 +1940,8 @@ pub enum SessionError {
     HardLinkedDatabase,
     #[error("invalid session path")]
     InvalidPath,
+    #[error("this operation requires a file-backed Session")]
+    FileLocationRequired,
     #[error("invalid working directory")]
     InvalidWorkingDirectory,
     #[error("artifact offset or page limit is out of range")]

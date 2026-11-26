@@ -5,7 +5,7 @@ async fn uncertain_input_transfers_exact_custody_and_retains_its_byte_budget() {
     let model = Model::new(1);
     let mut fixture = Fixture::new(model.clone(), false);
     // A real COMMIT error, not a statement rejection. This does not simulate fsync.
-    rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
+    rusqlite::Connection::open(fixture.control.session().file_path().unwrap()).unwrap().execute_batch(
         "CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
          CREATE TABLE commit_child (parent INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
          CREATE TRIGGER uncertain_commit AFTER INSERT ON entries

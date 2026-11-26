@@ -906,7 +906,7 @@ mod tests {
             assert!(!output.is_error, "{}", output.value);
             assert_eq!(output.value["exit_code"], 0);
             assert_eq!(
-                fs::metadata(owner.session.path())
+                fs::metadata(owner.session.file_path().unwrap())
                     .unwrap()
                     .permissions()
                     .mode()

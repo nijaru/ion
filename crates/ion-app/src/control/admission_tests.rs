@@ -237,6 +237,7 @@ async fn abandoned_keyed_wait_shutdown_delivers_positive_receipt_and_exact_metad
         .control
         .session()
         .history()
+        .unwrap()
         .request_receipt(&key())
         .await
         .unwrap()
@@ -254,7 +255,7 @@ async fn abandoned_keyed_rejection_uncertainty_and_task_panic_keep_distinct_cust
             fixture.fault("1");
         } else if fault == "uncertain" {
             // A real COMMIT failure, as opposed to a confirmed statement rollback.
-            rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
+            rusqlite::Connection::open(fixture.control.session().file_path().unwrap()).unwrap().execute_batch(
                 "CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
                  CREATE TABLE commit_child (parent INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
                  CREATE TRIGGER uncertain_commit AFTER INSERT ON entries

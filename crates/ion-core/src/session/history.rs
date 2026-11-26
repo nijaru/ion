@@ -226,7 +226,7 @@ impl Session {
             }
         }
         Ok(HistoryRead {
-            path: self.path.clone(),
+            path: self.file_path()?.to_owned(),
             session_id: self.header.provider_session_id,
             upper_entry,
             selection: input,

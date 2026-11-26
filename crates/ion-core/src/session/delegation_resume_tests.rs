@@ -252,14 +252,14 @@ fn resume_refuses_self_wrong_identity_workspace_and_unsettled_history_before_int
                 )
                 .unwrap();
         }
-        let path = target.path().to_path_buf();
+        let path = target.file_path().unwrap().to_path_buf();
         let target_history = target.view().unwrap().entries;
         assert!(
             target.recovery_state().unwrap().is_none(),
             "lack of a recovery binding is not proof of settlement"
         );
         let mut next = spec(if case == "self" {
-            DelegationTarget::resume(parent.path()).unwrap()
+            DelegationTarget::resume(parent.file_path().unwrap()).unwrap()
         } else {
             DelegationTarget::resume(&path).unwrap()
         });

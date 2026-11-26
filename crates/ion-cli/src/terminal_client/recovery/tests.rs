@@ -8,7 +8,7 @@ const LITERAL: &str = "  exact original 🦀\n";
 
 async fn unresolved(fixture: &mut Fixture) -> UnresolvedInput<EditorDraft> {
     // A real deferred COMMIT failure leaves the app's original wrapper intact.
-    rusqlite::Connection::open(fixture.control.session().path()).unwrap().execute_batch(
+    rusqlite::Connection::open(fixture.control.session().file_path().unwrap()).unwrap().execute_batch(
         "CREATE TABLE commit_parent (id INTEGER PRIMARY KEY);
          CREATE TABLE commit_child (parent INTEGER REFERENCES commit_parent(id) DEFERRABLE INITIALLY DEFERRED);
          CREATE TRIGGER uncertain_commit AFTER INSERT ON entries
@@ -70,7 +70,17 @@ async fn source_inspection_save_and_discard_preserve_exact_custody_and_fence() {
     assert!(inspected.contains("original context.txt"));
     assert!(inspected.contains("Status: acceptance unknown"));
     assert!(inspected.contains(&fixture.control.session().id().to_string()));
-    assert!(inspected.contains(&fixture.control.session().path().display().to_string()));
+    assert!(
+        inspected.contains(
+            &fixture
+                .control
+                .session()
+                .file_path()
+                .unwrap()
+                .display()
+                .to_string()
+        )
+    );
     assert_eq!(ui.recovery.list().lines().count(), 2);
     assert!(ui.recovery.blocks(fixture.control.session().id()));
     assert!(!ui.recovery.blocks(uuid::Uuid::now_v7()));
@@ -222,7 +232,9 @@ async fn serialization_and_missing_parent_refuse_before_creating_a_backup() {
     for serialization_refusal in [false, true] {
         if serialization_refusal {
             ui.recovery.records[0].origin.path =
-                PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', 0xff]));
+                Some(PathBuf::from(std::ffi::OsString::from_vec(vec![
+                    b'/', 0xff,
+                ])));
         }
         let target = if serialization_refusal {
             fixture.root.join("not-created.json")
@@ -311,7 +323,7 @@ async fn authoritative_nonacceptance_returns_only_to_original_session_and_never_
     assert_eq!(ui.editor.attachments.len(), 1);
     assert!(ui.recovery.records.is_empty());
     assert!(!fixture.control.is_busy());
-    let committed: i64 = rusqlite::Connection::open(fixture.control.session().path())
+    let committed: i64 = rusqlite::Connection::open(fixture.control.session().file_path().unwrap())
         .unwrap()
         .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
         .unwrap();
@@ -507,7 +519,7 @@ fn command_ids_are_never_reused_and_discard_claims_no_rollback() {
     let mut recovery = Recovery::default();
     let origin = Origin {
         session: uuid::Uuid::now_v7(),
-        path: PathBuf::from("/original.sqlite"),
+        path: Some(PathBuf::from("/original.sqlite")),
     };
     let id = recovery.command(
         EditorDraft::at_end("/export original.html".into()),
@@ -528,7 +540,7 @@ fn command_ids_are_never_reused_and_discard_claims_no_rollback() {
         EditorDraft::at_end("/new".into()),
         Origin {
             session: uuid::Uuid::now_v7(),
-            path: PathBuf::from("/other.sqlite"),
+            path: Some(PathBuf::from("/other.sqlite")),
         },
         "unknown".into(),
     );
