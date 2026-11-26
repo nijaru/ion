@@ -1213,9 +1213,7 @@ fn releasing_a_session_unlocks_an_inherited_file_description() {
         .native
         .as_ref()
         .unwrap()
-        ._lock
-        .0
-        .try_clone()
+        .duplicate_lease_descriptor()
         .unwrap();
     drop(session);
     let reopened = Session::open(&path).unwrap();

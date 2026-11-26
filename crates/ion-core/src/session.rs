@@ -72,6 +72,7 @@ use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
 pub(crate) use journal::MAX_ENTRY_BYTES;
+#[cfg(test)]
 use journal::encode_entry;
 use projection::{
     MessageAudience, ProjectionMode, model_context_state, project, selected_messages,
@@ -84,10 +85,11 @@ pub use records::{
     UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
+#[cfg(test)]
+use store::{FORMAT_VERSION, initialize_new};
 use store::{
-    FORMAT_VERSION, Header, SessionLock, Store, configure_connection, database_path,
-    initialize_new, lock, prepare_writer, project_connection, read_entries, read_entry,
-    read_header,
+    Header, NativeStore, OpenedStore, ReadCheckpoint, Store, configure_connection, database_path,
+    read_entries, read_entry, read_header,
 };
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SessionHistory, SubmissionRequest};
@@ -652,7 +654,7 @@ struct HistoryProjection {
 /// A writable Session holds a cross-process lock and retains its exclusive
 /// operation through started effects, observed-result commit and task joining.
 pub struct Session {
-    native: Option<retirement::NativeStore>,
+    native: Option<NativeStore>,
     header: Header,
     path: PathBuf,
     pub(crate) operations: Arc<OperationOwner>,
@@ -690,97 +692,21 @@ impl Session {
         entries: &[SessionEntry],
         artifact_source: Option<(&Path, uuid::Uuid)>,
     ) -> Result<Self, SessionError> {
-        let projection = project(entries.iter().map(Ok), ProjectionMode::Working, &|entry| {
-            Ok(entries[(entry - 1) as usize].clone())
-        })?;
-        let encoded = entries
-            .iter()
-            .map(encode_entry)
-            .collect::<Result<Vec<_>, _>>()?;
-        let cwd = cwd.map(Path::canonicalize).transpose()?;
-        if cwd.as_ref().is_some_and(|cwd| !cwd.is_dir()) {
-            return Err(SessionError::InvalidWorkingDirectory);
-        }
-        let filename = path.file_name().ok_or(SessionError::InvalidPath)?;
-        let parent = path
-            .parent()
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        fs::create_dir_all(parent)?;
-        let path = parent.canonicalize()?.join(filename);
-        // Hold the canonical lease through creation and failed-initialization
-        // cleanup; another opener must never own a database we are removing.
-        let lock = lock(&path)?;
-        let mut creation = store::create_database_file(&path)?;
-        let path = database_path(&path)?;
-        let mut connection = Connection::open(&path)?;
-        initialize_new(&connection)?;
-        let header = Header {
-            version: FORMAT_VERSION,
-            // Random prefixes remain useful as catalog selectors and short UI labels.
-            id,
-            provider_session_id: uuid::Uuid::now_v7(),
-            cwd,
-            name: None,
-        };
-        store::write_transaction(&mut connection, |tx| {
-            if let Some((path, id)) = artifact_source {
-                let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                configure_connection(&source)?;
-                let snapshot = source.unchecked_transaction()?;
-                if read_header(&snapshot)?.provider_session_id != id {
-                    return Err(SessionError::InvalidDatabase);
-                }
-                artifacts::copy(&snapshot, tx, entries)?;
-            }
-            for reference in entries.iter().flat_map(artifacts::references) {
-                artifacts::validate(tx, reference)?;
-            }
-            tx.execute(
-                "INSERT INTO session(id, header) VALUES (1, ?1)",
-                params![serde_json::to_vec(&header)?],
-            )?;
-            for body in encoded {
-                tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
-            }
-            Ok(())
-        })?;
-        creation.publish();
-        Ok(Self {
-            native: Some(retirement::NativeStore {
-                store: Mutex::new(Store::from_projection(connection, projection)),
-                _lock: lock,
-            }),
-            header,
-            path,
-            operations: Arc::new(OperationOwner::default()),
-            storage: Arc::default(),
-        })
+        OpenedStore::create(path, cwd, id, entries, artifact_source).map(Self::from_native)
     }
 
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let path = database_path(path.as_ref())?;
-        let lock = lock(&path)?;
-        // A disappearing resume target must fail, not create a new empty file
-        // between path validation and SQLite opening it.
-        let connection = Connection::open_with_flags(
-            &path,
-            OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE),
-        )?;
-        configure_connection(&connection)?;
-        let header = read_header(&connection)?;
-        let projection = project_connection(&connection, ProjectionMode::Working)?;
-        prepare_writer(&connection)?;
-        Ok(Self {
-            native: Some(retirement::NativeStore {
-                store: Mutex::new(Store::from_projection(connection, projection)),
-                _lock: lock,
-            }),
-            header,
-            path,
+        OpenedStore::open(path).map(Self::from_native)
+    }
+
+    fn from_native(opened: OpenedStore) -> Self {
+        Self {
+            native: Some(opened.native),
+            header: opened.header,
+            path: opened.path,
             operations: Arc::new(OperationOwner::default()),
             storage: Arc::default(),
-        })
+        }
     }
 
     /// Copy committed conversation and context into a new Session. Future
@@ -852,9 +778,9 @@ impl Session {
         let path = database_path(path.as_ref())?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
-        let snapshot = connection.unchecked_transaction()?;
-        let header = read_header(&snapshot)?;
-        let projection = project_connection(&snapshot, ProjectionMode::Metadata)?;
+        let checkpoint = ReadCheckpoint::pin(&connection)?;
+        let projection = checkpoint.project(ProjectionMode::Metadata)?;
+        let header = checkpoint.header;
 
         Ok(SessionMetadata {
             id: header.id,
@@ -872,9 +798,11 @@ impl Session {
         let path = database_path(path.as_ref())?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
-        let snapshot = connection.unchecked_transaction()?;
-        let header = read_header(&snapshot)?;
-        let entries = read_entries(&snapshot)?;
+        let (header, entries) = {
+            let checkpoint = ReadCheckpoint::pin(&connection)?;
+            let entries = checkpoint.read_entries()?;
+            (checkpoint.header, entries)
+        };
         let HistoryProjection {
             state,
             context_index,

@@ -1,6 +1,7 @@
 //! The Session's durable SQLite store: prepare a candidate, commit, then publish it.
 //! The Store holds derived in-memory projections beside the authoritative journal.
 
+use super::journal::encode_entry;
 use super::*;
 
 pub(super) const FORMAT_VERSION: u32 = 19;
@@ -13,6 +14,127 @@ pub(super) struct Header {
     pub(super) cwd: Option<PathBuf>,
     #[serde(default)]
     pub(super) name: Option<String>,
+}
+
+/// Owns both the physical database and the exclusive writer lease. Field
+/// order closes SQLite before releasing the lease, including during retirement.
+pub(super) struct NativeStore {
+    pub store: Mutex<Store>,
+    _lock: SessionLock,
+}
+
+#[cfg(test)]
+impl NativeStore {
+    pub fn duplicate_lease_descriptor(&self) -> std::io::Result<File> {
+        self._lock.0.try_clone()
+    }
+}
+
+pub(super) struct OpenedStore {
+    pub native: NativeStore,
+    pub header: Header,
+    pub path: PathBuf,
+}
+
+impl OpenedStore {
+    pub fn create(
+        path: &Path,
+        cwd: Option<&Path>,
+        id: uuid::Uuid,
+        entries: &[SessionEntry],
+        artifact_source: Option<(&Path, uuid::Uuid)>,
+    ) -> Result<Self, SessionError> {
+        let projection = project(entries.iter().map(Ok), ProjectionMode::Working, &|entry| {
+            Ok(entries[(entry - 1) as usize].clone())
+        })?;
+        let encoded = entries
+            .iter()
+            .map(encode_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        let cwd = cwd.map(Path::canonicalize).transpose()?;
+        if cwd.as_ref().is_some_and(|cwd| !cwd.is_dir()) {
+            return Err(SessionError::InvalidWorkingDirectory);
+        }
+        let filename = path.file_name().ok_or(SessionError::InvalidPath)?;
+        let parent = path
+            .parent()
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        fs::create_dir_all(parent)?;
+        let path = parent.canonicalize()?.join(filename);
+        // Hold the canonical lease through creation and failed-initialization
+        // cleanup; another opener must never own a database we are removing.
+        let lock = lock(&path)?;
+        let mut creation = create_database_file(&path)?;
+        let path = database_path(&path)?;
+        let mut connection = Connection::open(&path)?;
+        initialize_new(&connection)?;
+        let header = Header {
+            version: FORMAT_VERSION,
+            // Random prefixes remain useful as catalog selectors and short UI labels.
+            id,
+            provider_session_id: uuid::Uuid::now_v7(),
+            cwd,
+            name: None,
+        };
+        write_transaction(&mut connection, |tx| {
+            if let Some((path, id)) = artifact_source {
+                let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                configure_connection(&source)?;
+                let snapshot = source.unchecked_transaction()?;
+                if read_header(&snapshot)?.provider_session_id != id {
+                    return Err(SessionError::InvalidDatabase);
+                }
+                artifacts::copy(&snapshot, tx, entries)?;
+            }
+            for reference in entries.iter().flat_map(artifacts::references) {
+                artifacts::validate(tx, reference)?;
+            }
+            tx.execute(
+                "INSERT INTO session(id, header) VALUES (1, ?1)",
+                params![serde_json::to_vec(&header)?],
+            )?;
+            for body in encoded {
+                tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
+            }
+            Ok(())
+        })?;
+        creation.publish();
+        Ok(Self {
+            native: NativeStore {
+                store: Mutex::new(Store::from_projection(connection, projection)),
+                _lock: lock,
+            },
+            header,
+            path,
+        })
+    }
+
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
+        let path = database_path(path.as_ref())?;
+        let lock = lock(&path)?;
+        // A disappearing resume target must fail, not create a new empty file
+        // between path validation and SQLite opening it.
+        let connection = Connection::open_with_flags(
+            &path,
+            OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE),
+        )?;
+        configure_connection(&connection)?;
+        let (header, projection) = {
+            let checkpoint = ReadCheckpoint::pin(&connection)?;
+            let projection = checkpoint.project(ProjectionMode::Working)?;
+            (checkpoint.header, projection)
+        };
+        prepare_writer(&connection)?;
+        Ok(Self {
+            native: NativeStore {
+                store: Mutex::new(Store::from_projection(connection, projection)),
+                _lock: lock,
+            },
+            header,
+            path,
+        })
+    }
 }
 
 pub(super) struct Store {
@@ -33,15 +155,15 @@ pub(super) struct Store {
     pub(super) live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
 }
 
-pub(super) struct SessionLock(pub(super) File);
+struct SessionLock(File);
 
-pub(super) struct CreatedDatabase {
+struct CreatedDatabase {
     path: PathBuf,
     identity: (u64, u64),
     keep: bool,
 }
 impl CreatedDatabase {
-    pub(super) fn publish(&mut self) {
+    fn publish(&mut self) {
         self.keep = true;
     }
 }
@@ -64,7 +186,7 @@ impl Drop for CreatedDatabase {
     }
 }
 
-pub(super) fn create_database_file(path: &Path) -> Result<CreatedDatabase, SessionError> {
+fn create_database_file(path: &Path) -> Result<CreatedDatabase, SessionError> {
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -93,7 +215,7 @@ impl Drop for SessionLock {
 }
 
 impl Store {
-    pub(super) fn from_projection(connection: Connection, projection: HistoryProjection) -> Self {
+    fn from_projection(connection: Connection, projection: HistoryProjection) -> Self {
         let mut store = Self {
             connection,
             faulted: false,
@@ -295,7 +417,7 @@ impl Store {
     }
 }
 
-pub(super) fn write_transaction<T>(
+fn write_transaction<T>(
     connection: &mut Connection,
     write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, SessionError>,
 ) -> Result<T, SessionError> {
@@ -326,34 +448,45 @@ fn write_transaction_with<T>(
     }
 }
 
-pub(super) fn project_connection(
-    connection: &Connection,
-    mode: ProjectionMode,
-) -> Result<HistoryProjection, SessionError> {
-    // Validate one fact at a time without an owned raw-history export. The
-    // projection mode determines which derived values must remain resident.
-    let mut statement = connection.prepare("SELECT seq, body FROM entries ORDER BY seq")?;
-    let mut rows = statement.query([])?;
-    let mut sequence = 0;
-    let entries = std::iter::from_fn(|| match rows.next() {
-        Ok(Some(row)) => {
-            sequence += 1;
-            Some(decode_entry(row, sequence))
-        }
-        Ok(None) => None,
-        Err(error) => Some(Err(error.into())),
-    });
-    project(entries, mode, &|entry| read_entry(connection, entry))
+/// The native read transaction owns the cut from the header SELECT through
+/// replay and any point reads needed to materialize the working context.
+pub(super) struct ReadCheckpoint<'a> {
+    snapshot: rusqlite::Transaction<'a>,
+    pub header: Header,
+}
+
+impl<'a> ReadCheckpoint<'a> {
+    pub fn pin(connection: &'a Connection) -> Result<Self, SessionError> {
+        let snapshot = connection.unchecked_transaction()?;
+        let header = read_header(&snapshot)?;
+        Ok(Self { snapshot, header })
+    }
+
+    pub fn project(&self, mode: ProjectionMode) -> Result<HistoryProjection, SessionError> {
+        let mut statement = self.snapshot.prepare(SCAN_ENTRIES)?;
+        journal::replay(SqliteRows(statement.query([])?), mode, |entry| {
+            read_entry(&self.snapshot, entry)
+        })
+    }
+
+    pub fn read_entries(&self) -> Result<Vec<SessionEntry>, SessionError> {
+        read_entries(&self.snapshot)
+    }
+}
+
+const SCAN_ENTRIES: &str = "SELECT seq, body FROM entries ORDER BY seq";
+
+struct SqliteRows<'a>(rusqlite::Rows<'a>);
+
+impl journal::EntryRows for SqliteRows<'_> {
+    fn next_record(&mut self) -> Result<Option<journal::EncodedRecord<'_>>, SessionError> {
+        self.0.next()?.map(encoded_record).transpose()
+    }
 }
 
 pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
-    let mut statement = connection.prepare("SELECT seq, body FROM entries ORDER BY seq")?;
-    let mut rows = statement.query([])?;
-    let mut entries = Vec::new();
-    while let Some(row) = rows.next()? {
-        entries.push(decode_entry(row, entries.len() as u64 + 1)?);
-    }
-    Ok(entries)
+    let mut statement = connection.prepare(SCAN_ENTRIES)?;
+    journal::decode_rows(SqliteRows(statement.query([])?)).collect()
 }
 
 pub(super) fn shell_settlement(
@@ -382,24 +515,19 @@ pub(super) fn read_entry(
         i64::try_from(entry).map_err(|_| SessionError::InvalidContextPoint)?
     ])?;
     let row = rows.next()?.ok_or(SessionError::InvalidHistory)?;
-    decode_entry(row, entry)
+    encoded_record(row)?.decode(entry)
 }
 
-fn decode_entry(row: &rusqlite::Row<'_>, expected: u64) -> Result<SessionEntry, SessionError> {
-    // Coordinates identify effects, context branches and history reads. Never
-    // substitute iteration order for a damaged physical key.
-    let sequence: i64 = row.get(0)?;
-    if u64::try_from(sequence).ok() != Some(expected) {
-        return Err(SessionError::InvalidHistory);
-    }
-    let encoded = row.get_ref(1)?;
-    let encoded = encoded
-        .as_blob()
-        .map_err(|_| SessionError::InvalidHistory)?;
-    if encoded.len() > MAX_ENTRY_BYTES {
-        return Err(SessionError::EntryTooLarge);
-    }
-    Ok(serde_json::from_slice(encoded)?)
+fn encoded_record<'row>(
+    row: &'row rusqlite::Row<'_>,
+) -> Result<journal::EncodedRecord<'row>, SessionError> {
+    Ok(journal::EncodedRecord {
+        sequence: row.get(0)?,
+        body: row
+            .get_ref(1)?
+            .as_blob()
+            .map_err(|_| SessionError::InvalidHistory)?,
+    })
 }
 
 pub(super) fn read_header(connection: &Connection) -> Result<Header, SessionError> {
@@ -428,7 +556,7 @@ pub(super) fn configure_connection(connection: &Connection) -> Result<(), Sessio
     Ok(())
 }
 
-pub(super) fn prepare_writer(connection: &Connection) -> Result<(), SessionError> {
+fn prepare_writer(connection: &Connection) -> Result<(), SessionError> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "FULL")?;
     Ok(())
@@ -469,7 +597,7 @@ pub(super) fn database_path(path: &Path) -> Result<PathBuf, SessionError> {
     Ok(path)
 }
 
-pub(super) fn lock(path: &Path) -> Result<SessionLock, SessionError> {
+fn lock(path: &Path) -> Result<SessionLock, SessionError> {
     let mut sidecar = path.as_os_str().to_os_string();
     sidecar.push(".lock");
     let file = OpenOptions::new()

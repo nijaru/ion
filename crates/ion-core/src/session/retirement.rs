@@ -9,13 +9,7 @@ use crate::{
     operation::{OperationError, OperationOwner},
 };
 
-use super::{Session, SessionError, SessionLock, Store, storage::StorageWork};
-
-pub(super) struct NativeStore {
-    // SQLite must close before its exclusive writer lease is released.
-    pub(super) store: Mutex<Store>,
-    pub(super) _lock: SessionLock,
-}
+use super::{Session, SessionError, storage::StorageWork, store::NativeStore};
 
 #[derive(Default)]
 pub(super) struct RetirementWork {

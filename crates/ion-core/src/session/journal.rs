@@ -1,4 +1,5 @@
-//! Prepare a validated append from committed facts, without owning storage.
+//! Journal codec and projection boundaries, independent of the storage owner.
+//! A reader supplies ordered records and point reads from the same committed cut.
 //! A writer commits the encoded batch at `expected_tail` before publishing projections.
 use super::*;
 use crate::ToolOccurrence;
@@ -120,10 +121,120 @@ impl AppendBasis<'_> {
     }
 }
 
+/// A lending cursor: native SQLite can expose the current BLOB without copying
+/// it or retaining the raw journal. An adapter must keep the cut pinned through
+/// the final context lookup, not just until this cursor reaches EOF.
+pub(super) trait EntryRows {
+    fn next_record(&mut self) -> Result<Option<EncodedRecord<'_>>, SessionError>;
+}
+
+pub(super) struct EncodedRecord<'a> {
+    pub sequence: i64,
+    pub body: &'a [u8],
+}
+
+impl EncodedRecord<'_> {
+    pub fn decode(self, expected: u64) -> Result<SessionEntry, SessionError> {
+        // Coordinates identify effects, context branches and history reads.
+        // Never substitute iteration order for a damaged physical key.
+        if expected == 0 || u64::try_from(self.sequence).ok() != Some(expected) {
+            return Err(SessionError::InvalidHistory);
+        }
+        if self.body.len() > MAX_ENTRY_BYTES {
+            return Err(SessionError::EntryTooLarge);
+        }
+        Ok(serde_json::from_slice(self.body)?)
+    }
+}
+
+pub(super) fn replay(
+    rows: impl EntryRows,
+    mode: ProjectionMode,
+    read: impl Fn(u64) -> Result<SessionEntry, SessionError>,
+) -> Result<HistoryProjection, SessionError> {
+    project(decode_rows(rows), mode, &read)
+}
+
+pub(super) fn decode_rows(
+    mut rows: impl EntryRows,
+) -> impl Iterator<Item = Result<SessionEntry, SessionError>> {
+    let mut sequence = 0u64;
+    let mut ended = false;
+    std::iter::from_fn(move || {
+        if ended {
+            return None;
+        }
+        let next = (|| {
+            let Some(record) = rows.next_record()? else {
+                return Ok(None);
+            };
+            sequence = sequence
+                .checked_add(1)
+                .ok_or(SessionError::InvalidHistory)?;
+            record.decode(sequence).map(Some)
+        })();
+        if !matches!(next, Ok(Some(_))) {
+            ended = true;
+        }
+        next.transpose()
+    })
+}
+
 pub(super) fn encode_entry(entry: &SessionEntry) -> Result<Vec<u8>, SessionError> {
     let bytes = serde_json::to_vec(entry)?;
     if bytes.len() > MAX_ENTRY_BYTES {
         return Err(SessionError::EntryTooLarge);
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Rows<'a>(std::slice::Iter<'a, (i64, Vec<u8>)>);
+
+    impl EntryRows for Rows<'_> {
+        fn next_record(&mut self) -> Result<Option<EncodedRecord<'_>>, SessionError> {
+            Ok(self.0.next().map(|(sequence, body)| EncodedRecord {
+                sequence: *sequence,
+                body,
+            }))
+        }
+    }
+
+    #[test]
+    fn replay_can_restore_an_accepted_turn_from_encoded_rows_without_sqlite() {
+        let input = Message::user_input("accepted input".into(), []);
+        let mut rows = [(
+            1,
+            encode_entry(&SessionEntry::TurnStarted {
+                turn: 1,
+                input: input.clone(),
+                model: ModelRef {
+                    provider: "fixture".into(),
+                    model: "fixture".into(),
+                },
+                completion: Vec::new(),
+                request: Some(RequestKey::new("fixture".into(), "once".into()).unwrap()),
+                recovery: None,
+            })
+            .unwrap(),
+        )];
+        let restore = |records: &[(i64, Vec<u8>)]| {
+            replay(Rows(records.iter()), ProjectionMode::Working, |entry| {
+                let (sequence, body) = &records[usize::try_from(entry - 1).unwrap()];
+                EncodedRecord {
+                    sequence: *sequence,
+                    body,
+                }
+                .decode(entry)
+            })
+        };
+        let restored = restore(&rows).unwrap();
+        assert_eq!(restored.state.active, Some(1));
+        assert_eq!(restored.messages[0].message, input);
+        rows[0].0 = 2;
+        assert!(matches!(restore(&rows), Err(SessionError::InvalidHistory)));
+    }
 }

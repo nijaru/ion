@@ -73,6 +73,81 @@ async fn pinned_view_does_not_block_commits_or_mix_journal_versions() {
     session.shutdown().await.unwrap();
 }
 
+#[test]
+fn reopen_checkpoint_pins_header_scan_and_context_point_reads() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    session.set_name(Some("before")).unwrap();
+    let TurnAdmission::New {
+        entry: input_entry, ..
+    } = session
+        .admit_turn(
+            Message::user_input("original input".into(), []),
+            model("fixture"),
+            None,
+            None,
+        )
+        .unwrap()
+    else {
+        panic!("expected new admission")
+    };
+    let connection =
+        Connection::open_with_flags(fixture.path(), OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    let checkpoint = ReadCheckpoint::pin(&connection).unwrap();
+
+    // Test-only rewrite of a committed physical row: merely checking the tail
+    // couldn't detect a point read accidentally escaping the pinned snapshot.
+    let mut other = Connection::open(fixture.path()).unwrap();
+    let write = other.transaction().unwrap();
+    let mut header = read_header(&write).unwrap();
+    header.name = Some("after".into());
+    write
+        .execute(
+            "UPDATE session SET header=?1 WHERE id=1",
+            params![serde_json::to_vec(&header).unwrap()],
+        )
+        .unwrap();
+    let mut entry = read_entry(&write, input_entry).unwrap();
+    let SessionEntry::TurnStarted { input, .. } = &mut entry else {
+        panic!("expected accepted input")
+    };
+    *input = Message::user_input("rewritten input".into(), []);
+    write
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=?2",
+            params![
+                encode_entry(&entry).unwrap(),
+                i64::try_from(input_entry).unwrap()
+            ],
+        )
+        .unwrap();
+    write.commit().unwrap();
+
+    for (cut, label, prompt) in [
+        (checkpoint, "before", "original input"),
+        (
+            ReadCheckpoint::pin(&other).unwrap(),
+            "after",
+            "rewritten input",
+        ),
+    ] {
+        assert_eq!(cut.header.name.as_deref(), Some(label));
+        assert_eq!(
+            cut.project(ProjectionMode::Metadata)
+                .unwrap()
+                .latest_prompt
+                .as_deref(),
+            Some(prompt)
+        );
+        let working = cut.project(ProjectionMode::Working).unwrap();
+        assert_eq!(
+            working.messages[0].message,
+            Message::user_input(prompt.into(), [])
+        );
+        assert_eq!(working.state.active, Some(1));
+    }
+}
+
 fn model(name: &str) -> ModelRef {
     ModelRef {
         provider: "fixture".into(),
