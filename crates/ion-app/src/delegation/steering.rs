@@ -11,7 +11,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{BackgroundOwner, InputId, SteeringReceipt, SteeringStatus, TurnSteering};
 
-type Ready = Option<(uuid::Uuid, RequestKey, TurnSteering<()>)>;
+type RunIdentity = (uuid::Uuid, RequestKey);
+type Grant = (uuid::Uuid, RequestKey, TurnSteering<()>);
+type Ready = Option<Grant>;
 pub(super) type Readiness = watch::Sender<Ready>;
 
 /// The task and its live control grant belong to the same prepared application.
@@ -129,50 +131,26 @@ impl ChildSteering {
     }
     pub(crate) async fn steer_run(
         &self,
-        expected: Option<(uuid::Uuid, RequestKey)>,
+        expected: Option<RunIdentity>,
         request: &RequestKey,
         input: &Message,
         stop: &CancellationToken,
     ) -> Result<ChildSteeringReport> {
         // Validate before waiting, without retaining a second input queue.
-        drop(InputBudget::default().reserve(input, &(), self.limits)?);
-        let fingerprint: [u8; 32] = Sha256::digest(serde_json::to_vec(input)?).into();
+        let fingerprint = self.fingerprint(input)?;
         let mut readiness = self.ready.clone();
         loop {
             ensure!(!stop.is_cancelled(), "steering stopped; child continues");
             let ready = readiness.borrow_and_update().clone();
-            if let Some((child, run, port)) = ready {
-                ensure!(
-                    expected
-                        .as_ref()
-                        .is_none_or(|(session, request)| *session == child && *request == run),
-                    "child control grant does not match its owned run"
-                );
-                let mut submissions = self
-                    .submissions
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if let Some(existing) = submissions.iter().find(|s| &s.request == request) {
-                    ensure!(
-                        existing.fingerprint == fingerprint,
-                        "conflicting child steering request"
-                    );
-                    return Ok(existing.report());
-                }
-                let changed = self
-                    .changed
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                let receipt = port
-                    .submit_observed(input.clone(), (), changed, Some(stop))
-                    .map_err(anyhow::Error::new)?;
-                submissions.push(Submission {
-                    request: request.clone(),
+            if let Some(grant) = ready {
+                return self.submit_ready(
+                    expected.as_ref(),
+                    request,
+                    input,
                     fingerprint,
-                    receipt,
-                });
-                return Ok(submissions.last().expect("just retained steering").report());
+                    grant,
+                    Some(stop),
+                );
             }
             tokio::select! {
                 biased;
@@ -180,5 +158,73 @@ impl ChildSteering {
                 changed = readiness.changed() => changed.map_err(|_| anyhow::anyhow!("child control is no longer available"))?,
             }
         }
+    }
+
+    pub(crate) fn try_steer_run(
+        &self,
+        expected: &RunIdentity,
+        request: &RequestKey,
+        input: &Message,
+    ) -> Result<ChildSteeringReport> {
+        let grant = self
+            .ready
+            .borrow()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("task is not ready for steering"))?;
+        self.submit_ready(
+            Some(expected),
+            request,
+            input,
+            self.fingerprint(input)?,
+            grant,
+            None,
+        )
+    }
+
+    fn fingerprint(&self, input: &Message) -> Result<[u8; 32]> {
+        drop(InputBudget::default().reserve(input, &(), self.limits)?);
+        Ok(Sha256::digest(serde_json::to_vec(input)?).into())
+    }
+
+    fn submit_ready(
+        &self,
+        expected: Option<&RunIdentity>,
+        request: &RequestKey,
+        input: &Message,
+        fingerprint: [u8; 32],
+        (child, run, port): Grant,
+        stop: Option<&CancellationToken>,
+    ) -> Result<ChildSteeringReport> {
+        ensure!(
+            expected.is_none_or(|(session, request)| *session == child && *request == run),
+            "child control grant does not match its owned run"
+        );
+        let mut submissions = self
+            .submissions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(existing) = submissions.iter().find(|s| &s.request == request) {
+            ensure!(
+                existing.fingerprint == fingerprint,
+                "conflicting child steering request"
+            );
+            return Ok(existing.report());
+        }
+        let changed = self
+            .changed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let receipt = port
+            .submit_observed(input.clone(), (), changed, stop)
+            .map_err(anyhow::Error::new)?;
+        let submission = Submission {
+            request: request.clone(),
+            fingerprint,
+            receipt,
+        };
+        let report = submission.report();
+        submissions.push(submission);
+        Ok(report)
     }
 }

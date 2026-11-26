@@ -578,24 +578,43 @@ impl BackgroundOwner {
         input: &ion_ai::Message,
         stop: &CancellationToken,
     ) -> Result<ChildSteeringReport> {
-        self.ensure_open()?;
-        let (expected, steering) = {
-            let state = self.shared.lock();
-            let run = state.runs.get(&run).ok_or_else(|| {
-                anyhow::anyhow!("run is not owned here (unknown or acknowledged)")
-            })?;
-            let steering = run
-                .steering
-                .clone()
-                .ok_or_else(|| anyhow::anyhow!("this run has no live steering grant"))?;
-            (
-                (run.receipt.record.child, run.receipt.record.request_key()),
-                steering,
-            )
-        };
+        let (expected, steering) = self.steering_grant(run)?;
         steering
             .steer_run(Some(expected), request, input, stop)
             .await
+    }
+
+    /// Queue guidance only if the run is ready now. An error leaves the input
+    /// with the caller. Use the returned receipt state, not success alone, as
+    /// evidence of committed delivery.
+    pub fn try_steer(
+        &self,
+        run: uuid::Uuid,
+        request: &ion_core::RequestKey,
+        input: &ion_ai::Message,
+    ) -> Result<ChildSteeringReport> {
+        let (expected, steering) = self.steering_grant(run)?;
+        steering.try_steer_run(&expected, request, input)
+    }
+
+    fn steering_grant(
+        &self,
+        run: uuid::Uuid,
+    ) -> Result<((uuid::Uuid, ion_core::RequestKey), crate::ChildSteering)> {
+        self.ensure_open()?;
+        let state = self.shared.lock();
+        let run = state
+            .runs
+            .get(&run)
+            .ok_or_else(|| anyhow::anyhow!("run is not owned here (unknown or acknowledged)"))?;
+        let steering = run
+            .steering
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("this run has no live steering grant"))?;
+        Ok((
+            (run.receipt.record.child, run.receipt.record.request_key()),
+            steering,
+        ))
     }
     pub fn request_stop(&self, id: uuid::Uuid) -> Result<()> {
         let stop = {

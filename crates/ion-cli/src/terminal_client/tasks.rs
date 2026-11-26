@@ -1,4 +1,4 @@
-//! Human inspection over Host custody. No client-owned task lifecycle or cache.
+//! Human controls over Host custody. No client-owned task lifecycle or cache.
 use anyhow::{Context, Result};
 use ion_app::{BackgroundJobStatus, BackgroundOwner, BackgroundRunSnapshot};
 
@@ -229,15 +229,41 @@ fn refresh_selection(next: &mut Picker, previous: &Picker) {
     }
 }
 
-const USAGE: &str = "use /tasks [status|result|cancel|acknowledge UUID]";
+const USAGE: &str = "use /tasks [status|result|cancel|acknowledge UUID] or /tasks steer UUID TEXT";
 
 pub(super) fn command(ui: &mut Frontend, owner: &BackgroundOwner, args: &str) -> Result<()> {
     if args.is_empty() {
         open(ui, owner);
         return Ok(());
     }
-    let (action, id) = args.split_once(char::is_whitespace).context(USAGE)?;
-    let child = id.trim().parse::<uuid::Uuid>()?;
+    let (action, rest) = args.split_once(char::is_whitespace).context(USAGE)?;
+    if action == "steer" {
+        let (id, text) = rest
+            .trim_start()
+            .split_once(char::is_whitespace)
+            .context(USAGE)?;
+        let id = id.parse::<uuid::Uuid>().context("use the full task UUID")?;
+        let text = text.trim_start();
+        anyhow::ensure!(!text.is_empty(), "provide guidance after the task UUID");
+        let request = ion_core::RequestKey::new(
+            "ion.terminal.task".into(),
+            uuid::Uuid::now_v7().to_string(),
+        )?;
+        let input = ion_ai::Message::user_input(text.into(), []);
+        let report = owner
+            .try_steer(id, &request, &input)
+            .context("Task guidance was not queued")?;
+        let disposition = match report.status {
+            ion_app::SteeringStatus::Queued => "queued, not yet committed",
+            ion_app::SteeringStatus::Committed { .. } => "committed",
+            ion_app::SteeringStatus::Returned { .. } => "returned, not delivered",
+            ion_app::SteeringStatus::Unknown => "delivery unknown; do not replay",
+        };
+        ui.status = format!("Task guidance {disposition} · see /tasks status {id}");
+        ui.print(ui.status.clone());
+        return Ok(());
+    }
+    let child = rest.trim().parse::<uuid::Uuid>()?;
     let choice = match action {
         "status" => TaskChoice::Progress(child),
         "result" => TaskChoice::Result(child),

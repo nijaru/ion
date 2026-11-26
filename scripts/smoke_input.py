@@ -68,6 +68,8 @@ class Handler(BaseHTTPRequestHandler):
             assert release.wait(10), "fixture did not release stopped response"
             return
         delta = None
+        if prompt == "/skill:missing TASK_TERMINAL_GUIDANCE 🦀":
+            delta = {"content": "TASK_FINAL_🦀"}
         if prompt.startswith("TASK_PARENT_") or prompt.startswith("TASK_CHILD_"):
             fresh = body["messages"][-1]["role"] == "user"
             if fresh:
@@ -1051,6 +1053,14 @@ def exercise_tasks(work, env):
                 terminal.send(b"\x1b")
                 terminal.paint()
                 assert alive(pid) and len(requests) == before, "browsing/dismissal stopped or consumed work"
+                guidance = "/skill:missing TASK_TERMINAL_GUIDANCE 🦀"
+                terminal.output.clear()
+                terminal.send(f"/tasks steer {task['run']} {guidance}\r")
+                terminal.wait(lambda: "Task guidance queued, not yet committed" in terminal.text())
+                assert len(requests) == before, "guidance bypassed the running child tool"
+                terminal.output.clear()
+                terminal.send(f"/tasks status {task['run']}\r")
+                terminal.wait(lambda: "queued, not proof of model delivery" in terminal.text())
                 terminal.output.clear()
                 terminal.send("/tasks\r")
                 terminal.wait(lambda: "Background tasks" in terminal.text())
@@ -1074,10 +1084,20 @@ def exercise_tasks(work, env):
                 terminal.paint()
                 if not stop:
                     assert "Final answer" in terminal.text() and "TASK_FINAL_🦀" in terminal.text(), terminal.text()
+                    assert len(requests) == before + 1 and user_text(requests[-1]) == guidance
+                    assert "committed to Turn" in terminal.text(), terminal.text()
                 else:
                     assert "cancelled" in terminal.text() and "Final answer" not in terminal.text(), terminal.text()
+                    assert "returned, not delivered" in terminal.text() and guidance in terminal.text(), terminal.text()
+                    assert len(requests) == before, "stopped guidance reached the model"
                 assert '"kind": "joined"' not in terminal.text(), "result is still a JSON protocol envelope"
                 count = len(requests)
+                # A task can finish between reading its handle and sending. A
+                # refused steer leaves the exact command editable, not replayed.
+                terminal.output.clear()
+                terminal.send(f"/tasks steer {task['run']} LATE_TASK_GUIDANCE\r")
+                terminal.wait(lambda: "Task guidance was not queued" in terminal.text() and "LATE_TASK_GUIDANCE" in terminal.text())
+                terminal.send("\x15")
                 # Merely reading the result must leave it selectable until explicit removal.
                 terminal.output.clear()
                 terminal.send("/tasks\r")
@@ -1100,6 +1120,9 @@ def exercise_tasks(work, env):
                         entries = [json.loads(row[0]) for row in connection.execute("SELECT body FROM entries")]
                         if path.parent.name == "children" and any(entry["kind"] == "turn_ended" for entry in entries):
                             children.append(path)
+                            steered = [entry["data"]["input"]["content"][0]["Text"]
+                                       for entry in entries if entry["kind"] == "steering"]
+                            assert steered == ([] if stop else [guidance]), steered
                     finally:
                         connection.close()
                 assert children, "task removal deleted child Session facts"
@@ -1112,7 +1135,7 @@ def exercise_tasks(work, env):
                         assert time.monotonic() < deadline, "owned task process survived cleanup"
                         terminal.pump()
                 terminal.close()
-            print(f"Tasks {mode} stop={stop}: live picker, no implicit cancellation, readable retained result, explicit removal and saved facts: OK", flush=True)
+            print(f"Tasks {mode} stop={stop}: live picker, direct literal guidance, committed/returned custody, late refusal, results and saved facts: OK", flush=True)
 
 
 def exercise_orientation(work, env, endpoint):

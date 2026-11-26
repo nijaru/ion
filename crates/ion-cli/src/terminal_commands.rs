@@ -51,7 +51,7 @@ commands! {
     Reasoning => (Models, "reasoning", "[default|off|low|medium|high|budget:TOKENS]", "Select generation effort (route support varies)"),
     Mcp => (Work, "mcp", "[reconnect [SERVER]]", "Inspect admitted MCP servers or explicitly reconnect a shared connection"),
     Compact => (Work, "compact", "[instructions]", "Summarize settled context"),
-    Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID]", "Choose task progress, result, stop or remove"),
+    Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID] | steer UUID TEXT", "Inspect, steer, stop or remove a background task"),
     Attach => (Work, "attach", "[ID]", "Attach to a running PTY program; Ctrl-] detaches"),
     Tools => (Work, "tools", "[output TEXT|unavailable]", "Find recorded tool evidence or list unavailable registrations"),
     Tool => (Work, "tool", "[N|all]", "Inspect recorded tool evidence"),

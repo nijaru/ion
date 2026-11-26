@@ -34,6 +34,20 @@ The task handle identifies a run. It is not the child's Session UUID or a saved 
 
 Browsing tasks does not send a model message. Inspecting a report does not prove the parent model has read it. To have the model use a result, ask it to inspect that task explicitly.
 
+## Send guidance directly
+
+Copy the full task UUID from `/tasks`, then enter:
+
+```text
+/tasks steer UUID Check the failure path before making changes.
+```
+
+The text goes to the child as literal guidance, not a parent prompt, shell
+command or skill invocation. If the child isn't ready or has already finished,
+Ion leaves the command in the editor. A queued message waits for the child's
+next safe model step. Use `/tasks status UUID` to check whether it committed or
+was returned; a stopped child doesn't replay returned guidance.
+
 ## Model-side controls
 
 The `subagent` tool supports `start`, `list`, `status`, `wait`, `steer`, `cancel` and `acknowledge`:

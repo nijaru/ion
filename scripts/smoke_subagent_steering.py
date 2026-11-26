@@ -100,12 +100,18 @@ try {
                     assert "subagent" not in {t["function"]["name"] for t in body.get("tools", [])}
                     delta = tool("exec", {"command": "exec " + shlex.join([sys.executable, str(program), task]), "timeout_ms": 15000})
                 elif task == "WORKER" and count == 2:
+                    assert users == ["WORKER", GUIDANCE], users
+                    roles = [m["role"] for m in body["messages"]]
+                    assert roles[-2:] == ["tool", "user"], roles
+                    delta = {"content": "FIRST_GUIDANCE_OBSERVED"}
+                elif task == "WORKER" and count == 3:
                     assert users == ["WORKER", GUIDANCE, GUIDANCE], users
                     roles = [m["role"] for m in body["messages"]]
-                    assert roles[-3:] == ["tool", "user", "user"], roles
+                    assert roles[-3:] == ["user", "assistant", "user"], roles
+                    assert body["messages"][-2]["content"] == "FIRST_GUIDANCE_OBSERVED"
                     delta = tool("write", {"path": "FOLLOWED", "content": "\n".join(users[1:])})
                 else:
-                    assert task == "WORKER" and count == 3, (task, count)
+                    assert task == "WORKER" and count == 4, (task, count)
                     assert not json.loads(body["messages"][-1]["content"])["is_error"]
                     delta = {"content": "GUIDED_ANSWER"}
                 reason = "tool_calls" if "tool_calls" in delta else "stop"
@@ -119,7 +125,7 @@ try {
                 self.wfile.write(payload)
             except Exception as error:
                 failures.append(repr(error))
-                self.send_error(500, str(error))
+                self.send_error(500)
 
         def log_message(self, *_arguments):
             pass
@@ -165,7 +171,7 @@ try {
         assert (workspace / "FOLLOWED").read_text() == GUIDANCE + "\n" + GUIDANCE
         assert (workspace / "WORKER.after").exists()
         assert all(not (workspace / (n + ".after")).exists() for n in ("CANCEL", "DEADLINE"))
-        assert [sum(task == n for task, _ in requests) for n in ("PARENT", "WORKER", "CANCEL", "DEADLINE")] == [2, 3, 1, 1]
+        assert [sum(task == n for task, _ in requests) for n in ("PARENT", "WORKER", "CANCEL", "DEADLINE")] == [2, 4, 1, 1]
         parent = next(p for p in Path(env["ION_HOME"]).rglob("*.sqlite") if p.parent.name != "children")
         with closing(sqlite3.connect(f"file:{parent}?mode=ro", uri=True)) as db:
             entries = [dict(json.loads(body), entry=seq) for seq, body in db.execute("SELECT seq, body FROM entries ORDER BY seq")]

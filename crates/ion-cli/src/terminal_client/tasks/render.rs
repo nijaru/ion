@@ -118,7 +118,42 @@ pub(super) fn status(run: &BackgroundRunSnapshot) -> String {
     } else {
         text.push_str("\nOnly joined means cleanup finished; silence alone does not prove a stall");
     }
+    append_guidance(&mut text, run);
     text
+}
+
+fn append_guidance(text: &mut String, run: &BackgroundRunSnapshot) {
+    for steering in &run.steering {
+        text.push_str(&format!(
+            "\n\nGuidance {}/{}\n",
+            steering.request.scope(),
+            steering.request.id()
+        ));
+        match &steering.status {
+            ion_app::SteeringStatus::Queued => text.push_str("queued, not proof of model delivery"),
+            ion_app::SteeringStatus::Committed { acceptance } => {
+                text.push_str(&format!("committed to Turn {}", acceptance.turn))
+            }
+            ion_app::SteeringStatus::Unknown => {
+                text.push_str("delivery unknown; inspect saved facts before replay")
+            }
+            ion_app::SteeringStatus::Returned { input, reason } => {
+                text.push_str(&format!(
+                    "returned, not delivered · {}\n",
+                    match reason {
+                        ion_app::ReturnSnapshot::Stopped => "stopped",
+                        ion_app::ReturnSnapshot::Cleared => "cleared",
+                        ion_app::ReturnSnapshot::TurnEnded => "Turn ended",
+                        ion_app::ReturnSnapshot::Preparation(error) => error,
+                        ion_app::ReturnSnapshot::NotAccepted => "not accepted",
+                        ion_app::ReturnSnapshot::PredecessorFailed => "preceding work failed",
+                    }
+                ));
+                text.push_str(&returned_input(input));
+                text.push_str("\nRemoving this task also releases this uncommitted guidance; it is not automatically replayed.");
+            }
+        }
+    }
 }
 
 pub(super) fn result(run: &BackgroundRunSnapshot) -> Result<String> {
@@ -179,37 +214,7 @@ pub(super) fn result(run: &BackgroundRunSnapshot) -> Result<String> {
             "\nNo committed outcome; inspect saved facts and effects. This is not success.",
         ),
     }
-    for steering in &run.steering {
-        text.push_str(&format!(
-            "\n\nGuidance {}/{} · ",
-            steering.request.scope(),
-            steering.request.id()
-        ));
-        match &steering.status {
-            ion_app::SteeringStatus::Queued => text.push_str("queued, not proof of model delivery"),
-            ion_app::SteeringStatus::Committed { acceptance } => {
-                text.push_str(&format!("committed to Turn {}", acceptance.turn))
-            }
-            ion_app::SteeringStatus::Unknown => {
-                text.push_str("delivery unknown; inspect saved facts before replay")
-            }
-            ion_app::SteeringStatus::Returned { input, reason } => {
-                text.push_str(&format!(
-                    "returned, not delivered · {}\n",
-                    match reason {
-                        ion_app::ReturnSnapshot::Stopped => "stopped",
-                        ion_app::ReturnSnapshot::Cleared => "cleared",
-                        ion_app::ReturnSnapshot::TurnEnded => "Turn ended",
-                        ion_app::ReturnSnapshot::Preparation(error) => error,
-                        ion_app::ReturnSnapshot::NotAccepted => "not accepted",
-                        ion_app::ReturnSnapshot::PredecessorFailed => "preceding work failed",
-                    }
-                ));
-                text.push_str(&returned_input(input));
-                text.push_str("\nRemoving this task also releases this uncommitted guidance; it is not automatically replayed.");
-            }
-        }
-    }
+    append_guidance(&mut text, run);
     text.push_str(&format!(
         "\n\nModel: {}/{}\nParent {}\nChild {} · {}",
         run.receipt.record.spec.model.provider,
