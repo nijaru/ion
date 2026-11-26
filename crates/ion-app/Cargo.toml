@@ -31,7 +31,7 @@ sha2 = "0.10.9"
 similar = "3.2.0"
 sse-stream = "0.2.6"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-util.workspace = true
 url = "2.5.8"
 uuid = { version = "1.24.1", features = ["v7"] }
@@ -40,7 +40,7 @@ vt100 = "0.16.2"
 [dev-dependencies]
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 rusqlite = "0.41.1"
-tokio = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "test-util"] }
 
 [lints]
 workspace = true

@@ -22,7 +22,7 @@ rustix = { version = "1.1.4", features = ["fs", "termios", "process"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 shlex = "2.0.1"
-tokio = { workspace = true, features = ["net"] }
+tokio = { workspace = true, features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util.workspace = true
 two-face = { version = "=0.5.2", default-features = false, features = ["syntect-onig"] }
 unicode-segmentation = "1.13.3"
