@@ -87,7 +87,7 @@ The smoke script exercises an offline built headless/reopen path. See `AGENTS.md
 
 ## Limitations
 
-Durable storage and conservative effect recovery are implemented, but fully automatic service restart/wake, arbitrary dynamic extensions, provider coverage, broad ACP/editor integrations and model-backed daily-driver qualification are incomplete. Code Mode is optional; restart-safe guest reconstruction and full Pi Durable-level nested-call semantics are not yet established. Incompatible Session databases are rejected rather than migrated during unstable development. Rust APIs may change before release.
+Durable storage and conservative effect recovery are implemented, but fully automatic service restart/wake, arbitrary dynamic extensions, provider coverage, and model-backed daily-driver qualification are incomplete. [ACP interoperability](docs/embedding.md#host-and-protocol-boundaries) is planned, not implemented. Code Mode is optional; restart-safe guest reconstruction and full Pi Durable-level nested-call semantics are not yet established. Incompatible Session databases are rejected rather than migrated during unstable development. Rust APIs may change before release.
 
 ## License
 

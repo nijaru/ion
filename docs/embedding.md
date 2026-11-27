@@ -18,6 +18,12 @@ cargo doc --locked -p ion-core --no-deps
 
 These are current code owners, not promised permanent API boundaries. The [README](../README.md#develop) lists workspace verification commands.
 
+## Host and protocol boundaries
+
+Native and embedded clients use the same Rust engine. Ion's design separates model access, workspace and tools, storage, and wakeups from Turn decisions. Native Sessions use SQLite; shell tools use native processes. The [Workerd journal fixture](../hosts/cloudflare/README.md) exercises a different storage host but does not run the Agent or its tools.
+
+`ion rpc` is not [ACP](https://agentclientprotocol.com/). ACP support is planned in two directions: editors could drive Ion as an ACP agent, or Ion could connect to an external ACP agent. In the latter case the external agent owns the loop, history, and authentication. An optional MCP bridge would let it call explicitly granted Ion tools through Ion's own validation and permissions. That does not put the agent's other tools or recovery under Ion's control. Neither ACP direction nor tool export is available today.
+
 ## Input and attachment authority
 
 Application input uses `UserInput::Prompt { text, attachments }` and `ion_app::attachments::AttachmentSource`: automatic files, image-only files, owned image bytes, prepared images and literal text snapshots. `AttachmentSource::image_bytes(bytes)` avoids base64 in Rust callers.
