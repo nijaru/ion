@@ -111,6 +111,24 @@ jobs:
       - name: Resource reload smoke
         run: python3 scripts/smoke_resources.py
 
+  worker-journal:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: hosts/cloudflare
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: hosts/cloudflare/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+
   audit:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest

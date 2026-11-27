@@ -2,6 +2,10 @@
 /target/
 **/*.rs.bk
 
+# Local Cloudflare test tooling
+/hosts/cloudflare/node_modules/
+/hosts/cloudflare/.wrangler/
+
 # Python smoke tools
 __pycache__/
 
