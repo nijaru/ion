@@ -26,10 +26,10 @@ impl JournalIdentity {
 /// Prepared writes carry their source journal as well as their source tail.
 /// This is a compare fence, not writer authority. The backend must also own
 /// the current writer lease (or a fenced host generation).
-struct AppendBatch {
-    identity: JournalIdentity,
-    expected_tail: u64,
-    encoded: Vec<Vec<u8>>,
+pub(super) struct AppendBatch {
+    pub identity: JournalIdentity,
+    pub expected_tail: u64,
+    pub encoded: Vec<Vec<u8>>,
 }
 
 impl AppendBatch {
@@ -101,6 +101,22 @@ impl<'a> PreparedAppend<'a> {
     ) -> Result<StagedAppend<'a>, SessionError> {
         self.batch.stage(identity, actual_tail, insert)?;
         Ok(StagedAppend(self.projection))
+    }
+
+    /// The host inserts the opaque batch under its own generation fence and
+    /// confirms durability before returning success. The exact candidate
+    /// stays here while the host future runs.
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    pub async fn commit_with<E>(
+        self,
+        commit: impl AsyncFnOnce(AppendBatch) -> Result<(), E>,
+    ) -> Result<CommittedAppend<'a>, E> {
+        commit(self.batch).await?;
+        Ok(CommittedAppend(self.projection))
     }
 }
 

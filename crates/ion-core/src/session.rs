@@ -9,9 +9,9 @@ use std::{
 #[cfg(test)]
 use std::{fs, time::Duration};
 
-use crate::operation::{
-    Executor, IdleSession, Operation, OperationError, OperationFailure, OperationOwner,
-};
+#[cfg(any(unix, test))]
+use crate::operation::Executor;
+use crate::operation::{IdleSession, Operation, OperationError, OperationFailure, OperationOwner};
 use crate::tool_set::ToolActivity;
 #[cfg(test)]
 use ion_ai::ToolResult;
@@ -63,8 +63,31 @@ mod storage;
 pub use retirement::SessionRetirement;
 pub use retirements::SessionRetirements;
 pub use storage::{SessionIo, SessionReader};
+#[cfg(all(
+    target_arch = "wasm32",
+    target_os = "unknown",
+    feature = "cloudflare-journal"
+))]
+mod cloudflare;
 mod journal;
+#[cfg(unix)]
 mod native;
+#[cfg(not(unix))]
+mod native {
+    use super::{Path, PathBuf, SessionError};
+
+    pub(super) enum FileBinding {}
+
+    impl FileBinding {
+        pub fn path(&self) -> &Path {
+            match *self {}
+        }
+    }
+
+    pub(super) fn database_path(_: &Path) -> Result<PathBuf, SessionError> {
+        Err(SessionError::FilePlatformUnsupported)
+    }
+}
 mod store;
 mod submission;
 #[cfg(test)]
@@ -75,7 +98,9 @@ use context::{ProjectedMessage, context_projection};
 pub(crate) use journal::MAX_ENTRY_BYTES;
 #[cfg(test)]
 use journal::encode_entry;
-use native::{FileBinding, OpenedStore, database_path};
+#[cfg(unix)]
+use native::OpenedStore;
+use native::{FileBinding, database_path};
 use projection::{
     MessageAudience, ProjectionMode, model_context_state, project, selected_messages,
     shell_message, shell_outcome_at, valid_model_context,
@@ -647,9 +672,23 @@ struct HistoryProjection {
     state: State,
     settled: BTreeSet<u64>,
     messages: Vec<ProjectedMessage>,
+    #[cfg_attr(
+        not(any(unix, test)),
+        expect(dead_code, reason = "consumed by the native live Store")
+    )]
     context_changes: Vec<ModelContextChange>,
+    #[cfg_attr(
+        not(any(unix, test)),
+        expect(dead_code, reason = "consumed by the native live Store")
+    )]
     child_records: ChildRecordIndex,
     context_index: ContextIndex,
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    keys: projection::JournalKeys,
 }
 
 /// A live Session retains exclusive execution through effects, journal commit
@@ -691,10 +730,17 @@ impl Session {
         Ok(store)
     }
 
+    #[cfg(unix)]
     pub fn create(path: impl AsRef<Path>, cwd: Option<&Path>) -> Result<Self, SessionError> {
         Self::create_initial(path.as_ref(), cwd, uuid::Uuid::new_v4(), &[], None)
     }
 
+    #[cfg(not(unix))]
+    pub fn create(_: impl AsRef<Path>, _: Option<&Path>) -> Result<Self, SessionError> {
+        Err(SessionError::FilePlatformUnsupported)
+    }
+
+    #[cfg(unix)]
     fn create_initial(
         path: &Path,
         cwd: Option<&Path>,
@@ -706,15 +752,34 @@ impl Session {
         Ok(Self::from_native(opened, Executor::default()))
     }
 
+    #[cfg(not(unix))]
+    fn create_initial(
+        _: &Path,
+        _: Option<&Path>,
+        _: uuid::Uuid,
+        _: &[SessionEntry],
+        _: Option<(&Path, uuid::Uuid)>,
+    ) -> Result<Self, SessionError> {
+        Err(SessionError::FilePlatformUnsupported)
+    }
+
+    #[cfg(unix)]
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
         let opened = OpenedStore::open(path.as_ref())?;
         Ok(Self::from_native(opened, Executor::default()))
     }
 
+    #[cfg(not(unix))]
+    pub fn open(_: impl AsRef<Path>) -> Result<Self, SessionError> {
+        Err(SessionError::FilePlatformUnsupported)
+    }
+
+    #[cfg(unix)]
     fn from_native(opened: OpenedStore, executor: Executor) -> Self {
         Self::from_store(opened.store, opened.header, Some(opened.file), executor)
     }
 
+    #[cfg(any(unix, test))]
     fn from_store(
         store: Store,
         header: Header,
@@ -866,7 +931,7 @@ impl Session {
         self.journal()
             .file
             .as_ref()
-            .map(|file| file.path.as_path())
+            .map(FileBinding::path)
             .ok_or(SessionError::FileLocationRequired)
     }
     pub fn cwd(&self) -> Option<&Path> {
@@ -1942,6 +2007,8 @@ pub enum SessionError {
     InvalidPath,
     #[error("this operation requires a file-backed Session")]
     FileLocationRequired,
+    #[error("file-backed Sessions are not supported on this platform")]
+    FilePlatformUnsupported,
     #[error("invalid working directory")]
     InvalidWorkingDirectory,
     #[error("artifact offset or page limit is out of range")]

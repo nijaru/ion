@@ -18,9 +18,11 @@ use super::{
     code_inspection::ChildRecordIndex,
     context::ProjectedMessage,
     context_index::{ContextIndex, WorkingContext},
-    journal::{self, CommittedAppend, JournalIdentity, PreparedAppend, encode_entry},
-    projection::{ProjectionMode, project},
+    journal::{self, CommittedAppend, JournalIdentity, PreparedAppend},
+    projection::ProjectionMode,
 };
+#[cfg(any(unix, test))]
+use super::{journal::encode_entry, projection::project};
 
 pub(super) const FORMAT_VERSION: u32 = 19;
 
@@ -35,6 +37,20 @@ pub(super) struct Header {
 }
 
 impl Header {
+    pub(super) fn decode(encoded: &[u8]) -> Result<Self, SessionError> {
+        // Reject obsolete formats before interpreting the current payload.
+        // Never invent an affinity identity when opening old data.
+        #[derive(Deserialize)]
+        struct Format {
+            version: u32,
+        }
+        let format: Format = serde_json::from_slice(encoded)?;
+        if format.version != FORMAT_VERSION {
+            return Err(SessionError::UnsupportedFormat(format.version));
+        }
+        Ok(serde_json::from_slice(encoded)?)
+    }
+
     pub(super) fn identity(&self) -> JournalIdentity {
         JournalIdentity {
             session: self.id,
@@ -45,12 +61,14 @@ impl Header {
 
 /// A checked journal prefix, ready to install in a newly acquired SQLite connection.
 /// File creation, leases and WAL policy belong to the connection owner.
+#[cfg(any(unix, test))]
 pub(super) struct StoreSeed<'a> {
     entries: &'a [SessionEntry],
     projection: HistoryProjection,
     encoded: Vec<Vec<u8>>,
 }
 
+#[cfg(any(unix, test))]
 impl<'a> StoreSeed<'a> {
     pub fn prepare(entries: &'a [SessionEntry]) -> Result<Self, SessionError> {
         let projection = project(entries.iter().map(Ok), ProjectionMode::Working, &|entry| {
@@ -115,6 +133,7 @@ pub(super) struct Store {
 impl Store {
     /// Rebuild from one pinned read of an already acquired, configured connection.
     /// This neither acquires ownership nor repairs unfinished work.
+    #[cfg(any(unix, test))]
     pub(super) fn reopen(connection: Connection) -> Result<(Self, Header), SessionError> {
         let (header, projection) = {
             let checkpoint = ReadCheckpoint::pin(&connection)?;
@@ -127,6 +146,7 @@ impl Store {
         ))
     }
 
+    #[cfg(any(unix, test))]
     fn from_projection(
         connection: Connection,
         identity: JournalIdentity,
@@ -328,6 +348,7 @@ impl Store {
     }
 }
 
+#[cfg(any(unix, test))]
 fn write_transaction<T>(
     connection: &mut Connection,
     write: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T, SessionError>,
@@ -447,17 +468,7 @@ pub(super) fn read_header(connection: &Connection) -> Result<Header, SessionErro
         })
         .optional()?
         .ok_or(SessionError::InvalidDatabase)?;
-    // Reject obsolete formats before interpreting the current header payload.
-    // In particular, never invent an affinity identity when opening old data.
-    #[derive(Deserialize)]
-    struct Format {
-        version: u32,
-    }
-    let format: Format = serde_json::from_slice(&encoded)?;
-    if format.version != FORMAT_VERSION {
-        return Err(SessionError::UnsupportedFormat(format.version));
-    }
-    Ok(serde_json::from_slice(&encoded)?)
+    Header::decode(&encoded)
 }
 
 pub(super) fn configure_connection(connection: &Connection) -> Result<(), SessionError> {
@@ -466,6 +477,7 @@ pub(super) fn configure_connection(connection: &Connection) -> Result<(), Sessio
     Ok(())
 }
 
+#[cfg(any(unix, test))]
 pub(super) fn initialize_schema(connection: &Connection) -> Result<(), SessionError> {
     connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);
 CREATE UNIQUE INDEX request_keys ON entries(json_extract(body, '$.data.request.scope'), json_extract(body, '$.data.request.id')) WHERE json_extract(body, '$.kind') = 'turn_started' AND json_extract(body, '$.data.request') IS NOT NULL;

@@ -223,6 +223,85 @@ pub(super) enum ProjectionMode {
     Metadata,
 }
 
+/// Uniqueness constraints that cannot be recovered from just the active Turn
+/// or the selected model context. Native SQLite also enforces them at insert.
+#[derive(Default)]
+pub(super) struct JournalKeys {
+    requests: BTreeSet<RequestKey>,
+    runs: BTreeSet<uuid::Uuid>,
+    created_delegations: BTreeSet<uuid::Uuid>,
+    bindings: BTreeSet<uuid::Uuid>,
+    created_children: BTreeSet<uuid::Uuid>,
+}
+
+impl JournalKeys {
+    fn observe(
+        &mut self,
+        committed: Option<&Self>,
+        entry: &SessionEntry,
+    ) -> Result<(), SessionError> {
+        fn insert<T: Ord>(
+            pending: &mut BTreeSet<T>,
+            committed: Option<&BTreeSet<T>>,
+            key: T,
+        ) -> Result<(), SessionError> {
+            if committed.is_some_and(|keys| keys.contains(&key)) || !pending.insert(key) {
+                return Err(SessionError::InvalidHistory);
+            }
+            Ok(())
+        }
+        match entry {
+            SessionEntry::TurnStarted {
+                request: Some(key), ..
+            } => {
+                insert(
+                    &mut self.requests,
+                    committed.map(|keys| &keys.requests),
+                    key.clone(),
+                )?;
+            }
+            SessionEntry::DelegationAdmitted { record } => {
+                insert(&mut self.runs, committed.map(|keys| &keys.runs), record.run)?;
+                if !matches!(record.spec.target, crate::DelegationTarget::Resume { .. }) {
+                    insert(
+                        &mut self.created_delegations,
+                        committed.map(|keys| &keys.created_delegations),
+                        record.child,
+                    )?;
+                }
+            }
+            SessionEntry::ChildSessionOf { record } => {
+                insert(
+                    &mut self.bindings,
+                    committed.map(|keys| &keys.bindings),
+                    record.run,
+                )?;
+                if !matches!(record.spec.target, crate::DelegationTarget::Resume { .. }) {
+                    insert(
+                        &mut self.created_children,
+                        committed.map(|keys| &keys.created_children),
+                        record.child,
+                    )?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    pub(super) fn validate_extension(&self, entries: &[SessionEntry]) -> Result<(), SessionError> {
+        let mut pending = Self::default();
+        entries
+            .iter()
+            .try_for_each(|entry| pending.observe(Some(self), entry))
+    }
+}
+
 pub(super) fn project<E: Borrow<SessionEntry>>(
     entries: impl IntoIterator<Item = Result<E, SessionError>>,
     mode: ProjectionMode,
@@ -232,37 +311,13 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     let mut child_records = ChildRecordIndex::default();
     let mut context_index = ContextIndex::default();
     let mut turns = 0usize;
-    let mut request_keys = BTreeSet::new();
-    let mut delegation_runs = BTreeSet::new();
-    let mut created_delegations = BTreeSet::new();
-    let mut binding_runs = BTreeSet::new();
-    let mut created_children = BTreeSet::new();
+    let mut keys = JournalKeys::default();
     let mut first_input = None;
     let mut latest_prompt = None;
     for entry in entries {
         let entry = entry?;
         let entry = entry.borrow();
-        if let SessionEntry::TurnStarted {
-            request: Some(key), ..
-        } = entry
-            && !request_keys.insert(key.clone())
-        {
-            return Err(SessionError::InvalidHistory);
-        }
-        if let SessionEntry::DelegationAdmitted { record } = entry
-            && (!delegation_runs.insert(record.run)
-                || (!matches!(record.spec.target, crate::DelegationTarget::Resume { .. })
-                    && !created_delegations.insert(record.child)))
-        {
-            return Err(SessionError::InvalidHistory);
-        }
-        if let SessionEntry::ChildSessionOf { record } = entry
-            && (!binding_runs.insert(record.run)
-                || (!matches!(record.spec.target, crate::DelegationTarget::Resume { .. })
-                    && !created_children.insert(record.child)))
-        {
-            return Err(SessionError::InvalidHistory);
-        }
+        keys.observe(None, entry)?;
         let transition = state.apply(entry, &|coordinate| context_index.is_settled(coordinate))?;
         if let SessionEntry::ContextSelected { head_entry } = entry {
             if !context_index.can_select(*head_entry) {
@@ -306,6 +361,12 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         context_changes,
         child_records,
         context_index,
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "cloudflare-journal"
+        ))]
+        keys,
     })
 }
 

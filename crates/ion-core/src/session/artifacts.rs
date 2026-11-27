@@ -16,6 +16,7 @@ use super::{Session, SessionError};
 const CHUNK_BYTES: usize = 256 * 1024;
 pub(crate) const PAGE_BYTES: usize = 16 * 1024;
 
+#[cfg(any(unix, test))]
 pub(super) fn initialize(connection: &Connection) -> rusqlite::Result<()> {
     connection.execute_batch(&format!(
         "CREATE TABLE artifacts (id TEXT PRIMARY KEY, label TEXT NOT NULL, source BLOB NOT NULL, receipt BLOB);
@@ -470,6 +471,7 @@ pub(super) fn references(entry: &super::SessionEntry) -> &[ArtifactRef] {
     }
 }
 
+#[cfg(any(unix, test))]
 pub(super) fn copy(
     source: &Connection,
     target: &Connection,

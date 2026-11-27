@@ -1689,6 +1689,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "ion-ai",
+ "js-sys",
  "jsonschema",
  "rusqlite",
  "serde",
@@ -1698,6 +1699,8 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
 ]
 
 [[package]]

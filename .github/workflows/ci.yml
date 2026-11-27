@@ -126,8 +126,12 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: hosts/cloudflare/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo install --locked wasm-bindgen-cli --version 0.2.127
       - run: npm ci --no-audit --no-fund
-      - run: npm test
+      - run: npm run test:bridge
 
   audit:
     if: github.event_name == 'schedule'

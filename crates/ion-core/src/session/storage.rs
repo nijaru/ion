@@ -329,6 +329,7 @@ impl Drop for Admission<'_> {
 }
 
 impl StorageWork {
+    #[cfg(any(unix, test))]
     pub(super) fn new(executor: Executor) -> Self {
         Self {
             executor,

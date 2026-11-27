@@ -5,6 +5,7 @@
 # Local Cloudflare test tooling
 /hosts/cloudflare/node_modules/
 /hosts/cloudflare/.wrangler/
+/hosts/cloudflare/test/generated/
 
 # Python smoke tools
 __pycache__/

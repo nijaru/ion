@@ -6,5 +6,7 @@ export default defineConfig({
   plugins: [cloudflareTest({
     wrangler: { configPath: fileURLToPath(new URL("./test/wrangler.jsonc", import.meta.url)) },
   })],
-  test: { include: ["test/*.test.js"] },
+  test: {
+    include: process.env.ION_WORKER_BRIDGE === "1" ? ["test/*.test.js"] : ["test/journal.test.js"],
+  },
 });

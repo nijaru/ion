@@ -7,6 +7,9 @@ license.workspace = true
 repository.workspace = true
 description = "Ion durable agent and Session runtime"
 
+[features]
+cloudflare-journal = ["dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "uuid/js"]
+
 [dependencies]
 base64 = "0.22.1"
 futures-util = "0.3.34"
@@ -20,6 +23,11 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tokio-util.workspace = true
 uuid = { version = "1.24.1", features = ["v4", "v7", "serde"] }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = { version = "0.3.104", optional = true }
+wasm-bindgen = { version = "0.2.127", optional = true }
+wasm-bindgen-futures = { version = "0.4.77", optional = true }
 
 [dev-dependencies]
 rusqlite = { version = "0.41.1", features = ["hooks"] }

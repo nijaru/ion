@@ -15,8 +15,14 @@ use super::{
 /// Native location and writer lease. Ownership moves with the live journal,
 /// never with a passive read handle.
 pub(super) struct FileBinding {
-    pub path: PathBuf,
+    path: PathBuf,
     _lock: SessionLock,
+}
+
+impl FileBinding {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
 }
 
 #[cfg(test)]

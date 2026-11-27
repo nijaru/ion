@@ -10,6 +10,16 @@ npm ci
 npm test
 ```
 
+To also run the Rust journal bridge in Workerd, use Clang and `llvm-ar` (or set `AR_wasm32_unknown_unknown` to the LLVM archiver), then run:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install --locked wasm-bindgen-cli --version 0.2.127
+npm run test:bridge
+```
+
+The bridge replays a confirmed cut using Ion's Rust journal code. It validates a prepared batch before passing it to the host, and requires the exact acknowledged tail. It is internal to the host; it does not expose a request or tool API.
+
 A host claims one writer generation at startup. Each append checks the source journal identity, writer generation, and expected tail before inserting a batch. Records are split into 1 MiB chunks in the same transaction. The writer acknowledges the new tail only after `storage.sync()` succeeds and it still owns that generation. An uncertain result fences the writer; reopen the committed journal rather than retrying the batch.
 
 Passive reads capture a fixed tail without taking writer authority. They return the original encoded bytes without replaying the Session. The tests exercise actual object teardown, including loss of the reply after a durable write. They do not yet exercise Turn recovery after eviction.
