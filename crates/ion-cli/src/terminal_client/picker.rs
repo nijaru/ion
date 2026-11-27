@@ -32,6 +32,10 @@ pub(super) enum PickerValue {
     Model(ModelRef),
     Reasoning(ion_ai::Reasoning),
     Login(String),
+    RemoveAttachment {
+        index: usize,
+        baseline: u64,
+    },
     LiveTool(ion_core::TranscriptActivityIdentity),
     CommittedTool(ion_core::TranscriptActivityIdentity),
     Setting(super::configuration::Setting),
@@ -280,8 +284,16 @@ impl Pickers {
             return Vec::new();
         };
         let mut controls = format!(
-            "{} select · {} closes · {}/{} page",
+            "{} {} · {} closes · {}/{} page",
             keys.hint(KeyAction::Confirm),
+            if matches!(
+                picker.items.first().map(|item| &item.value),
+                Some(PickerValue::RemoveAttachment { .. })
+            ) {
+                "removes"
+            } else {
+                "select"
+            },
             keys.hint(KeyAction::Cancel),
             keys.hint(KeyAction::SelectPageUp),
             keys.hint(KeyAction::SelectPageDown)

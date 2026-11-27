@@ -16,6 +16,8 @@ Opening chat loads application resources and starts configured [MCP connections]
 
 Use `/file PATH` to attach a UTF-8 text file or image to the next input. An unquoted path can include spaces; a JSON-quoted path is also accepted, matching completion. Ion does not evaluate shell expressions or attach files merely mentioned in prose. See [saved input and attachments](sessions.md#saved-input-and-attachments) for path expansion and CLI input syntax.
 
+Press Alt-I to inspect the current draft's attachments without replacing the text. Select the attachment to remove and press Enter, or press Esc to leave the list unchanged. You can also open the picker with `/attachments`. If a file disappears before Send, Ion returns the draft without calling the model; remove the missing attachment and submit again when ready.
+
 Chat shows the bound model and selected reasoning preference. This is not the effort of an already-running request; `default` leaves the choice to the provider. Use Shift-Tab to cycle the current route's supported levels, or `/reasoning` to choose one directly. The cached `context ~input/window` display is a planning estimate, not recorded token usage or an exact tokenizer count; see [context and compaction](sessions.md#context-and-compaction).
 
 Up and Down at the edges of the composer recall recent submitted prompts from the current Session, including prompts on other branches. Recall keeps up to 96 recent editable prompts within a 256 KiB text budget. It recalls the prompt text, not its attachments. Alt-T can still show the older transcript.

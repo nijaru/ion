@@ -115,6 +115,61 @@ class FileTerminal:
             self.ipc.cleanup()
 
 
+def exercise_attachment_repair(binary, work, env, mode, requests):
+    cwd = work / f"{mode}-attachment-repair"
+    cwd.mkdir()
+    valid = cwd / "useful context.txt"
+    valid.write_text("KEEP_THIS_CONTEXT\n")
+    missing = cwd / "gone.txt"
+    missing.write_text("DO_NOT_SEND\n")
+    draft = "Review the attached coding notes."
+    before = len(requests)
+    terminal = FileTerminal(binary, cwd, env, mode)
+    try:
+        def screen():
+            return "\n".join(terminal.snapshot()[0])
+
+        terminal.wait_ready()
+        terminal.send("/file useful context.txt\r")
+        terminal.wait(lambda: "1 attachment(s) attached" in screen())
+        terminal.send("/file gone.txt\r")
+        terminal.wait(lambda: "2 attachment(s) attached" in screen())
+        missing.unlink()
+        terminal.send(draft + "\x01\r")
+        terminal.wait(lambda: "cannot read attachment" in screen()
+                      and "gone.txt" in screen() and terminal.editor_matches(draft, 0, False))
+        assert len(requests) == before, "attachment failure sent a request"
+        with closing(sqlite3.connect(f"file:{terminal.database}?mode=ro", uri=True)) as db:
+            assert db.execute("SELECT count(*) FROM entries WHERE json_extract(body,'$.kind')='turn_started'").fetchone()[0] == 0
+
+        terminal.send(b"\x1bi")
+        terminal.wait(lambda: "Remove draft attachment" in screen()
+                      and "useful context.txt" in screen() and "gone.txt" in screen())
+        terminal.send(b"\x1b")
+        terminal.wait(lambda: "Remove draft attachment" not in screen()
+                      and "2 attachment(s) attached" in screen() and terminal.editor_matches(draft, 0, False))
+        terminal.send(b"\x1bi")
+        terminal.wait(lambda: "Remove draft attachment" in screen())
+        terminal.send(b"\x1b[B")
+        terminal.wait(lambda: any(row.startswith("› ") and "gone.txt" in row for row in terminal.snapshot()[0]))
+        terminal.send(b"\r")
+        terminal.wait(lambda: "Attachment removed" in screen()
+                      and "1 attachment(s) attached" in screen() and terminal.editor_matches(draft, 0, False))
+        assert len(requests) == before, "attachment removal submitted the draft"
+
+        terminal.send(b"\r")
+        terminal.wait_turn()
+        assert len(requests) == before + 1
+        user = requests[-1]["messages"][-1]
+        assert user["role"] == "user" and isinstance(user["content"], str), user
+        assert user["content"].endswith(draft) and "KEEP_THIS_CONTEXT" in user["content"], user
+        assert "gone.txt" not in user["content"] and "DO_NOT_SEND" not in user["content"], user
+        terminal.finish()
+    finally:
+        terminal.close()
+    print(f"Attachment repair {mode}: no early admission, exact draft/caret, only the chosen source removed: OK", flush=True)
+
+
 def exercise_file_input(binary, work, env, mode, requests, user_text):
     # The independent model request remains the prompt oracle. Completion may
     # consume Enter only after this intended draft/cursor has a selectable row.

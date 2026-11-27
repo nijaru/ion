@@ -433,6 +433,10 @@ pub(super) fn handle_builtin(
                 home.as_deref(),
             )?));
         }
+        Builtin::Attachments => {
+            anyhow::ensure!(args.is_empty(), "use /attachments");
+            ui.open_attachments();
+        }
         Builtin::Skills => ui.print(super::resource_commands::skills(
             runtime.resources(),
             &ui.cwd,

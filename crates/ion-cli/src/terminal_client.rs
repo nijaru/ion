@@ -1261,6 +1261,9 @@ impl Frontend {
                 self.history_view = Some(HistoryViewport::default());
                 return Action::None;
             }
+            Some(KeyAction::Attachments) => {
+                Action::Command(CommandInput::Shortcut(Builtin::Attachments))
+            }
             Some(KeyAction::Copy) => Action::Command(CommandInput::Shortcut(Builtin::Copy)),
             Some(KeyAction::External) => Action::Command(CommandInput::Shortcut(Builtin::Editor)),
             Some(KeyAction::Model) => Action::Command(CommandInput::Shortcut(Builtin::Model)),
@@ -1664,7 +1667,11 @@ fn status_feedback(ui: &Frontend) -> Option<String> {
     let attachment = if ui.editor.attachments.is_empty() {
         String::new()
     } else {
-        format!(" · {} attachment(s) attached", ui.editor.attachments.len())
+        format!(
+            " · {} attachment(s) attached · {} manage",
+            ui.editor.attachments.len(),
+            ui.keys.hint(KeyAction::Attachments)
+        )
     };
 
     let recovery = if ui.editor.recovered.is_empty() {

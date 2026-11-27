@@ -22,7 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from smoke_input_editor import exercise_external_editor
-from smoke_input_files import exercise_file_input
+from smoke_input_files import exercise_attachment_repair, exercise_file_input
 from smoke_input_queue import exercise_queue_controls
 from terminal_style import painted_text, program_ready
 
@@ -2037,6 +2037,8 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_editor_tty(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{server.server_port}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         exercise_queue_controls(binary, work, env, requests, release)
+        for mode in ("inline", "fullscreen"):
+            exercise_attachment_repair(binary, work, env, mode, requests)
         exercise_recovery_sources(work, env)
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")

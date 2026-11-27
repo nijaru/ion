@@ -41,6 +41,7 @@ actions! {
     ModelBackward, "app.model.cycleBackward", COMPOSER, ["ctrl+shift+p"], "Cycle to previous locally ready model";
     External, "app.editor.external", EDIT, ["ctrl+g"], "Open external editor";
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
+    Attachments, "app.attachments.manage", COMPOSER, ["alt+i"], "Inspect or remove a draft attachment";
     Copy, "app.message.copy", COMPOSER | DETAILS, ["ctrl+x"], "Copy answer or selected tool evidence";
     Transcript, "app.transcript.open", COMPOSER | HISTORY, ["alt+t"], "Open or close the read-only transcript";
     ExpandTools, "app.tools.expand", COMPOSER | DETAILS | HISTORY, ["ctrl+o"], "Inspect output (shared inline) or expand/collapse it; close inspection";
@@ -102,6 +103,7 @@ impl KeyAction {
                 | Self::FollowUp
                 | Self::External
                 | Self::Transcript
+                | Self::Attachments
                 | Self::ExpandTools
                 | Self::SaveOutput
                 | Self::InspectEntry

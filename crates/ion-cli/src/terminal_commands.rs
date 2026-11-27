@@ -58,6 +58,7 @@ commands! {
     Settings => (Editor, "settings", "[compact|expanded|thinking show|thinking hide|completion POLICY]", "Change presentation or receiving completion policy"),
     Tui => (Editor, "tui", "[inline|fullscreen]", "Choose the transcript surface"),
     File => (Editor, "file", "PATH", "Attach a UTF-8 text file or image to the next input"),
+    Attachments => (Editor, "attachments", "", "Inspect or remove an attachment from the current draft"),
     Copy => (Editor, "copy", "", "Copy the last completed answer"),
     Editor => (Editor, "editor", "", "Edit the draft in an external editor"),
     Export => (Editor, "export", "[PATH]", "Save offline HTML (.html), or a text transcript"),

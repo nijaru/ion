@@ -1,5 +1,9 @@
 //! Coordinate editor replacement with independent foreground discovery.
-use super::{EditorDraft, Frontend, RecoveredDraft, interaction::InputTarget};
+use super::{
+    EditorDraft, Frontend, RecoveredDraft,
+    interaction::InputTarget,
+    picker::{Picker, PickerItem, PickerValue},
+};
 use ion_ai::Message;
 use ion_app::attachments::AttachmentSource;
 
@@ -61,6 +65,65 @@ impl Frontend {
             self.gestures.invalidate();
             self.pickers.close();
         }
+    }
+
+    pub(super) fn open_attachments(&mut self) {
+        if self.editor.attachments.is_empty() {
+            self.status = "No attachments on this draft".into();
+            return;
+        }
+        self.gestures.invalidate();
+        self.editor.break_edit_focus();
+        self.editor.completion.clear();
+        let items = self
+            .editor
+            .attachments
+            .iter()
+            .enumerate()
+            .map(|(index, attachment)| {
+                let description = match attachment {
+                    AttachmentSource::File(path) | AttachmentSource::ImageFile(path) => path
+                        .strip_prefix(&self.cwd)
+                        .unwrap_or(path)
+                        .display()
+                        .to_string(),
+                    AttachmentSource::Text(file) => file.name.clone(),
+                    AttachmentSource::Image(image) => {
+                        format!("Image · {:?}", image.content.mime_type())
+                    }
+                    AttachmentSource::ImageBytes { bytes, .. } => {
+                        format!("Image · {} bytes", bytes.len())
+                    }
+                };
+                PickerItem {
+                    label: format!("{} · {description}", index + 1),
+                    detail: None,
+                    value: PickerValue::RemoveAttachment {
+                        index,
+                        baseline: self.editor.baseline,
+                    },
+                }
+            })
+            .collect();
+        self.pickers.open(Picker {
+            title: "Remove draft attachment",
+            query: String::new(),
+            selected: 0,
+            items,
+        });
+    }
+
+    pub(super) fn remove_attachment(&mut self, index: usize, baseline: u64) {
+        if self.editor.baseline != baseline || index >= self.editor.attachments.len() {
+            self.status = "Draft attachments changed; reopen the picker".into();
+            return;
+        }
+        // As with adding an attachment, an earlier whole-draft undo must
+        // never swap in an attachment set from a different baseline.
+        self.editor.reset_edit_baseline();
+        self.editor.attachments.remove(index);
+        self.gestures.invalidate();
+        self.status = "Attachment removed".into();
     }
 
     pub(super) fn restore_input(&mut self, input: Message) -> Result<(), &'static str> {

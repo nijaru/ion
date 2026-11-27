@@ -312,6 +312,10 @@ pub(super) async fn apply_picker(
         return Ok(());
     }
     let result = match value {
+        PickerValue::RemoveAttachment { index, baseline } => {
+            ui.remove_attachment(index, baseline);
+            return Ok(());
+        }
         PickerValue::LiveTool(identity) => {
             ui.open_live_details(super::evidence::Select::Identity(identity));
             return Ok(());
