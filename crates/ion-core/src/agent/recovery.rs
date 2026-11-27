@@ -73,6 +73,7 @@ impl Agent {
     /// Explicitly continue an unfinished Turn from one exact committed checkpoint.
     /// Missing observations become Unknown; no old call or guest is replayed.
     /// Retrying this checkpoint is stale, not another execution authorization.
+    /// Losing the admission reply does not stop the reserved continuation.
     pub async fn resume_turn<F, M: Send + 'static>(
         &self,
         session: Arc<Session>,
@@ -88,36 +89,46 @@ impl Agent {
         let stop = stop.child_token();
         self.preflight_access(&stop).await?;
         let io = session.io()?;
-        let turn_io = session.io()?;
         let agent = self.clone();
-        io.run_with(move |session| {
-            let mut observe = Some(observe);
-            let (point, operation) = session.operations.start_prepared(stop.clone(), || {
-                agent.validate_context(session, &stop)?;
-                if session.model_preference()?.as_ref() != Some(&agent.model) {
-                    return Err(AgentError::Session(SessionError::RecoveryAuthorityChanged));
-                }
-                agent.service.validate_controls(
-                    &agent.model,
-                    &agent.limits.controls(session.reasoning()?, true),
-                )?;
-                let (binding, catalog) = agent.admission_binding(session, &instructions)?;
-                let binding = binding.ok_or(SessionError::RecoveryAuthorityChanged)?;
-                let (point, interrupted) = session.resume_turn(expected, &binding)?;
-                let observe = observe.take().expect("resumed admission owns its observer");
+        let (point, operation) = session
+            .operations
+            .start_admitting(stop.clone(), async move {
+                let admission_agent = agent.clone();
+                let admission_stop = stop.clone();
+                let admission_instructions = instructions.clone();
+                let (point, start) = io
+                    .run_with(move |session| -> Result<_, AgentError> {
+                        admission_agent.validate_context(session, &admission_stop)?;
+                        if session.model_preference()?.as_ref() != Some(&admission_agent.model) {
+                            return Err(SessionError::RecoveryAuthorityChanged.into());
+                        }
+                        admission_agent.service.validate_controls(
+                            &admission_agent.model,
+                            &admission_agent.limits.controls(session.reasoning()?, true),
+                        )?;
+                        let (binding, catalog) =
+                            admission_agent.admission_binding(session, &admission_instructions)?;
+                        let binding = binding.ok_or(SessionError::RecoveryAuthorityChanged)?;
+                        let (point, interrupted) = session.resume_turn(expected, &binding)?;
+                        Ok((
+                            point,
+                            TurnStart {
+                                turn: point.turn,
+                                interrupted,
+                                origin: TurnOrigin::Resumed { point },
+                                catalog,
+                            },
+                        ))
+                    })
+                    .await?;
                 Ok((
                     point,
                     Some(async move {
                         let (mut observe, failed) = contained_observer(observe, stop.clone());
                         let result = agent
                             .run_admitted(
-                                turn_io,
-                                TurnStart {
-                                    turn: point.turn,
-                                    interrupted,
-                                    origin: TurnOrigin::Resumed { point },
-                                    catalog,
-                                },
+                                io,
+                                start,
                                 instructions,
                                 stop,
                                 steering.as_ref(),
@@ -130,12 +141,11 @@ impl Agent {
                         )
                     }),
                 ))
-            })?;
-            Ok((
-                point,
-                operation.expect("continuation always retains an operation"),
-            ))
-        })
-        .await
+            })
+            .await?;
+        Ok((
+            point,
+            operation.expect("continuation always retains an operation"),
+        ))
     }
 }
