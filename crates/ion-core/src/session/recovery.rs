@@ -48,22 +48,40 @@ pub struct RecoveryState {
     pub authority: AuthorityScope,
 }
 
-fn recovery_at(store: &Store, session: uuid::Uuid) -> Option<RecoveryState> {
-    let turn = store.working.state.active?;
-    let binding = store
-        .working
-        .state
-        .recovery
-        .as_ref()
-        .filter(|binding| binding.session == session)?;
-    Some(RecoveryState {
-        point: RecoveryPoint {
-            session,
-            turn,
-            checkpoint: store.working.state.sequence,
-        },
-        authority: binding.authority.clone(),
-    })
+impl journal::WorkingJournal {
+    pub(super) fn recovery_state(&self) -> Option<RecoveryState> {
+        let session = self.identity().session;
+        let turn = self.state.active?;
+        let binding = self
+            .state
+            .recovery
+            .as_ref()
+            .filter(|binding| binding.session == session)?;
+        Some(RecoveryState {
+            point: RecoveryPoint {
+                session,
+                turn,
+                checkpoint: self.state.sequence,
+            },
+            authority: binding.authority.clone(),
+        })
+    }
+
+    pub(super) fn recovery_for_receipt(
+        &self,
+        receipt: RequestReceipt,
+    ) -> Result<Option<RecoveryState>, SessionError> {
+        if receipt.session == self.identity().session
+            && self.state.active == Some(receipt.turn)
+            && receipt.end.is_none()
+        {
+            self.recovery_state()
+                .map(Some)
+                .ok_or(SessionError::RecoveryAuthorityChanged)
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl Session {
@@ -71,7 +89,7 @@ impl Session {
     /// stopped. Callers must explicitly choose whether to continue despite uncertainty.
     pub fn recovery_state(&self) -> Result<Option<RecoveryState>, SessionError> {
         let store = self.lock_store()?;
-        Ok(recovery_at(&store, self.id()))
+        Ok(store.working.recovery_state())
     }
 
     pub(super) fn recovery_for_request(
@@ -79,16 +97,12 @@ impl Session {
         key: &RequestKey,
     ) -> Result<Option<RecoveryState>, SessionError> {
         let store = self.lock_store()?;
-        let Some(turn) = store.working.state.active else {
+        if store.working.state.active.is_none() {
             return Ok(None);
-        };
-        let receipt = submission::request_receipt(&store.connection, self.id(), key, None)?;
-        if receipt.is_some_and(|receipt| receipt.turn == turn && receipt.end.is_none()) {
-            recovery_at(&store, self.id())
-                .map(Some)
-                .ok_or(SessionError::RecoveryAuthorityChanged)
-        } else {
-            Ok(None)
+        }
+        match submission::request_receipt(&store.connection, self.id(), key, None)? {
+            Some(receipt) => store.working.recovery_for_receipt(receipt),
+            None => Ok(None),
         }
     }
 
@@ -98,33 +112,7 @@ impl Session {
         binding: &RecoveryBinding,
     ) -> Result<(RecoveryPoint, usize), SessionError> {
         let mut store = self.lock_store()?;
-        if expected.session != self.id()
-            || store.working.state.active != Some(expected.turn)
-            || expected.checkpoint != store.working.state.sequence
-        {
-            return Err(SessionError::StaleRecoveryPoint);
-        }
-        if binding.session != self.id() || store.working.state.recovery.as_ref() != Some(binding) {
-            return Err(SessionError::RecoveryAuthorityChanged);
-        }
-        let interrupted = store.working.state.pending.len();
-        let mut entries = vec![SessionEntry::TurnResumed {
-            turn: expected.turn,
-            checkpoint: expected.checkpoint,
-        }];
-        entries.extend(store.working.orphaned_backgrounds(self.id()));
-        entries.extend(pending_results(
-            expected.turn,
-            &store.working.state.pending,
-            &BTreeSet::new(),
-        ));
-        store.append(&entries)?;
-        Ok((
-            RecoveryPoint {
-                checkpoint: store.working.state.sequence,
-                ..expected
-            },
-            interrupted,
-        ))
+        let change = store.working.plan_continuation(expected, binding)?;
+        store.commit_turn_change(change)
     }
 }

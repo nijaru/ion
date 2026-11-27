@@ -60,6 +60,27 @@ impl WorkingJournal {
         journal
     }
 
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    pub(in crate::session) fn projected_request(
+        &self,
+        key: &RequestKey,
+    ) -> Option<(u64, RequestReceipt)> {
+        let (entry, turn, end) = self.keys.request(key)?;
+        Some((
+            entry,
+            RequestReceipt {
+                session: self.identity.session,
+                key: key.clone(),
+                turn,
+                end,
+            },
+        ))
+    }
+
     pub(in crate::session) fn identity(&self) -> JournalIdentity {
         self.identity
     }

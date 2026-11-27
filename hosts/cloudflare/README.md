@@ -18,7 +18,7 @@ cargo install --locked wasm-bindgen-cli --version 0.2.127
 npm run test:bridge
 ```
 
-The bridge replays a confirmed cut into the same Rust journal projection used by native Sessions. A bound writer keeps that projection live across successive appends. While a flush is pending, readers see the last acknowledged state and further writes are refused. The bridge is internal to the host; it does not expose a request or tool API.
+The bridge shares Rust’s journal projection, keyed admission, and continuation planning with native Sessions. A bound writer keeps the projection live across appends. While a flush is pending, reads reflect the last acknowledged state and further writes are refused. This is an internal host interface, not a public request or tool API. The host must authenticate the caller and reconstruct the recovery binding before admitting or continuing work.
 
 A host claims one writer generation at startup. Each append checks the source journal identity, writer generation, and expected tail before inserting a batch. Records are split into 1 MiB chunks in the same transaction. The writer acknowledges the new tail only after `storage.sync()` succeeds and it still owns that generation. An uncertain result fences the writer; reopen the committed journal rather than retrying the batch.
 

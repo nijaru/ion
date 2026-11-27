@@ -101,7 +101,7 @@ impl PreparedNavigation<'_> {
     pub fn commit(&mut self) -> Result<ContextPosition, SessionError> {
         let mut store = self.session.lock_store()?;
         self.session.check_position(&store, self.expected)?;
-        let mut entries = interrupted_operation_entries(&store, self.session.id());
+        let mut entries = store.working.interrupted_operation_entries();
         entries.push(SessionEntry::ContextSelected {
             head_entry: self.head,
         });

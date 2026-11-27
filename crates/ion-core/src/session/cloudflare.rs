@@ -3,14 +3,18 @@
 //! a confirmed read cut and owns its writer generation.
 use std::cell::{Cell, RefCell};
 
+use ion_ai::{Message, ModelRef};
 use js_sys::{Array, Error, Object, Promise, Reflect, Uint8Array};
+use serde::{Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsCast, prelude::*};
 
 use super::{
-    SessionEntry, SessionError,
+    RecoveryBinding, RecoveryPoint, RequestKey, RequestReceipt, SessionEntry, SessionError,
+    SubmissionRequest, TurnAdmission,
     journal::{self, AppendBatch, EncodedRecord, EntryRows, JournalIdentity, WorkingJournal},
     projection::ProjectionMode,
     store::Header,
+    turn_write::{AdmissionPlan, TurnChange},
 };
 
 #[wasm_bindgen]
@@ -103,8 +107,8 @@ impl WorkerJournalCut {
     }
 }
 
-/// This is the live journal writer, not a Turn engine. The fixture exercises
-/// it with records; the eventual Session will supply typed mutations.
+/// The trusted host's journal owner, not an RPC surface or a Turn engine.
+/// The host must reconstruct the binding and arrange wakeup before admission.
 #[wasm_bindgen]
 pub struct WorkerJournal {
     working: RefCell<WorkingJournal>,
@@ -129,10 +133,98 @@ impl WorkerJournal {
         self.working.borrow().messages.len()
     }
 
-    /// Keep the single writer reservation, not a projection borrow or SQL
-    /// transaction, across the host wait. Apply only the exact confirmed batch.
+    // The bridge carries these DTOs as JSON bytes, never via JS numbers.
+    #[wasm_bindgen(js_name = requestReceipt)]
+    pub fn request_receipt(&self, key: &[u8]) -> Result<Option<Vec<u8>>, JsValue> {
+        let key = decode(key)?;
+        self.working
+            .borrow()
+            .projected_request(&key)
+            .map(|(_, receipt)| encode(receipt))
+            .transpose()
+    }
+
+    #[wasm_bindgen(js_name = recoveryForRequest)]
+    pub fn recovery_for_request(&self, key: &[u8]) -> Result<Option<Vec<u8>>, JsValue> {
+        let key = decode(key)?;
+        let working = self.working.borrow();
+        let Some((_, receipt)) = working.projected_request(&key) else {
+            return Ok(None);
+        };
+        working
+            .recovery_for_receipt(receipt)
+            .map_err(js_error)?
+            .map(encode)
+            .transpose()
+    }
+
+    pub async fn submit(
+        &self,
+        request: Vec<u8>,
+        model: Vec<u8>,
+        binding: Vec<u8>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let permit = WritePermit::reserve(&self.phase)?;
+        let SubmissionRequest { key, input } = decode(&request)?;
+        let model: ModelRef = decode(&model)?;
+        let binding: RecoveryBinding = decode(&binding)?;
+        let (session, plan) = {
+            let working = self.working.borrow();
+            let session = working.identity().session;
+            let plan = working
+                .plan_admission(
+                    input,
+                    model,
+                    Some(key.clone()),
+                    Some(binding),
+                    Vec::new(),
+                    |key, input| {
+                        reconcile_request(&working, key, input, |entry| {
+                            self.read_at(entry, working.state.sequence)
+                        })
+                    },
+                )
+                .map_err(js_error)?;
+            (session, plan)
+        };
+        let result = match plan {
+            AdmissionPlan::Existing(receipt) => Submission::Existing { receipt },
+            AdmissionPlan::Write(change) => {
+                let tail = self.commit_records(permit, change.entries()).await?;
+                let TurnAdmission::New { turn, .. } = change.committed(tail) else {
+                    unreachable!("a committed StartTurn accepts a new turn")
+                };
+                Submission::Accepted {
+                    receipt: RequestReceipt {
+                        session,
+                        key,
+                        turn,
+                        end: None,
+                    },
+                }
+            }
+        };
+        encode(result)
+    }
+
+    pub async fn resume(&self, point: Vec<u8>, binding: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let permit = WritePermit::reserve(&self.phase)?;
+        let point: RecoveryPoint = decode(&point)?;
+        let binding: RecoveryBinding = decode(&binding)?;
+        let change = self
+            .working
+            .borrow()
+            .plan_continuation(point, &binding)
+            .map_err(js_error)?;
+        let tail = self.commit_records(permit, change.entries()).await?;
+        let (point, interrupted) = change.committed(tail);
+        encode(Continuation { point, interrupted })
+    }
+
+    // Fixture for the other record types until the live Session owns every
+    // mutation. Do not expose raw appends to requests or tools.
     pub async fn append(&self, records: Array) -> Result<u64, JsValue> {
-        let mut permit = WritePermit::reserve(&self.phase)?;
+        let permit = WritePermit::reserve(&self.phase)?;
         if records.length() == 0 {
             return Err(js_error("append requires a nonempty batch"));
         }
@@ -146,14 +238,30 @@ impl WorkerJournal {
                 serde_json::from_slice::<SessionEntry>(&bytes).map_err(js_error)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        self.commit_records(permit, &records).await
+    }
+}
 
+impl WorkerJournal {
+    fn read_at(&self, entry: u64, tail: u64) -> Result<SessionEntry, SessionError> {
+        let tail = i64::try_from(tail).map_err(|_| SessionError::InvalidHistory)?;
+        read_entry(entry, |seq| self.writer.read_owned_record(seq, tail))
+    }
+
+    /// Keep the writer reservation, not a projection borrow or a transaction,
+    /// across the host wait. Publish only the exact confirmed batch.
+    async fn commit_records(
+        &self,
+        mut permit: WritePermit<'_>,
+        records: &[SessionEntry],
+    ) -> Result<u64, JsValue> {
         let prepared = {
             let working = self.working.borrow();
-            let tail = i64::try_from(working.state.sequence).map_err(js_error)?;
+            let tail = working.state.sequence;
             working
                 .prepare(
-                    &records,
-                    |entry| read_entry(entry, |seq| self.writer.read_owned_record(seq, tail)),
+                    records,
+                    |entry| self.read_at(entry, tail),
                     |_| {
                         Err(SessionError::Storage(
                             "the Worker bridge has no artifact store".into(),
@@ -183,6 +291,57 @@ impl WorkerJournal {
         permit.release();
         Ok(tail)
     }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum Submission {
+    Existing { receipt: RequestReceipt },
+    Accepted { receipt: RequestReceipt },
+}
+
+#[derive(Serialize)]
+struct Continuation {
+    point: RecoveryPoint,
+    interrupted: usize,
+}
+
+fn reconcile_request(
+    working: &WorkingJournal,
+    key: &RequestKey,
+    input: &Message,
+    read: impl FnOnce(u64) -> Result<SessionEntry, SessionError>,
+) -> Result<Option<RequestReceipt>, SessionError> {
+    let Some((entry, receipt)) = working.projected_request(key) else {
+        return Ok(None);
+    };
+    let SessionEntry::TurnStarted {
+        turn,
+        input: accepted,
+        request: Some(found_key),
+        ..
+    } = read(entry)?
+    else {
+        return Err(SessionError::InvalidHistory);
+    };
+    if turn != receipt.turn || &found_key != key {
+        return Err(SessionError::InvalidHistory);
+    }
+    if &accepted != input {
+        return Err(SessionError::RequestConflict);
+    }
+    Ok(Some(receipt))
+}
+
+fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, JsValue> {
+    if bytes.len() > journal::MAX_ENTRY_BYTES {
+        return Err(js_error(SessionError::EntryTooLarge));
+    }
+    serde_json::from_slice(bytes).map_err(js_error)
+}
+
+fn encode(value: impl Serialize) -> Result<Vec<u8>, JsValue> {
+    serde_json::to_vec(&value).map_err(js_error)
 }
 
 #[derive(Clone, Copy)]

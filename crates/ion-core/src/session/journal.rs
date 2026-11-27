@@ -143,7 +143,7 @@ impl WorkingJournal {
             target_os = "unknown",
             feature = "cloudflare-journal"
         ))]
-        let new_keys = self.keys.extension(entries)?;
+        let new_keys = self.keys.extension(self.state.sequence, entries)?;
         let mut replacement = None;
         let mut candidate = self.state.clone();
         // A shared pending shell owns the final context message. Seed only that

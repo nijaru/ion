@@ -25,6 +25,19 @@ const ended = (turn) => encode({ kind: "turn_ended", data: { turn, reason: "comp
 const select = (head_entry) => encode({ kind: "context_selected", data: { head_entry } });
 const start = started(1);
 const end = ended(1);
+const model = { provider: "fixture", model: "offline" };
+const requestKey = { scope: "bridge", id: "once" };
+const key = encode(requestKey);
+const request = (text = "accepted input") => encode({
+  key: requestKey, input: { role: "User", content: [{ Text: text }], provider_replay: null },
+});
+const authority = {
+  session: identity.session, authority: "fixture/principal/route-v1", fingerprint: Array(32).fill(7),
+};
+const binding = encode(authority);
+const decode = (bytes) => JSON.parse(new TextDecoder().decode(bytes));
+const submit = async (journal, bytes = request()) => decode(await journal.submit(bytes, encode(model), binding));
+const receipt = { session: identity.session, key: requestKey, turn: 1, end: null };
 const fresh = () => env.JOURNALS.get(env.JOURNALS.newUniqueId());
 const openCut = async (storage) => new WorkerJournalCut(await readJournalCut(storage));
 const bind = async (storage, writer) => (await openCut(storage)).bindWriter(writer);
@@ -52,9 +65,9 @@ test("Rust publishes only after acknowledgment, and replays the cut after evicti
     expect((await readJournalCut(storage)).tail).toBe(0n);
     hold = true;
     let acknowledged = false;
-    const append = journal.append([start]).then((tail) => {
+    const append = submit(journal).then((admission) => {
       acknowledged = true;
-      return tail;
+      return admission;
     });
     await entered.promise;
     // We are holding a reply, not a transaction or a Rust projection borrow.
@@ -64,10 +77,12 @@ test("Rust publishes only after acknowledgment, and replays the cut after evicti
     expect(journal.tail).toBe(0n);
     expect(journal.unfinishedTurn).toBeUndefined();
     expect(journal.messageCount).toBe(0);
+    expect(journal.requestReceipt(key)).toBeUndefined();
     expect(acknowledged).toBe(false);
     await expect(journal.append([end])).rejects.toMatchObject({ code: "busy" });
     release.resolve();
-    expect(await append).toBe(1n);
+    expect(await append).toEqual({ status: "accepted", receipt });
+    expect(decode(journal.requestReceipt(key))).toEqual(receipt);
     expect(journal.tail).toBe(1n);
     expect(journal.unfinishedTurn).toBe(1n);
     expect(journal.messageCount).toBe(1);
@@ -117,7 +132,7 @@ test("aborting during the Rust append reply leaves exactly the committed accepta
     }), identity, header);
     const journal = await bind(storage, writer);
     abort = true;
-    return journal.append([start]);
+    return submit(journal);
   })).rejects.toThrow(/abort during Rust append reply/);
   await runInDurableObject(env.JOURNALS.get(id), async (instance, { storage }) => {
     expect(instance.instance).not.toBe(previous);
@@ -125,8 +140,47 @@ test("aborting during the Rust append reply leaves exactly the committed accepta
     const journal = await bind(storage, writer);
     expect(journal.tail).toBe(1n);
     expect(journal.unfinishedTurn).toBe(1n);
-    await expect(journal.append([start])).rejects.toThrow();
+    expect(await submit(journal)).toEqual({ status: "existing", receipt });
+    await expect(submit(journal, request("different input"))).rejects.toThrow("different input");
     expect((await readJournalCut(storage)).tail).toBe(1n);
+  });
+});
+
+test("typed continuation checks scope and checkpoint, and settles a missing tool observation", async () => {
+  const stub = fresh();
+  await runInDurableObject(stub, async (_instance, { storage }) => {
+    const writer = await claimJournal(storage, identity, header);
+    const journal = await bind(storage, writer);
+    expect(await submit(journal)).toEqual({ status: "accepted", receipt });
+    await journal.append([encode({ kind: "assistant", data: {
+      turn: 1,
+      message: { role: "Assistant", content: [{ ToolCall: { id: "tool-1", name: "post", arguments: {} } }] },
+      tool_activities: [{ call_id: "tool-1", activity: { kind: "external", subject: "post" } }],
+      execution: { route: { logical: model, effective: model, reason: "user_request" } },
+    } })]);
+  });
+  await evictDurableObject(stub);
+  await runInDurableObject(stub, async (_instance, { storage }) => {
+    const writer = await claimJournal(storage, identity);
+    const journal = await bind(storage, writer);
+    const { point } = decode(journal.recoveryForRequest(key));
+    expect(point).toEqual({ session: identity.session, turn: 1, checkpoint: 2 });
+    const wrong = encode({ ...authority, fingerprint: Array(32).fill(1) });
+    await expect(journal.resume(encode(point), wrong)).rejects.toThrow("authority");
+    expect(journal.tail).toBe(2n);
+    expect(decode(await journal.resume(encode(point), binding))).toEqual({
+      point: { ...point, checkpoint: 4 }, interrupted: 1,
+    });
+    await expect(journal.resume(encode(point), binding)).rejects.toThrow("checkpoint is stale");
+    expect(journal.tail).toBe(4n);
+    const cut = await readJournalCut(storage);
+    expect(decode(cut.readRecord(3n))).toEqual({ kind: "turn_resumed", data: { turn: 1, checkpoint: 2 } });
+    expect(decode(cut.readRecord(4n))).toEqual({
+      kind: "tool_result", data: { turn: 1, result: { call_id: "tool-1", name: "post", outcome: { state: "unknown" } } },
+    });
+    await journal.append([end]);
+    expect(journal.recoveryForRequest(key)).toBeUndefined();
+    expect(await submit(journal)).toEqual({ status: "existing", receipt: { ...receipt, end: "completed" } });
   });
 });
 

@@ -227,7 +227,13 @@ pub(super) enum ProjectionMode {
 /// or the selected model context. Native SQLite also enforces them at insert.
 #[derive(Default)]
 pub(super) struct JournalKeys {
-    requests: BTreeSet<RequestKey>,
+    requests: BTreeMap<RequestKey, (u64, u64)>,
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    endings: BTreeMap<u64, TurnEndReason>,
     runs: BTreeSet<uuid::Uuid>,
     created_delegations: BTreeSet<uuid::Uuid>,
     bindings: BTreeSet<uuid::Uuid>,
@@ -238,6 +244,7 @@ impl JournalKeys {
     fn observe(
         &mut self,
         committed: Option<&Self>,
+        sequence: u64,
         entry: &SessionEntry,
     ) -> Result<(), SessionError> {
         fn insert<T: Ord>(
@@ -252,13 +259,26 @@ impl JournalKeys {
         }
         match entry {
             SessionEntry::TurnStarted {
-                request: Some(key), ..
+                turn,
+                request: Some(key),
+                ..
             } => {
-                insert(
-                    &mut self.requests,
-                    committed.map(|keys| &keys.requests),
-                    key.clone(),
-                )?;
+                if committed.is_some_and(|keys| keys.requests.contains_key(key))
+                    || self
+                        .requests
+                        .insert(key.clone(), (sequence, *turn))
+                        .is_some()
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+            }
+            #[cfg(all(
+                target_arch = "wasm32",
+                target_os = "unknown",
+                feature = "cloudflare-journal"
+            ))]
+            SessionEntry::TurnEnded { turn, reason } => {
+                self.endings.insert(*turn, reason.clone());
             }
             SessionEntry::DelegationAdmitted { record } => {
                 insert(&mut self.runs, committed.map(|keys| &keys.runs), record.run)?;
@@ -294,10 +314,17 @@ impl JournalKeys {
         target_os = "unknown",
         feature = "cloudflare-journal"
     ))]
-    pub(super) fn extension(&self, entries: &[SessionEntry]) -> Result<Self, SessionError> {
+    pub(super) fn extension(
+        &self,
+        mut sequence: u64,
+        entries: &[SessionEntry],
+    ) -> Result<Self, SessionError> {
         let mut pending = Self::default();
         for entry in entries {
-            pending.observe(Some(self), entry)?;
+            sequence = sequence
+                .checked_add(1)
+                .ok_or(SessionError::InvalidHistory)?;
+            pending.observe(Some(self), sequence, entry)?;
         }
         Ok(pending)
     }
@@ -307,8 +334,19 @@ impl JournalKeys {
         target_os = "unknown",
         feature = "cloudflare-journal"
     ))]
+    pub(super) fn request(&self, key: &RequestKey) -> Option<(u64, u64, Option<TurnEndReason>)> {
+        let &(sequence, turn) = self.requests.get(key)?;
+        Some((sequence, turn, self.endings.get(&turn).cloned()))
+    }
+
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
     pub(super) fn extend(&mut self, pending: Self) {
         self.requests.extend(pending.requests);
+        self.endings.extend(pending.endings);
         self.runs.extend(pending.runs);
         self.created_delegations.extend(pending.created_delegations);
         self.bindings.extend(pending.bindings);
@@ -331,8 +369,8 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     for entry in entries {
         let entry = entry?;
         let entry = entry.borrow();
-        keys.observe(None, entry)?;
         let transition = state.apply(entry, &|coordinate| context_index.is_settled(coordinate))?;
+        keys.observe(None, state.sequence, entry)?;
         if let SessionEntry::ContextSelected { head_entry } = entry {
             if !context_index.can_select(*head_entry) {
                 return Err(SessionError::InvalidContextPoint);

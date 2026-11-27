@@ -184,6 +184,14 @@ impl Store {
         result
     }
 
+    pub(super) fn commit_turn_change<C: super::turn_write::TurnChange>(
+        &mut self,
+        change: C,
+    ) -> Result<C::Receipt, SessionError> {
+        self.append(change.entries())?;
+        Ok(change.committed(self.working.state.sequence))
+    }
+
     pub(super) fn append(&mut self, entries: &[SessionEntry]) -> Result<(), SessionError> {
         self.ensure_healthy()?;
         let prepared = self.working.prepare(

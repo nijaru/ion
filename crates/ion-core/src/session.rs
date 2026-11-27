@@ -92,6 +92,7 @@ mod store;
 mod submission;
 #[cfg(test)]
 mod submission_tests;
+mod turn_write;
 use crate::request::{RequestCalibration, RequestMeasurement, RequestScope};
 use code_inspection::ChildRecordIndex;
 use context::{ProjectedMessage, context_projection};
@@ -1008,7 +1009,7 @@ impl Session {
         exclude_from_context: bool,
     ) -> Result<u64, SessionError> {
         let mut store = self.lock_store()?;
-        let mut entries = interrupted_operation_entries(&store, self.id());
+        let mut entries = store.working.interrupted_operation_entries();
         entries.push(SessionEntry::UserShellAdmitted {
             command,
             exclude_from_context,
@@ -1486,44 +1487,21 @@ impl Session {
         recovery: Option<RecoveryBinding>,
         completion: Vec<crate::CompletionNotice>,
     ) -> Result<TurnAdmission, SessionError> {
-        if !valid_user_message(&input)
-            || (!completion.is_empty() && input != crate::completion::notice_message(&completion))
-        {
-            return Err(SessionError::InvalidUserInput);
-        }
         let mut store = self.lock_store()?;
-        if let Some(key) = &request
-            && let Some(receipt) =
-                submission::request_receipt(&store.connection, self.id(), key, Some(&input))?
-        {
-            return Ok(TurnAdmission::Existing(receipt));
-        }
-        let mut entries = interrupted_operation_entries(&store, self.id());
-        let interrupted = store.working.state.pending.len();
-        let turn = store
-            .working
-            .state
-            .last_id
-            .checked_add(1)
-            .ok_or(SessionError::TurnIdExhausted)?;
-        entries.push(SessionEntry::TurnStarted {
-            turn,
+        let plan = store.working.plan_admission(
             input,
             model,
-            completion,
             request,
             recovery,
-        });
-        store.append(&entries)?;
-        let Some(SessionEntry::TurnStarted { input, .. }) = entries.pop() else {
-            unreachable!("admission batch ends with its committed TurnStarted");
-        };
-        Ok(TurnAdmission::New {
-            turn,
-            entry: store.working.state.sequence,
-            interrupted,
-            input,
-        })
+            completion,
+            |key, input| {
+                submission::request_receipt(&store.connection, self.id(), key, Some(input))
+            },
+        )?;
+        match plan {
+            turn_write::AdmissionPlan::Existing(receipt) => Ok(TurnAdmission::Existing(receipt)),
+            turn_write::AdmissionPlan::Write(change) => store.commit_turn_change(change),
+        }
     }
 
     #[cfg(test)]
@@ -1857,25 +1835,6 @@ impl Session {
             settlements,
         })
     }
-}
-
-fn interrupted_operation_entries(store: &Store, session: uuid::Uuid) -> Vec<SessionEntry> {
-    let state = &store.working.state;
-    let mut entries = store.working.orphaned_backgrounds(session);
-    if let Some(shell) = &state.pending_shell {
-        entries.push(SessionEntry::UserShellSettled {
-            admission_entry: shell.admission_entry,
-            outcome: UserShellOutcome::Unknown,
-        });
-    }
-    if let Some(turn) = state.active {
-        entries.extend(pending_results(turn, &state.pending, &BTreeSet::new()));
-        entries.push(SessionEntry::TurnEnded {
-            turn,
-            reason: TurnEndReason::Interrupted,
-        });
-    }
-    entries
 }
 
 /// Preserve entry coordinates, compaction boundaries and replay facts exactly.
