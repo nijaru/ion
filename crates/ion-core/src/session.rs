@@ -125,7 +125,7 @@ fn completed_termination() -> ResponseTermination {
     ResponseTermination::Completed
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub(crate) struct CommittedInputEntries {
     pub steering: std::ops::Range<u64>,
     pub completion: Option<u64>,
@@ -182,10 +182,12 @@ impl RequestBasis {
     }
 }
 
+#[derive(Deserialize)]
 pub(crate) struct AssistantRecord {
     pub message: Message,
     pub tool_activities: Vec<StoredToolActivity>,
     pub execution: ModelExecution,
+    #[serde(default = "Usage::unknown")]
     pub usage: Usage,
 }
 
@@ -207,12 +209,13 @@ impl AssistantRecord {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub(crate) struct CommittedAssistant {
     pub entry: u64,
     pub end: Option<u64>,
 }
 
+#[derive(Serialize)]
 pub(crate) struct TurnClosure {
     pub entry: u64,
     pub settlements: Vec<(crate::ToolSettlement, ToolActivity)>,
@@ -1198,29 +1201,8 @@ impl Session {
         context: ModelContextSnapshot,
     ) -> Result<bool, SessionError> {
         let mut store = self.lock_store()?;
-        if store.working.state.active != Some(turn) || !store.working.state.pending.is_empty() {
-            return Err(SessionError::InvalidHistory);
-        }
-        let mut entries = Vec::new();
-        // The first observed assistant still establishes the initial effective
-        // model; preparation must not manufacture a completed execution fact.
-        if store
-            .working
-            .state
-            .last_effective_model
-            .as_ref()
-            .is_some_and(|previous| previous != &model)
-        {
-            entries.push(SessionEntry::EffectiveModelChanged { turn, model });
-        }
-        if store.working.state.last_context.as_ref() != Some(&context) {
-            entries.push(SessionEntry::ModelContextChanged { turn, context });
-        }
-        if entries.is_empty() {
-            return Ok(false);
-        }
-        store.append(&entries)?;
-        Ok(true)
+        let change = store.working.plan_request(turn, model, context)?;
+        store.commit_turn_change(change)
     }
 
     /// Permanently omit prior opaque replay from future model requests after
@@ -1568,50 +1550,11 @@ impl Session {
         steering: Vec<Message>,
         completion: Vec<crate::CompletionNotice>,
     ) -> Result<(CommittedAssistant, CommittedInputEntries), SessionError> {
-        let continue_turn = !steering.is_empty() || !completion.is_empty();
-        let has_calls = assistant
-            .message
-            .content
-            .iter()
-            .any(|part| matches!(part, Content::ToolCall(_)));
-        let mut entries = vec![assistant.into_entry(turn, ResponseTermination::Completed)?];
-        if !has_calls && !continue_turn {
-            entries.push(SessionEntry::TurnEnded {
-                turn,
-                reason: TurnEndReason::Completed,
-            });
-        }
-        entries.extend(
-            steering
-                .into_iter()
-                .map(|input| SessionEntry::Steering { turn, input }),
-        );
-        if !completion.is_empty() {
-            entries.push(SessionEntry::Completion {
-                turn,
-                notices: completion,
-            });
-        }
         let mut store = self.lock_store()?;
-        let entry = store.working.state.sequence + 1;
-        store.append(&entries)?;
-        let mut inputs = CommittedInputEntries::default();
-        let mut end = None;
-        for (offset, fact) in entries.iter().enumerate() {
-            let coordinate = entry + offset as u64;
-            match fact {
-                SessionEntry::Steering { .. } => {
-                    if inputs.steering.is_empty() {
-                        inputs.steering.start = coordinate;
-                    }
-                    inputs.steering.end = coordinate + 1;
-                }
-                SessionEntry::Completion { .. } => inputs.completion = Some(coordinate),
-                SessionEntry::TurnEnded { .. } => end = Some(coordinate),
-                _ => {}
-            }
-        }
-        Ok((CommittedAssistant { entry, end }, inputs))
+        let change = store
+            .working
+            .plan_assistant(turn, assistant, steering, completion)?;
+        store.commit_turn_change(change)
     }
 
     /// Publish a truncated assistant attempt and every unexecuted call's
@@ -1622,37 +1565,9 @@ impl Session {
         turn: u64,
         assistant: AssistantRecord,
     ) -> Result<(u64, Vec<crate::ToolSettlement>), SessionError> {
-        let results = assistant.message
-            .content
-            .iter()
-            .filter_map(|part| match part {
-                Content::ToolCall(call) => Some(crate::ToolSettlement {
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    outcome: crate::ToolOutcome::NotDispatched {
-                        reason: "the model response hit the output token limit and its arguments may be truncated. Reissue the complete call.".into(),
-                    },
-                }),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        if results.is_empty() {
-            return Err(SessionError::InvalidHistory);
-        }
-        let mut entries = vec![assistant.into_entry(
-            turn,
-            ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
-        )?];
-        entries.extend(
-            results
-                .iter()
-                .cloned()
-                .map(|result| SessionEntry::ToolResult { turn, result }),
-        );
         let mut store = self.lock_store()?;
-        let entry = store.working.state.sequence + 1;
-        store.append(&entries)?;
-        Ok((entry, results))
+        let change = store.working.plan_truncated_assistant(turn, assistant)?;
+        store.commit_turn_change(change)
     }
 
     #[cfg(test)]
@@ -1678,28 +1593,12 @@ impl Session {
         inputs: Vec<Message>,
         completion: Vec<crate::CompletionNotice>,
     ) -> Result<CommittedInputEntries, SessionError> {
-        let steering_count = inputs.len() as u64;
-        let has_completion = !completion.is_empty();
-        let mut entries = inputs
-            .into_iter()
-            .map(|input| SessionEntry::Steering { turn, input })
-            .collect::<Vec<_>>();
-        if !completion.is_empty() {
-            entries.push(SessionEntry::Completion {
-                turn,
-                notices: completion,
-            });
-        }
-        if entries.is_empty() {
+        if inputs.is_empty() && completion.is_empty() {
             return Ok(CommittedInputEntries::default());
         }
         let mut store = self.lock_store()?;
-        let first = store.working.state.sequence + 1;
-        store.append(&entries)?;
-        Ok(CommittedInputEntries {
-            steering: first..first + steering_count,
-            completion: has_completion.then_some(first + steering_count),
-        })
+        let change = store.working.plan_inputs(turn, inputs, completion)?;
+        store.commit_turn_change(change)
     }
 
     #[cfg(test)]
@@ -1724,8 +1623,10 @@ impl Session {
         projection: crate::ToolResultProjection,
         context: Option<ModelContextSnapshot>,
     ) -> Result<(), SessionError> {
+        let occurrence = self.tool_occurrence(turn, &result.call_id)?;
         self.record_tool_settlement_with_context(
             turn,
+            occurrence,
             crate::ToolSettlement::observed(result, projection),
             context,
         )
@@ -1734,15 +1635,15 @@ impl Session {
     pub(crate) fn record_tool_settlement_with_context(
         &self,
         turn: u64,
+        occurrence: crate::ToolOccurrence,
         result: crate::ToolSettlement,
         context: Option<ModelContextSnapshot>,
     ) -> Result<(), SessionError> {
-        let mut entries = vec![SessionEntry::ToolResult { turn, result }];
-        if let Some(context) = context {
-            entries.push(SessionEntry::ModelContextChanged { turn, context });
-        }
         let mut store = self.lock_store()?;
-        store.append(&entries)
+        let change = store
+            .working
+            .plan_settlement(turn, occurrence, result, context)?;
+        store.commit_turn_change(change)
     }
 
     #[cfg(test)]
@@ -1802,38 +1703,8 @@ impl Session {
         unstarted: &BTreeSet<String>,
     ) -> Result<TurnClosure, SessionError> {
         let mut store = self.lock_store()?;
-        if store.working.state.active != Some(turn) {
-            return Err(SessionError::InvalidHistory);
-        }
-        if unstarted.iter().any(|id| {
-            !store
-                .working
-                .state
-                .pending
-                .iter()
-                .any(|pending| &pending.call_id == id)
-        }) {
-            return Err(SessionError::InvalidHistory);
-        }
-        let settlements = store
-            .working
-            .state
-            .pending
-            .iter()
-            .map(|pending| {
-                (
-                    pending_settlement(pending, unstarted),
-                    pending.activity.clone(),
-                )
-            })
-            .collect();
-        let mut entries = pending_results(turn, &store.working.state.pending, unstarted);
-        entries.push(SessionEntry::TurnEnded { turn, reason });
-        store.append(&entries)?;
-        Ok(TurnClosure {
-            entry: store.working.state.sequence,
-            settlements,
-        })
+        let change = store.working.plan_turn_end(turn, reason, unstarted)?;
+        store.commit_turn_change(change)
     }
 }
 

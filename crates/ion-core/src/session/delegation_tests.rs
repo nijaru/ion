@@ -107,7 +107,7 @@ fn recovery_orders_lost_relationships_before_tools_and_rolls_back_as_one_batch()
             outcome: crate::ToolOutcome::Unknown,
         };
         assert!(matches!(
-            session.record_tool_settlement_with_context(1, result, None),
+            session.record_tool_settlement_with_context(1, record.site.tool, result, None),
             Err(SessionError::InvalidHistory)
         ));
         if composed {

@@ -188,7 +188,9 @@ impl Store {
         &mut self,
         change: C,
     ) -> Result<C::Receipt, SessionError> {
-        self.append(change.entries())?;
+        if !change.entries().is_empty() {
+            self.append(change.entries())?;
+        }
         Ok(change.committed(self.working.state.sequence))
     }
 

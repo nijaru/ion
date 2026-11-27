@@ -38,6 +38,22 @@ const binding = encode(authority);
 const decode = (bytes) => JSON.parse(new TextDecoder().decode(bytes));
 const submit = async (journal, bytes = request()) => decode(await journal.submit(bytes, encode(model), binding));
 const receipt = { session: identity.session, key: requestKey, turn: 1, end: null };
+const apply = async (journal, command, tail = journal.tail) =>
+  decode(await journal.applyTurn(tail, encode({ turn: 1, ...command })));
+const prepareRequest = { kind: "prepare_request", model, context: { instructions: "test", tools: [] } };
+const assistant = {
+  message: { role: "Assistant", content: [{ ToolCall: { id: "tool-1", name: "post", arguments: {} } }] },
+  tool_activities: [{ call_id: "tool-1", activity: { kind: "external", subject: "post" } }],
+  execution: { route: { logical: model, effective: model, reason: "user_request" } },
+};
+const observed = {
+  call_id: "tool-1", name: "post",
+  outcome: { state: "observed", projection: "observed",
+    output: { value: { count: 1 }, images: [], artifacts: [], is_error: false } },
+};
+const settle = (entry) => ({
+  kind: "settle_tool", occurrence: { assistant_entry: entry, ordinal: 0 }, result: observed,
+});
 const fresh = () => env.JOURNALS.get(env.JOURNALS.newUniqueId());
 const openCut = async (storage) => new WorkerJournalCut(await readJournalCut(storage));
 const bind = async (storage, writer) => (await openCut(storage)).bindWriter(writer);
@@ -152,12 +168,8 @@ test("typed continuation checks scope and checkpoint, and settles a missing tool
     const writer = await claimJournal(storage, identity, header);
     const journal = await bind(storage, writer);
     expect(await submit(journal)).toEqual({ status: "accepted", receipt });
-    await journal.append([encode({ kind: "assistant", data: {
-      turn: 1,
-      message: { role: "Assistant", content: [{ ToolCall: { id: "tool-1", name: "post", arguments: {} } }] },
-      tool_activities: [{ call_id: "tool-1", activity: { kind: "external", subject: "post" } }],
-      execution: { route: { logical: model, effective: model, reason: "user_request" } },
-    } })]);
+    const [committed] = await apply(journal, { kind: "assistant", assistant });
+    expect(committed).toEqual({ entry: 2, end: null });
   });
   await evictDurableObject(stub);
   await runInDurableObject(stub, async (_instance, { storage }) => {
@@ -178,9 +190,119 @@ test("typed continuation checks scope and checkpoint, and settles a missing tool
     expect(decode(cut.readRecord(4n))).toEqual({
       kind: "tool_result", data: { turn: 1, result: { call_id: "tool-1", name: "post", outcome: { state: "unknown" } } },
     });
-    await journal.append([end]);
+    expect(await apply(journal, { kind: "close", reason: "completed" })).toEqual({
+      entry: 5, settlements: [],
+    });
     expect(journal.recoveryForRequest(key)).toBeUndefined();
     expect(await submit(journal)).toEqual({ status: "existing", receipt: { ...receipt, end: "completed" } });
+  });
+});
+
+test("typed effects publish only on acknowledgment and a lost reply preserves the committed observation", async () => {
+  const id = env.JOURNALS.newUniqueId();
+  const stub = env.JOURNALS.get(id);
+  const nextContext = { instructions: "updated on observation", tools: [] };
+  const before = await runInDurableObject(stub, async (instance) => instance.instance);
+  await expect(runInDurableObject(stub, async (_instance, state) => {
+    const { storage } = state;
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let phase = "normal";
+    const writer = await claimJournal(withSync(storage, async () => {
+      await storage.sync();
+      if (phase === "hold") {
+        entered.resolve();
+        await release.promise;
+      }
+      if (phase === "abort") state.abort("test: lost typed observation reply");
+    }), identity, header);
+    const journal = await bind(storage, writer);
+    await submit(journal);
+    expect(await apply(journal, prepareRequest)).toBe(true);
+    expect(await apply(journal, prepareRequest)).toBe(false);
+    phase = "hold";
+    let acknowledged = false;
+    const intent = apply(journal, { kind: "assistant", assistant }).then((receipt) => {
+      acknowledged = true;
+      return receipt;
+    });
+    await entered.promise;
+    try {
+      expect((await openCut(storage)).tail).toBe(3n);
+      expect(journal.tail).toBe(2n);
+      expect(acknowledged).toBe(false);
+      await expect(apply(journal, settle(3), 3n)).rejects.toMatchObject({ code: "busy" });
+    } finally {
+      release.resolve();
+    }
+    const [{ entry }] = await intent;
+    phase = "abort";
+    return apply(journal, { ...settle(entry), context: nextContext });
+  })).rejects.toThrow("lost typed observation reply");
+
+  await runInDurableObject(env.JOURNALS.get(id), async (instance, { storage }) => {
+    expect(instance.instance).not.toBe(before);
+    const writer = await claimJournal(storage, identity);
+    const journal = await bind(storage, writer);
+    const { point } = decode(journal.recoveryForRequest(key));
+    expect(point.checkpoint).toBe(5);
+    const cut = await readJournalCut(storage);
+    expect(decode(cut.readRecord(4n))).toEqual({
+      kind: "tool_result", data: { turn: 1, result: observed },
+    });
+    expect(decode(cut.readRecord(5n))).toEqual({
+      kind: "model_context_changed", data: { turn: 1, context: nextContext },
+    });
+    expect(decode(await journal.resume(encode(point), binding))).toEqual({
+      point: { ...point, checkpoint: 6 }, interrupted: 0,
+    });
+    const [{ entry }] = await apply(journal, { kind: "assistant", assistant });
+    expect(entry).toBe(7);
+    // Providers may repeat a call ID. A stale observation cannot settle the
+    // new occurrence even if the caller supplies the current cut.
+    await expect(apply(journal, settle(3))).rejects.toThrow();
+    await expect(apply(journal, settle(entry), 6n)).rejects.toThrow("expected tail 6");
+    expect(journal.tail).toBe(7n);
+    expect(await apply(journal, settle(entry))).toBeNull();
+    expect(await apply(journal, { kind: "close", reason: "completed" })).toEqual({
+      entry: 9, settlements: [],
+    });
+  });
+});
+
+test("truncated calls are never pending and ready steering prevents early closure", async () => {
+  const stub = fresh();
+  await runInDurableObject(stub, async (_instance, { storage }) => {
+    const journal = await bind(storage, await claimJournal(storage, identity, header));
+    await submit(journal);
+    const [entry, settlements] = await apply(journal, { kind: "truncated_assistant", assistant });
+    expect(entry).toBe(2);
+    expect(settlements[0].outcome.state).toBe("not_dispatched");
+    expect(journal.tail).toBe(3n);
+    const text = { ...assistant, message: { role: "Assistant", content: [{ Text: "done?" }] }, tool_activities: [] };
+    const steering = [{ role: "User", content: [{ Text: "one more thing" }] }];
+    expect(await apply(journal, { kind: "assistant", assistant: text, steering })).toEqual([
+      { entry: 4, end: null }, { steering: { start: 5, end: 6 }, completion: null },
+    ]);
+    expect(journal.unfinishedTurn).toBe(1n);
+    const [final] = await apply(journal, { kind: "assistant", assistant: text });
+    expect(final).toEqual({ entry: 6, end: 7 });
+    expect(decode(journal.requestReceipt(key))).toEqual({ ...receipt, end: "completed" });
+  });
+});
+
+test("an unchanged request context still requires the current writer generation", async () => {
+  await runInDurableObject(fresh(), async (_instance, { storage }) => {
+    const writer = await claimJournal(storage, identity, header);
+    const journal = await bind(storage, writer);
+    await submit(journal);
+    await apply(journal, prepareRequest);
+    const replacement = await claimJournal(storage, identity);
+    await expect(apply(journal, prepareRequest)).rejects.toMatchObject({ code: "generation" });
+    await expect(apply(journal, prepareRequest)).rejects.toMatchObject({ code: "fenced" });
+    const current = await bind(storage, replacement);
+    expect(await apply(current, prepareRequest)).toBe(false);
+    expect(current.tail).toBe(2n);
   });
 });
 

@@ -1,16 +1,19 @@
 //! Internal Worker ABI for Rust journal replay and prepared append. This is
 //! not a Session constructor or a second engine. The Durable Object supplies
 //! a confirmed read cut and owns its writer generation.
-use std::cell::{Cell, RefCell};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+};
 
 use ion_ai::{Message, ModelRef};
 use js_sys::{Array, Error, Object, Promise, Reflect, Uint8Array};
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use wasm_bindgen::{JsCast, prelude::*};
 
 use super::{
-    RecoveryBinding, RecoveryPoint, RequestKey, RequestReceipt, SessionEntry, SessionError,
-    SubmissionRequest, TurnAdmission,
+    AssistantRecord, ModelContextSnapshot, RecoveryBinding, RecoveryPoint, RequestKey,
+    RequestReceipt, SessionEntry, SessionError, SubmissionRequest, TurnAdmission, TurnEndReason,
     journal::{self, AppendBatch, EncodedRecord, EntryRows, JournalIdentity, WorkingJournal},
     projection::ProjectionMode,
     store::Header,
@@ -34,12 +37,15 @@ extern "C" {
     fn read_record(this: &ConfirmedCut, sequence: i64) -> Result<Uint8Array, JsValue>;
 
     #[wasm_bindgen(
-        typescript_type = "{ append(batch: { identity: { session: string; providerSession: string }; expectedTail: bigint; bodies: Uint8Array[] }): Promise<bigint>; readRecord(seq: bigint, expectedTail: bigint): Uint8Array }"
+        typescript_type = "{ append(batch: { identity: { session: string; providerSession: string }; expectedTail: bigint; bodies: Uint8Array[] }): Promise<bigint>; readRecord(seq: bigint, expectedTail: bigint): Uint8Array; verifyTail(expectedTail: bigint): void }"
     )]
     pub type FencedWriter;
 
     #[wasm_bindgen(method, catch, js_name = append)]
     fn write_batch(this: &FencedWriter, batch: &Object) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = verifyTail)]
+    fn verify_tail(this: &FencedWriter, expected_tail: i64) -> Result<(), JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = readRecord)]
     fn read_owned_record(
@@ -190,8 +196,8 @@ impl WorkerJournal {
         let result = match plan {
             AdmissionPlan::Existing(receipt) => Submission::Existing { receipt },
             AdmissionPlan::Write(change) => {
-                let tail = self.commit_records(permit, change.entries()).await?;
-                let TurnAdmission::New { turn, .. } = change.committed(tail) else {
+                let TurnAdmission::New { turn, .. } = self.commit_change(permit, change).await?
+                else {
                     unreachable!("a committed StartTurn accepts a new turn")
                 };
                 Submission::Accepted {
@@ -216,9 +222,53 @@ impl WorkerJournal {
             .borrow()
             .plan_continuation(point, &binding)
             .map_err(js_error)?;
-        let tail = self.commit_records(permit, change.entries()).await?;
-        let (point, interrupted) = change.committed(tail);
+        let (point, interrupted) = self.commit_change(permit, change).await?;
         encode(Continuation { point, interrupted })
+    }
+
+    /// Used by the host that owns this active Turn. A previously constructed
+    /// command cannot be applied to a later cut, even in the same Turn.
+    #[wasm_bindgen(js_name = applyTurn)]
+    pub async fn apply_turn(&self, expected_tail: u64, bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let permit = WritePermit::reserve(&self.phase)?;
+        let TurnCommand { turn, change } = decode(&bytes)?;
+        let current = self.tail();
+        if expected_tail != current {
+            return Err(js_error(SessionError::JournalFrontierChanged {
+                expected_tail,
+                actual: i64::try_from(current).ok(),
+            }));
+        }
+        macro_rules! commit {
+            ($plan:ident($($arg:expr),*)) => {{
+                let change = self.working.borrow().$plan(turn, $($arg),*).map_err(js_error)?;
+                encode(self.commit_change(permit, change).await?)
+            }};
+        }
+        match change {
+            Command::PrepareRequest { model, context } => commit!(plan_request(model, context)),
+            Command::Assistant {
+                assistant,
+                steering,
+                completion,
+            } => commit!(plan_assistant(assistant, steering, completion)),
+            Command::TruncatedAssistant { assistant } => {
+                commit!(plan_truncated_assistant(assistant))
+            }
+            Command::Inputs {
+                steering,
+                completion,
+            } => commit!(plan_inputs(steering, completion)),
+            Command::SettleTool {
+                occurrence,
+                result,
+                context,
+            } => commit!(plan_settlement(occurrence, result, context)),
+            Command::Close {
+                reason,
+                not_dispatched,
+            } => commit!(plan_turn_end(reason, &not_dispatched)),
+        }
     }
 
     // Fixture for the other record types until the live Session owns every
@@ -243,6 +293,24 @@ impl WorkerJournal {
 }
 
 impl WorkerJournal {
+    async fn commit_change<C: TurnChange>(
+        &self,
+        mut permit: WritePermit<'_>,
+        change: C,
+    ) -> Result<C::Receipt, JsValue> {
+        let tail = if change.entries().is_empty() {
+            let tail = self.tail();
+            let host_tail = i64::try_from(tail).map_err(js_error)?;
+            permit.fence_on_drop = true;
+            self.writer.verify_tail(host_tail)?;
+            permit.release();
+            tail
+        } else {
+            self.commit_records(permit, change.entries()).await?
+        };
+        Ok(change.committed(tail))
+    }
+
     fn read_at(&self, entry: u64, tail: u64) -> Result<SessionEntry, SessionError> {
         let tail = i64::try_from(tail).map_err(|_| SessionError::InvalidHistory)?;
         read_entry(entry, |seq| self.writer.read_owned_record(seq, tail))
@@ -291,6 +359,48 @@ impl WorkerJournal {
         permit.release();
         Ok(tail)
     }
+}
+
+#[derive(Deserialize)]
+struct TurnCommand {
+    turn: u64,
+    #[serde(flatten)]
+    change: Command,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum Command {
+    PrepareRequest {
+        model: ModelRef,
+        context: ModelContextSnapshot,
+    },
+    Assistant {
+        assistant: AssistantRecord,
+        #[serde(default)]
+        steering: Vec<Message>,
+        #[serde(default)]
+        completion: Vec<crate::CompletionNotice>,
+    },
+    TruncatedAssistant {
+        assistant: AssistantRecord,
+    },
+    Inputs {
+        #[serde(default)]
+        steering: Vec<Message>,
+        #[serde(default)]
+        completion: Vec<crate::CompletionNotice>,
+    },
+    SettleTool {
+        occurrence: crate::ToolOccurrence,
+        result: crate::ToolSettlement,
+        context: Option<ModelContextSnapshot>,
+    },
+    Close {
+        reason: TurnEndReason,
+        #[serde(default)]
+        not_dispatched: BTreeSet<String>,
+    },
 }
 
 #[derive(Serialize)]

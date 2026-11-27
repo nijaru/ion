@@ -231,6 +231,7 @@ fn resume_refuses_self_wrong_identity_workspace_and_unsettled_history_before_int
             target
                 .record_tool_settlement_with_context(
                     nested.turn,
+                    nested.tool,
                     crate::ToolSettlement {
                         call_id: "delegate".into(),
                         name: "delegate".into(),

@@ -170,7 +170,12 @@ impl OrderedBatch {
                 outcome: outcome.clone(),
             };
             io.run(move |session| {
-                session.record_tool_settlement_with_context(turn, settlement, next_context)
+                session.record_tool_settlement_with_context(
+                    turn,
+                    occurrence,
+                    settlement,
+                    next_context,
+                )
             })
             .await?;
             self.never_dispatched.remove(&call.id);

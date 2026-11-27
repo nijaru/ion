@@ -131,19 +131,22 @@ class JournalWriter {
     return null;
   }
 
-  // Only the current idle writer can read against its projected tail. No
-  // staged SQL becomes an input to preparing a dependent append.
-  readRecord(seq, expectedTail) {
+  // Check even a no-op: a stale owner cannot authorize dependent work.
+  verifyTail(expectedTail) {
     if (this.#state !== "idle") {
       throw new JournalError(this.#state, `journal writer is ${this.#state}`);
     }
-    const { sql } = this.#storage;
-    const refused = this.#checkHead(head(sql), coordinate(expectedTail));
+    const refused = this.#checkHead(head(this.#storage.sql), coordinate(expectedTail));
     if (refused !== null) {
       this.#state = "fenced";
       throw refused;
     }
-    return readRecord(sql, seq, expectedTail);
+  }
+
+  // No staged SQL becomes an input to preparing a dependent append.
+  readRecord(seq, expectedTail) {
+    this.verifyTail(expectedTail);
+    return readRecord(this.#storage.sql, seq, expectedTail);
   }
 
   // Resolution acknowledges exactly this batch. Rejection with `uncertain`

@@ -564,6 +564,7 @@ fn image_reads_recover_steering_and_withheld_observations_without_crossing_their
     session
         .record_tool_settlement_with_context(
             turn,
+            session.tool_occurrence(turn, "unknown").unwrap(),
             settlement("unknown", "picture", ToolOutcome::Unknown),
             None,
         )
@@ -572,6 +573,7 @@ fn image_reads_recover_steering_and_withheld_observations_without_crossing_their
     session
         .record_tool_settlement_with_context(
             turn,
+            session.tool_occurrence(turn, "skipped").unwrap(),
             settlement(
                 "skipped",
                 "picture",
@@ -847,6 +849,7 @@ fn compaction_keeps_original_tool_output_bounded_states_and_utf8_pages() {
     session
         .record_tool_settlement_with_context(
             turn,
+            session.tool_occurrence(turn, "not-dispatched").unwrap(),
             settlement(
                 "not-dispatched",
                 "exec",
