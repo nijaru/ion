@@ -253,7 +253,12 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             terminal.check_active().context("terminal lifecycle failed")?;
             ui.provider_usage.bind(runtime.provider_usage().filter(|source| ui.footer.shows_provider_usage(source.kind())));
             ui.reconcile_recovery(runtime.session().id())?;
-            if ui.conversation.live().is_none() && let Err(error) = ui.session_io.start_refresh(&runtime, &ui.conversation) {
+            if ui.conversation.live().is_none()
+                && let Err(error) = ui.session_io.start_refresh(
+                    &runtime,
+                    &ui.conversation,
+                    ui.footer.shows_context_estimate(),
+                ) {
                 ui.session_io.blocked = true;
                 ui.session_io.refresh_error = Some(format!("{error:#}"));
             }

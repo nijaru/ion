@@ -619,7 +619,11 @@ pub(super) async fn settle_io(control: &mut SessionControl<EditorDraft>, ui: &mu
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             ui.session_io
-                .start_refresh(control, &ui.conversation)
+                .start_refresh(
+                    control,
+                    &ui.conversation,
+                    ui.footer.shows_context_estimate(),
+                )
                 .unwrap();
             if ui.session_io.has_read() {
                 let finished = ui.session_io.complete().await;

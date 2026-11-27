@@ -14,7 +14,9 @@ use ion_ai::{
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::{json_size::encoded_len, prompt_size::NeutralMessages};
+#[cfg(test)]
+use crate::prompt_size::NeutralMessages;
+use crate::{json_size::encoded_len, prompt_size::MessageBytes};
 
 const IMAGE_INPUT_ALLOWANCE_TOKENS: u64 = 16_384;
 
@@ -35,23 +37,31 @@ impl RequestMeasurement {
         calibration: Option<&RequestCalibration>,
         context_overhead: usize,
     ) -> Result<Self, serde_json::Error> {
-        let retained_bytes = encoded_len(&LatestRequest::new(request, &request.messages))?;
-        let neutral_bytes = if request
+        let messages = request
             .messages
             .iter()
-            .any(|message| message.provider_replay.is_some())
-        {
-            encoded_len(&LatestRequest::new(
-                request,
-                NeutralMessages(&request.messages),
-            ))?
-        } else {
-            retained_bytes
-        };
-        let fixed_input_tokens = bytes_to_tokens(encoded_len(&LatestRequest::new(
-            request,
-            &[] as &[Message],
-        ))?);
+            .map(MessageBytes::measure)
+            .collect::<Result<Vec<_>, _>>()?;
+        Self::from_message_bytes(request, &messages, calibration, context_overhead)
+    }
+
+    pub(crate) fn from_message_bytes(
+        request: &ModelRequest,
+        messages: &[MessageBytes],
+        calibration: Option<&RequestCalibration>,
+        context_overhead: usize,
+    ) -> Result<Self, serde_json::Error> {
+        assert_eq!(
+            request.messages.len(),
+            messages.len(),
+            "byte counts belong to the frozen request"
+        );
+        let fixed_bytes = encoded_len(&LatestRequest::new(request, &[] as &[Message]))?;
+        let retained_bytes =
+            fixed_bytes.saturating_add(array_payload_bytes(messages, MessageBytes::retained));
+        let neutral_bytes =
+            fixed_bytes.saturating_add(array_payload_bytes(messages, |bytes| bytes.neutral));
+        let fixed_input_tokens = bytes_to_tokens(fixed_bytes);
         let images = measure_images(&request.messages);
         let fallback_input_tokens = bytes_to_tokens(
             neutral_bytes
@@ -59,28 +69,20 @@ impl RequestMeasurement {
                 .saturating_add(context_overhead),
         )
         .saturating_add(images.count.saturating_mul(IMAGE_INPUT_ALLOWANCE_TOKENS));
-        let trailing_input_tokens = match calibration {
-            Some(sample) if sample.image_identity == images.identity => {
-                match request.messages.get(sample.after_message..) {
-                    // Known output usage covers the baseline assistant's replay.
-                    // Later opaque content without a newer complete usage sample
-                    // cannot be priced by its neutral text alone.
-                    Some(trailing)
-                        if trailing
-                            .iter()
-                            .all(|message| message.provider_replay.is_none()) =>
-                    {
-                        Some(if trailing.is_empty() {
-                            0
-                        } else {
-                            bytes_to_tokens(encoded_len(&NeutralMessages(trailing))?)
-                        })
-                    }
-                    _ => None,
+        let trailing_input_tokens = calibration
+            .filter(|sample| sample.image_identity == images.identity)
+            .and_then(|sample| messages.get(sample.after_message..))
+            // Known usage already includes the baseline's replay. New opaque
+            // suffix items can't be priced by their neutral text alone.
+            .filter(|trailing| trailing.iter().all(|message| message.replay.is_none()))
+            .map(|trailing| {
+                if trailing.is_empty() {
+                    0
+                } else {
+                    let bytes = array_payload_bytes(trailing, |bytes| bytes.neutral);
+                    bytes_to_tokens(bytes.saturating_add(b"[]".len()))
                 }
-            }
-            _ => None,
-        };
+            });
         Ok(Self {
             retained_bytes: retained_bytes.saturating_add(context_overhead),
             fallback_input_tokens,
@@ -102,6 +104,16 @@ impl RequestMeasurement {
     pub(crate) fn fixed_input_tokens(&self) -> u64 {
         self.fixed_input_tokens
     }
+}
+
+// The surrounding request was already measured with an empty array. Add
+// only serialized items and their separators, never the brackets again.
+fn array_payload_bytes(messages: &[MessageBytes], length: impl Fn(MessageBytes) -> usize) -> usize {
+    messages
+        .iter()
+        .copied()
+        .map(length)
+        .fold(messages.len().saturating_sub(1), usize::saturating_add)
 }
 
 /// Runtime compatibility, not credentials or durable execution authority.
@@ -327,6 +339,49 @@ mod tests {
                 tool_choice: ion_ai::ToolChoice::Auto,
                 parallel_tool_calls: true,
             },
+        }
+    }
+
+    #[test]
+    fn summed_message_bytes_match_serialization_with_controls_unicode_and_replay() {
+        let mut request = request();
+        request.instructions = Some("quoted \"prefix\" 🦀\n\u{0000}".into());
+        request.tools.push(ToolSpec {
+            name: "probe".into(),
+            description: "Use a literal path".into(),
+            input_schema: serde_json::json!({"type":"object", "default":{"field":"\\\n🦀"}}),
+        });
+        let cases = [
+            Message::user_input("first\\line\n💬".into(), []),
+            Message {
+                role: ion_ai::Role::Assistant,
+                content: vec![Content::Text("café".into())],
+                provider_replay: Some(
+                    ion_ai::ProviderReplay::new(
+                        "fixture",
+                        "opaque",
+                        serde_json::json!({"nested":["\u{0000}",false,12.5]}),
+                    )
+                    .with_prefix_binding(true),
+                ),
+            },
+            Message::user_input("last".into(), []),
+        ];
+        for end in 0..=cases.len() {
+            request.messages = cases[..end].to_vec();
+            let overhead = 71;
+            let measurement = RequestMeasurement::measure(&request, None, overhead).unwrap();
+            let retained = encoded_len(&LatestRequest::new(&request, &request.messages)).unwrap();
+            let neutral = encoded_len(&LatestRequest::new(
+                &request,
+                NeutralMessages(&request.messages),
+            ))
+            .unwrap();
+            assert_eq!(measurement.retained_bytes(), retained + overhead);
+            assert_eq!(
+                measurement.fallback_input_tokens(),
+                bytes_to_tokens(neutral + overhead)
+            );
         }
     }
 

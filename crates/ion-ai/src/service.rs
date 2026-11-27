@@ -50,7 +50,7 @@ pub trait ModelService: Send + Sync {
     }
 
     /// Borrow the frozen request while opening a stream. The returned stream
-    /// owns its transport and decoder state; it cannot keep the prompt alive.
+    /// owns its transport and decoder state and does not borrow the request.
     fn stream<'a>(
         &'a self,
         request: &'a ModelRequest,

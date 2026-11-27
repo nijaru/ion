@@ -30,6 +30,34 @@ impl<'a> From<&'a Message> for NeutralMessage<'a> {
     }
 }
 
+/// Reusable byte counts, not payload copies. Replay may be omitted at a
+/// route/epoch boundary without remeasuring the visible content.
+#[derive(Clone, Copy)]
+pub(crate) struct MessageBytes {
+    pub(crate) neutral: usize,
+    pub(crate) replay: Option<usize>,
+}
+
+impl MessageBytes {
+    pub(crate) fn measure(message: &Message) -> Result<Self, serde_json::Error> {
+        Ok(Self {
+            neutral: crate::json_size::encoded_len(&NeutralMessage::from(message))?,
+            replay: message
+                .provider_replay
+                .as_ref()
+                .map(crate::json_size::encoded_len)
+                .transpose()?,
+        })
+    }
+
+    pub(crate) fn retained(self) -> usize {
+        self.replay.map_or(self.neutral, |bytes| {
+            // Both shapes include the same field; only its JSON value changes.
+            (self.neutral - b"null".len()).saturating_add(bytes)
+        })
+    }
+}
+
 pub(crate) struct NeutralMessages<'a>(pub &'a [Message]);
 impl Serialize for NeutralMessages<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

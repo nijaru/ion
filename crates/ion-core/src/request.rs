@@ -178,8 +178,12 @@ impl PreparedRequest {
         let scope = RequestScope::new(service, &request)?;
         let calibration = session.request_calibration_for(&scope)?;
         let context_overhead = service.context_encoding_overhead(&request)?;
-        let measurement =
-            RequestMeasurement::measure(&request, calibration.as_ref(), context_overhead)?;
+        let measurement = RequestMeasurement::from_message_bytes(
+            &request,
+            &basis.message_bytes,
+            calibration.as_ref(),
+            context_overhead,
+        )?;
         let calibration = calibration.filter(|sample| sample.applies(&measurement, &scope));
         let estimated_input = calibration.as_ref().map_or_else(
             || measurement.fallback_input_tokens(),

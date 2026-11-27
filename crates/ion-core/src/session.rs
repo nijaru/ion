@@ -137,6 +137,7 @@ pub(crate) struct RequestBasis {
     pub revision: u64,
     pub turn: Option<u64>,
     pub messages: Vec<Message>,
+    pub message_bytes: Vec<crate::prompt_size::MessageBytes>,
     pub previous: Option<ModelContextSnapshot>,
     pub reasoning: Reasoning,
     pub assistant_seen: bool,
@@ -1112,10 +1113,12 @@ impl Session {
 
     pub(crate) fn request_basis(&self, model: &ModelRef) -> Result<RequestBasis, SessionError> {
         let store = self.lock_store()?;
+        let (messages, message_bytes) = context::request_projection(&store.working, model)?;
         Ok(RequestBasis {
             revision: store.working.state.sequence,
             turn: store.working.state.active,
-            messages: context_projection(&store.working, Some(model)),
+            messages,
+            message_bytes,
             previous: store.working.state.last_context.clone(),
             reasoning: store.working.state.reasoning,
             assistant_seen: store.working.state.assistant_seen_in_turn,

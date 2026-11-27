@@ -726,6 +726,12 @@ async fn context_footer_tracks_planning_without_admitting_input() {
     );
     assert!(!fixture.control.is_busy());
     assert_eq!(ui.editor.draft, "unsent 🦀");
+
+    // The native refresh must not prepare a request for a disabled footer field.
+    ui.footer = serde_json::from_str(r#"{"primary":["model"],"secondary":[]}"#).unwrap();
+    ui.session_io.schedule_refresh();
+    settle_io(&mut fixture.control, &mut ui).await;
+    assert!(ui.context_estimate.is_none());
     fixture.control.shutdown().await;
 }
 

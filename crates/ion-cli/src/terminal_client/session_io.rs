@@ -257,6 +257,7 @@ impl SessionIo {
         &mut self,
         control: &SessionControl<EditorDraft>,
         conversation: &conversation::Conversation,
+        show_context: bool,
     ) -> Result<()> {
         if !self.refresh_pending
             || self.has_read()
@@ -268,23 +269,25 @@ impl SessionIo {
         self.refresh_pending = false;
         let session = control.session();
         let io = session.io()?;
-        let agent = control.agent().clone();
-        let instructions = control.instructions().to_owned();
+        let planning =
+            show_context.then(|| (control.agent().clone(), control.instructions().to_owned()));
         let after = conversation.checkpoint(session);
         self.start(session, async move {
             Ok(ReadOutput::History(
                 io.run(move |session| {
                     let snapshot = session.presentation(after)?;
                     let revision = snapshot.revision;
-                    let context = agent.context_report(session, &instructions);
                     let mut history = History::committed(snapshot);
-                    // A concurrent append can separate these read-only cuts. Never
-                    // attach another revision's estimate to the displayed history.
-                    if !context
-                        .as_ref()
-                        .is_ok_and(|report| report.revision != revision)
-                    {
-                        history.context = Some(context);
+                    if let Some((agent, instructions)) = planning {
+                        let context = agent.context_report(session, &instructions);
+                        // A concurrent append can separate these read-only cuts.
+                        // Don't attach another revision's estimate to the history.
+                        if !context
+                            .as_ref()
+                            .is_ok_and(|report| report.revision != revision)
+                        {
+                            history.context = Some(context);
+                        }
                     }
                     Ok(Box::new(history))
                 })

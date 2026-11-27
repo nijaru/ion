@@ -21,10 +21,13 @@ pub(super) fn append_message(
         SessionEntry::UserShellSettled { outcome, .. } => {
             let shell = closed_shell.expect("validated shell settlement owns its admission");
             if !shell.exclude_from_context {
-                messages
+                *messages
                     .last_mut()
-                    .expect("shared shell owns the final projected message")
-                    .message = shell_message(&shell.command, outcome, false, shell.admission_entry);
+                    .expect("shared shell owns the final projected message") =
+                    ProjectedMessage::new(
+                        shell.admission_entry,
+                        shell_message(&shell.command, outcome, false, shell.admission_entry),
+                    );
             }
             None
         }

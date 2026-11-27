@@ -899,6 +899,16 @@ fn shared_shell_context_preserves_host_metadata_after_reopen() {
         output: crate::ToolOutput::success(output.clone()),
     })
     .unwrap();
+    let model: ModelRef = "fixture/model".parse().unwrap();
+    let projected_bytes = |session: &Session| {
+        let basis = session.request_basis(&model).unwrap();
+        let bytes = basis.message_bytes[0].retained();
+        assert_eq!(
+            bytes,
+            crate::json_size::encoded_len(&basis.messages[0]).unwrap()
+        );
+        bytes
+    };
     let check = |session: &Session| {
         let messages = session.context_messages().unwrap();
         let Content::Text(text) = &messages[0].content[0] else {
@@ -914,12 +924,16 @@ fn shared_shell_context_preserves_host_metadata_after_reopen() {
     let admission = session
         .admit_user_shell("binary output".into(), false)
         .unwrap();
+    let provisional_bytes = projected_bytes(&session);
     session
         .record_user_shell(admission, crate::ToolOutput::success(output))
         .unwrap();
+    let observed_bytes = projected_bytes(&session);
+    assert_ne!(provisional_bytes, observed_bytes);
     check(&session);
     drop(session);
     let reopened = Session::open(&path).unwrap();
+    assert_eq!(projected_bytes(&reopened), observed_bytes);
     check(&reopened);
     drop(reopened);
     fs::remove_dir_all(root).unwrap();

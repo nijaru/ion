@@ -47,6 +47,10 @@ impl Default for Footer {
 }
 
 impl Footer {
+    pub(super) fn shows_context_estimate(&self) -> bool {
+        self.primary.contains(&Field::Context) || self.secondary.contains(&Field::Context)
+    }
+
     pub(super) fn shows_provider_usage(&self, kind: ion_app::ProviderUsageKind) -> bool {
         let field = match kind {
             ion_app::ProviderUsageKind::DeepSeekBalance => Field::ProviderBalance,

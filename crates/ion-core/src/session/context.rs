@@ -3,18 +3,58 @@ use super::{
     CompactionPlan, CompactionPlanning, Session, SessionError, journal::WorkingJournal,
     summary_message,
 };
+use crate::prompt_size::MessageBytes;
 use ion_ai::{Content, Message, ModelRef, Role};
+use std::cell::Cell;
 
 /// A model-visible message and its committed coordinate. Shell settlement
 /// replaces the message at its admission coordinate; it never adds a new slot.
 pub(super) struct ProjectedMessage {
     pub(super) entry: u64,
     pub(super) message: Message,
+    bytes: Cell<Option<MessageBytes>>,
 }
 
 impl ProjectedMessage {
     pub(super) fn new(entry: u64, message: Message) -> Self {
-        Self { entry, message }
+        Self {
+            entry,
+            message,
+            bytes: Cell::new(None),
+        }
+    }
+
+    fn project(&self, replay: bool) -> Message {
+        Message {
+            role: self.message.role,
+            content: self.message.content.clone(),
+            provider_replay: if replay {
+                self.message.provider_replay.clone()
+            } else {
+                None
+            },
+        }
+    }
+
+    fn size(&self, replay: bool) -> Result<MessageBytes, serde_json::Error> {
+        // The selected projection owns immutable content. Cache only its size,
+        // never an encoding or another copy of the content.
+        let bytes = match self.bytes.get() {
+            Some(bytes) => bytes,
+            None => {
+                let bytes = MessageBytes::measure(&self.message)?;
+                self.bytes.set(Some(bytes));
+                bytes
+            }
+        };
+        Ok(if replay {
+            bytes
+        } else {
+            MessageBytes {
+                replay: None,
+                ..bytes
+            }
+        })
     }
 }
 
@@ -49,23 +89,45 @@ pub(super) fn context_projection(
     working: &WorkingJournal,
     model: Option<&ModelRef>,
 ) -> Vec<Message> {
-    let mut messages = working
+    projected_summary(working)
+        .into_iter()
+        .chain(routed_records(working, model).map(|(record, replay)| record.project(replay)))
+        .collect()
+}
+
+pub(super) fn request_projection(
+    working: &WorkingJournal,
+    model: &ModelRef,
+) -> Result<(Vec<Message>, Vec<MessageBytes>), serde_json::Error> {
+    let mut messages = Vec::new();
+    let mut sizes = Vec::new();
+    if let Some(summary) = projected_summary(working) {
+        sizes.push(MessageBytes::measure(&summary)?);
+        messages.push(summary);
+    }
+    for (record, replay) in routed_records(working, Some(model)) {
+        sizes.push(record.size(replay)?);
+        messages.push(record.project(replay));
+    }
+    Ok((messages, sizes))
+}
+
+fn projected_summary(working: &WorkingJournal) -> Option<Message> {
+    working
         .state
         .compaction
         .as_ref()
-        .map(|(through, summary)| vec![summary_message(*through, summary)])
-        .unwrap_or_default();
-    let clear_all = model != working.state.last_effective_model.as_ref();
-    messages.extend(selected_context_records(working).map(|record| Message {
-        role: record.message.role,
-        content: record.message.content.clone(),
-        provider_replay: if clear_all || record.entry < working.state.replay_epoch_start {
-            None
-        } else {
-            record.message.provider_replay.clone()
-        },
-    }));
-    messages
+        .map(|(through, summary)| summary_message(*through, summary))
+}
+
+fn routed_records<'a>(
+    working: &'a WorkingJournal,
+    model: Option<&ModelRef>,
+) -> impl Iterator<Item = (&'a ProjectedMessage, bool)> + use<'a> {
+    let compatible = model == working.state.last_effective_model.as_ref();
+    let epoch = working.state.replay_epoch_start;
+    selected_context_records(working)
+        .map(move |record| (record, compatible && record.entry >= epoch))
 }
 
 impl Session {
