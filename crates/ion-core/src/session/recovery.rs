@@ -49,8 +49,9 @@ pub struct RecoveryState {
 }
 
 fn recovery_at(store: &Store, session: uuid::Uuid) -> Option<RecoveryState> {
-    let turn = store.state.active?;
+    let turn = store.working.state.active?;
     let binding = store
+        .working
         .state
         .recovery
         .as_ref()
@@ -59,7 +60,7 @@ fn recovery_at(store: &Store, session: uuid::Uuid) -> Option<RecoveryState> {
         point: RecoveryPoint {
             session,
             turn,
-            checkpoint: store.state.sequence,
+            checkpoint: store.working.state.sequence,
         },
         authority: binding.authority.clone(),
     })
@@ -78,7 +79,7 @@ impl Session {
         key: &RequestKey,
     ) -> Result<Option<RecoveryState>, SessionError> {
         let store = self.lock_store()?;
-        let Some(turn) = store.state.active else {
+        let Some(turn) = store.working.state.active else {
             return Ok(None);
         };
         let receipt = submission::request_receipt(&store.connection, self.id(), key, None)?;
@@ -98,29 +99,29 @@ impl Session {
     ) -> Result<(RecoveryPoint, usize), SessionError> {
         let mut store = self.lock_store()?;
         if expected.session != self.id()
-            || store.state.active != Some(expected.turn)
-            || expected.checkpoint != store.state.sequence
+            || store.working.state.active != Some(expected.turn)
+            || expected.checkpoint != store.working.state.sequence
         {
             return Err(SessionError::StaleRecoveryPoint);
         }
-        if binding.session != self.id() || store.state.recovery.as_ref() != Some(binding) {
+        if binding.session != self.id() || store.working.state.recovery.as_ref() != Some(binding) {
             return Err(SessionError::RecoveryAuthorityChanged);
         }
-        let interrupted = store.state.pending.len();
+        let interrupted = store.working.state.pending.len();
         let mut entries = vec![SessionEntry::TurnResumed {
             turn: expected.turn,
             checkpoint: expected.checkpoint,
         }];
-        entries.extend(store.orphaned_backgrounds(self.id()));
+        entries.extend(store.working.orphaned_backgrounds(self.id()));
         entries.extend(pending_results(
             expected.turn,
-            &store.state.pending,
+            &store.working.state.pending,
             &BTreeSet::new(),
         ));
         store.append(&entries)?;
         Ok((
             RecoveryPoint {
-                checkpoint: store.state.sequence,
+                checkpoint: store.working.state.sequence,
                 ..expected
             },
             interrupted,

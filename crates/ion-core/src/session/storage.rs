@@ -227,7 +227,7 @@ impl SessionReader {
 
     /// The active committed Turn, without loading its transcript.
     pub async fn unfinished_turn(&self) -> Result<Option<u64>, SessionError> {
-        self.run(|session| Ok(session.lock_store()?.state.active))
+        self.run(|session| Ok(session.lock_store()?.working.state.active))
             .await
     }
 

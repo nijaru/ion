@@ -21,16 +21,18 @@ const started = (turn, id = "once") => encode({ kind: "turn_started", data: {
   model: { provider: "fixture", model: "offline" },
   request: { scope: "bridge", id },
 } });
+const ended = (turn) => encode({ kind: "turn_ended", data: { turn, reason: "completed" } });
+const select = (head_entry) => encode({ kind: "context_selected", data: { head_entry } });
 const start = started(1);
-const end = encode({ kind: "turn_ended", data: { turn: 1, reason: "completed" } });
+const end = ended(1);
 const fresh = () => env.JOURNALS.get(env.JOURNALS.newUniqueId());
 const openCut = async (storage) => new WorkerJournalCut(await readJournalCut(storage));
-
+const bind = async (storage, writer) => (await openCut(storage)).bindWriter(writer);
 const withSync = (storage, sync) => ({
   sql: storage.sql, transactionSync: (run) => storage.transactionSync(run), sync,
 });
 
-test("Rust validates the batch, waits for host acknowledgment, and replays the cut after eviction", async () => {
+test("Rust publishes only after acknowledgment, and replays the cut after eviction", async () => {
   const stub = fresh();
   const previous = await runInDurableObject(stub, async (instance, { storage }) => {
     const entered = Promise.withResolvers();
@@ -43,42 +45,62 @@ test("Rust validates the batch, waits for host acknowledgment, and replays the c
         await release.promise;
       }
     }), identity, header);
-    const cut = await openCut(storage);
-    expect(cut.tail).toBe(0n);
-    await expect(cut.append(writer, [start, start])).rejects.toThrow();
+    const pinned = await openCut(storage);
+    const journal = await bind(storage, writer);
+    expect(journal.tail).toBe(0n);
+    await expect(journal.append([start, start])).rejects.toThrow();
     expect((await readJournalCut(storage)).tail).toBe(0n);
     hold = true;
     let acknowledged = false;
-    const append = cut.append(writer, [start]).then((tail) => {
+    const append = journal.append([start]).then((tail) => {
       acknowledged = true;
       return tail;
     });
     await entered.promise;
-    // We are holding a reply, not a transaction. An independent durable read
-    // can see an acceptance, but its existing Rust cut must not move.
+    // We are holding a reply, not a transaction or a Rust projection borrow.
     const persisted = await openCut(storage);
     expect(persisted.tail).toBe(1n);
     expect(persisted.unfinishedTurn).toBe(1n);
-    expect(cut.tail).toBe(0n);
-    expect(cut.unfinishedTurn).toBeUndefined();
+    expect(journal.tail).toBe(0n);
+    expect(journal.unfinishedTurn).toBeUndefined();
+    expect(journal.messageCount).toBe(0);
     expect(acknowledged).toBe(false);
+    await expect(journal.append([end])).rejects.toMatchObject({ code: "busy" });
     release.resolve();
     expect(await append).toBe(1n);
+    expect(journal.tail).toBe(1n);
+    expect(journal.unfinishedTurn).toBe(1n);
+    expect(journal.messageCount).toBe(1);
+    expect(pinned.tail).toBe(0n);
     return instance.instance;
   });
   await evictDurableObject(stub);
   await runInDurableObject(stub, async (instance, { storage }) => {
     expect(instance.instance).not.toBe(previous);
-    const cut = await openCut(storage);
-    expect(cut.tail).toBe(1n);
-    expect(cut.unfinishedTurn).toBe(1n);
     const writer = await claimJournal(storage, identity);
-    expect(await cut.append(writer, [end])).toBe(2n);
-    const closed = await openCut(storage);
-    expect(closed.tail).toBe(2n);
-    expect(closed.unfinishedTurn).toBeUndefined();
-    await expect(cut.append(writer, [end])).rejects.toMatchObject({ code: "tail" });
-    expect((await readJournalCut(storage)).tail).toBe(2n);
+    const journal = await bind(storage, writer);
+    expect(journal.tail).toBe(1n);
+    expect(journal.unfinishedTurn).toBe(1n);
+    expect(await journal.append([end])).toBe(2n);
+    expect(journal.unfinishedTurn).toBeUndefined();
+    expect((await openCut(storage)).tail).toBe(2n);
+  });
+});
+
+test("one live writer can append and select newly committed context without reopening", async () => {
+  await runInDurableObject(fresh(), async (_instance, { storage }) => {
+    const writer = await claimJournal(storage, identity, header);
+    const journal = await bind(storage, writer);
+    expect(await journal.append([start, end])).toBe(2n);
+    expect(await journal.append([started(2, "another"), ended(2)])).toBe(4n);
+    expect(journal.messageCount).toBe(2);
+    expect(await journal.append([select(2)])).toBe(5n);
+    expect(journal.messageCount).toBe(1);
+    // A point read of the formerly unselected path must use this writer's
+    // newly acknowledged tail, not the empty cut it originally opened.
+    expect(await journal.append([select(4)])).toBe(6n);
+    expect(journal.messageCount).toBe(2);
+    expect((await openCut(storage)).tail).toBe(6n);
   });
 });
 
@@ -93,47 +115,66 @@ test("aborting during the Rust append reply leaves exactly the committed accepta
       await storage.sync();
       if (abort) state.abort("test: abort during Rust append reply");
     }), identity, header);
-    const cut = await openCut(storage);
+    const journal = await bind(storage, writer);
     abort = true;
-    return cut.append(writer, [start]);
+    return journal.append([start]);
   })).rejects.toThrow(/abort during Rust append reply/);
   await runInDurableObject(env.JOURNALS.get(id), async (instance, { storage }) => {
     expect(instance.instance).not.toBe(previous);
-    const cut = await openCut(storage);
-    expect(cut.tail).toBe(1n);
-    expect(cut.unfinishedTurn).toBe(1n);
     const writer = await claimJournal(storage, identity);
-    await expect(cut.append(writer, [start])).rejects.toThrow();
+    const journal = await bind(storage, writer);
+    expect(journal.tail).toBe(1n);
+    expect(journal.unfinishedTurn).toBe(1n);
+    await expect(journal.append([start])).rejects.toThrow();
     expect((await readJournalCut(storage)).tail).toBe(1n);
   });
 });
 
-test("the Rust bridge refuses an imprecise acknowledgment even for a durable write", async () => {
+test("an imprecise acknowledgment fences the Rust writer without publishing", async () => {
   await runInDurableObject(fresh(), async (_instance, { storage }) => {
     const writer = await claimJournal(storage, identity, header);
-    const cut = await openCut(storage);
     const imprecise = { append: async (batch) => Number(await writer.append(batch)) };
-    await expect(cut.append(imprecise, [start])).rejects.toMatchObject({ code: "uncertain" });
-    expect(cut.tail).toBe(0n);
+    const journal = await bind(storage, imprecise);
+    await expect(journal.append([start])).rejects.toMatchObject({ code: "uncertain" });
+    expect(journal.tail).toBe(0n);
+    expect(journal.unfinishedTurn).toBeUndefined();
+    // The underlying host writer did commit, but the Rust owner cannot use it.
+    await expect(journal.append([start])).rejects.toMatchObject({ code: "fenced" });
     const persisted = await openCut(storage);
     expect(persisted.tail).toBe(1n);
     expect(persisted.unfinishedTurn).toBe(1n);
   });
 });
 
-test("duplicate delivery keys cannot be committed to the opaque hosted journal", async () => {
+test("known rollback leaves the Rust writer reusable without publishing its candidate", async () => {
   await runInDurableObject(fresh(), async (_instance, { storage }) => {
     const writer = await claimJournal(storage, identity, header);
-    const empty = await openCut(storage);
-    await expect(empty.append(writer, [start, end, started(2)])).rejects.toThrow();
+    const journal = await bind(storage, writer);
+    storage.sql.exec(`CREATE TRIGGER refuse_end BEFORE INSERT ON ion_records
+      WHEN NEW.seq = 2 BEGIN SELECT RAISE(ABORT, 'injected rollback'); END`);
+    await expect(journal.append([start, end])).rejects.toMatchObject({ code: "rolled_back" });
+    expect(journal.tail).toBe(0n);
+    expect(journal.messageCount).toBe(0);
     expect((await readJournalCut(storage)).tail).toBe(0n);
-    expect(await empty.append(writer, [start, end])).toBe(2n);
-    const closed = await openCut(storage);
-    await expect(closed.append(writer, [started(2)])).rejects.toThrow();
+    storage.sql.exec("DROP TRIGGER refuse_end");
+    expect(await journal.append([start, end])).toBe(2n);
+    expect(journal.tail).toBe(2n);
+    expect(journal.messageCount).toBe(1);
+  });
+});
+
+test("published keys participate in later validation before any write", async () => {
+  await runInDurableObject(fresh(), async (_instance, { storage }) => {
+    const writer = await claimJournal(storage, identity, header);
+    const journal = await bind(storage, writer);
+    await expect(journal.append([start, end, started(2)])).rejects.toThrow();
+    expect((await readJournalCut(storage)).tail).toBe(0n);
+    expect(await journal.append([start, end])).toBe(2n);
+    await expect(journal.append([started(2)])).rejects.toThrow();
     expect((await readJournalCut(storage)).tail).toBe(2n);
-    expect(await closed.append(writer, [started(2, "another")])).toBe(3n);
-    const persisted = await openCut(storage);
-    expect(persisted.unfinishedTurn).toBe(2n);
+    expect(await journal.append([started(2, "another")])).toBe(3n);
+    expect(journal.unfinishedTurn).toBe(2n);
+    expect((await openCut(storage)).unfinishedTurn).toBe(2n);
   });
 });
 

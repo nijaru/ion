@@ -194,9 +194,10 @@ impl Session {
                     );
                 }
                 let store = child.lock_store().map_err(|error| error.to_string())?;
-                if store.state.active.is_some()
-                    || store.state.pending_shell.is_some()
+                if store.working.state.active.is_some()
+                    || store.working.state.pending_shell.is_some()
                     || store
+                        .working
                         .state
                         .backgrounds
                         .values()
@@ -264,6 +265,7 @@ impl Session {
             owner,
         }])?;
         store
+            .working
             .live_backgrounds
             .insert(record.run, Arc::downgrade(lease));
         Ok(())

@@ -276,7 +276,7 @@ fn repeated_run_or_creation_identity_is_invalid_even_without_derived_indexes() {
         let entry = SessionEntry::DelegationAdmitted { record };
         // The candidate is otherwise legal at this second occurrence. The derived
         // index is not the authority for uniqueness across historical relationships.
-        let mut state = session.store().lock().unwrap().state.clone();
+        let mut state = session.store().lock().unwrap().working.state.clone();
         state.apply(&entry, &|_| false).unwrap();
         drop(session);
         let connection = Connection::open(root.join("parent.sqlite")).unwrap();

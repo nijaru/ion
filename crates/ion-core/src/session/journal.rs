@@ -4,6 +4,9 @@
 use super::*;
 use crate::ToolOccurrence;
 
+mod working;
+pub(super) use working::WorkingJournal;
+
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 pub(crate) const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -59,14 +62,6 @@ impl AppendBatch {
     }
 }
 
-pub(super) struct AppendBasis<'a> {
-    pub identity: JournalIdentity,
-    pub state: &'a State,
-    pub context_index: &'a ContextIndex,
-    pub settled: &'a BTreeSet<u64>,
-    pub message_count: usize,
-}
-
 pub(super) struct PreparedAppend<'a> {
     batch: AppendBatch,
     projection: AppendProjection<'a>,
@@ -79,15 +74,21 @@ pub(super) struct StagedAppend<'a>(AppendProjection<'a>);
 /// The backend acknowledged the transaction containing this candidate.
 pub(super) struct CommittedAppend<'a>(AppendProjection<'a>);
 
-pub(super) struct AppendProjection<'a> {
-    pub entries: &'a [SessionEntry],
-    pub candidate: State,
-    pub resolved_tools: Vec<Option<ToolOccurrence>>,
-    pub replacement: Option<context_index::WorkingContext>,
-    pub replace_pending_message: bool,
-    pub new_messages: Vec<ProjectedMessage>,
-    pub new_settled: Vec<u64>,
-    pub new_context_changes: Vec<ModelContextChange>,
+struct AppendProjection<'a> {
+    entries: &'a [SessionEntry],
+    candidate: State,
+    resolved_tools: Vec<Option<ToolOccurrence>>,
+    replacement: Option<context_index::WorkingContext>,
+    replace_pending_message: bool,
+    new_messages: Vec<ProjectedMessage>,
+    new_settled: Vec<u64>,
+    new_context_changes: Vec<ModelContextChange>,
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    new_keys: projection::JournalKeys,
 }
 
 impl<'a> PreparedAppend<'a> {
@@ -128,19 +129,21 @@ impl<'a> StagedAppend<'a> {
     }
 }
 
-impl<'a> CommittedAppend<'a> {
-    pub fn into_projection(self) -> AppendProjection<'a> {
-        self.0
-    }
-}
-
-impl AppendBasis<'_> {
+impl WorkingJournal {
     pub fn prepare<'a>(
         &self,
         entries: &'a [SessionEntry],
         read: impl Fn(u64) -> Result<SessionEntry, SessionError>,
         validate_artifact: impl Fn(&crate::ArtifactRef) -> Result<(), SessionError>,
     ) -> Result<PreparedAppend<'a>, SessionError> {
+        // Native SQLite enforces these indexes on insert; the hosted rows
+        // are opaque chunks and require the same replay checks before commit.
+        #[cfg(all(
+            target_arch = "wasm32",
+            target_os = "unknown",
+            feature = "cloudflare-journal"
+        ))]
+        let new_keys = self.keys.extension(entries)?;
         let mut replacement = None;
         let mut candidate = self.state.clone();
         // A shared pending shell owns the final context message. Seed only that
@@ -163,7 +166,7 @@ impl AppendBasis<'_> {
             });
         let replace_pending_message = pending_message.is_some();
         let mut new_messages: Vec<_> = pending_message.into_iter().collect();
-        let message_start = self.message_count - usize::from(replace_pending_message);
+        let message_start = self.messages.len() - usize::from(replace_pending_message);
         let mut new_context_changes = Vec::new();
         let mut new_settled = Vec::new();
         let mut resolved_tools = Vec::with_capacity(entries.len());
@@ -196,7 +199,7 @@ impl AppendBasis<'_> {
                     }
                     candidate.restore_context(self.context_index.read_context(*head_entry, &read)?);
                     replacement = Some(working_context(
-                        self.context_index,
+                        &self.context_index,
                         *head_entry,
                         &candidate,
                         &read,
@@ -229,6 +232,12 @@ impl AppendBasis<'_> {
                 new_messages,
                 new_settled,
                 new_context_changes,
+                #[cfg(all(
+                    target_arch = "wasm32",
+                    target_os = "unknown",
+                    feature = "cloudflare-journal"
+                ))]
+                new_keys,
             },
         })
     }

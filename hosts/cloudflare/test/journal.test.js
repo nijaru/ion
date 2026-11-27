@@ -125,12 +125,14 @@ test.each(["acknowledged", "lost", "superseded"])("pending append acknowledgment
     expect(cut.tail).toBe(1n);
     expect(cut.readRecord(1n)).toEqual(small);
     expect(complete).toBe(false);
+    expect(() => writer.readRecord(1n, 1n)).toThrow("journal writer is busy");
     await expect(writer.append(batch(1n))).rejects.toMatchObject({ code: "busy" });
     if (outcome === "superseded") await claimJournal(storage, identity);
     if (outcome === "lost") wait.reject(new Error("lost flush acknowledgment"));
     else wait.resolve();
     if (outcome === "acknowledged") {
       expect(await result).toEqual({ tail: 1n });
+      expect(writer.readRecord(1n, 1n)).toEqual(small);
     } else {
       expect(await result).toMatchObject({ error: { code: "uncertain" } });
       await expect(writer.append(batch(1n))).rejects.toMatchObject({ code: "fenced" });

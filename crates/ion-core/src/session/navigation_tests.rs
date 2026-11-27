@@ -57,17 +57,25 @@ fn compacted_payloads_leave_the_working_set_but_remain_inspectable() {
         .unwrap();
     assert_eq!(session.view().unwrap().messages, original.messages);
     assert!(
-        session.store().lock().unwrap().messages.is_empty(),
+        session.store().lock().unwrap().working.messages.is_empty(),
         "archived payloads remain resident after compaction"
     );
-    assert!(session.store().lock().unwrap().context_changes.is_empty());
+    assert!(
+        session
+            .store()
+            .lock()
+            .unwrap()
+            .working
+            .context_changes
+            .is_empty()
+    );
     let expected = session.context_messages().unwrap();
     drop(session);
     let reopened = Session::open(&path).unwrap();
     assert_eq!(reopened.context_messages().unwrap(), expected);
     assert_eq!(reopened.view().unwrap().messages, original.messages);
     assert!(
-        reopened.store().lock().unwrap().messages.is_empty(),
+        reopened.store().lock().unwrap().working.messages.is_empty(),
         "reopen resurrected the compacted archive into the working set"
     );
     select(&reopened, through);

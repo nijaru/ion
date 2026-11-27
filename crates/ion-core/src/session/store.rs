@@ -1,24 +1,14 @@
 //! The Session's durable SQLite store: prepare a candidate, commit, then publish it.
 //! The Store holds derived in-memory projections beside the authoritative journal.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
-use ion_ai::ModelContextChange;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use crate::request::RequestCalibration;
-
 use super::{
-    HistoryProjection, SessionEntry, SessionError, State, artifacts,
-    code_inspection::ChildRecordIndex,
-    context::ProjectedMessage,
-    context_index::{ContextIndex, WorkingContext},
-    journal::{self, CommittedAppend, JournalIdentity, PreparedAppend},
+    HistoryProjection, SessionEntry, SessionError, artifacts,
+    journal::{self, CommittedAppend, JournalIdentity, PreparedAppend, WorkingJournal},
     projection::ProjectionMode,
 };
 #[cfg(any(unix, test))]
@@ -113,21 +103,8 @@ impl<'a> StoreSeed<'a> {
 
 pub(super) struct Store {
     pub(super) connection: Connection,
-    identity: JournalIdentity,
     faulted: bool,
-    pub(super) state: State,
-    pub(super) settled: BTreeSet<u64>,
-    pub(super) messages: Vec<ProjectedMessage>,
-    // Sparse, rebuildable projection of committed context boundaries. It does
-    // not retain or reproject historical tool payloads on each model request.
-    pub(super) context_changes: Vec<ModelContextChange>,
-    pub(super) child_records: ChildRecordIndex,
-    pub(super) context_index: ContextIndex,
-    // Process-local capacity evidence. Reopen, fork and clone start cold; this
-    // is never serialized into Session history.
-    pub(super) calibration: Option<RequestCalibration>,
-    // Process-local task custody only; absent after reopen. Not replay grants.
-    pub(super) live_backgrounds: BTreeMap<uuid::Uuid, std::sync::Weak<()>>,
+    pub(super) working: WorkingJournal,
 }
 
 impl Store {
@@ -152,21 +129,11 @@ impl Store {
         identity: JournalIdentity,
         projection: HistoryProjection,
     ) -> Self {
-        let mut store = Self {
+        Self {
             connection,
-            identity,
             faulted: false,
-            state: projection.state,
-            settled: projection.settled,
-            messages: projection.messages,
-            context_changes: projection.context_changes,
-            child_records: projection.child_records,
-            context_index: projection.context_index,
-            calibration: None,
-            live_backgrounds: BTreeMap::new(),
-        };
-        store.prune_context();
-        store
+            working: WorkingJournal::open(identity, projection),
+        }
     }
 
     pub(super) fn ensure_healthy(&self) -> Result<(), SessionError> {
@@ -183,7 +150,7 @@ impl Store {
         &mut self,
         write: impl FnOnce(&rusqlite::Transaction<'_>, Header) -> Result<T, SessionError>,
     ) -> Result<T, SessionError> {
-        let identity = self.identity;
+        let identity = self.working.identity();
         self.transaction_with_header(|tx, header| {
             identity.verify(header.identity())?;
             write(tx, header)
@@ -217,119 +184,16 @@ impl Store {
         result
     }
 
-    fn prune_context(&mut self) {
-        if let Some((through, _)) = &self.state.compaction {
-            self.messages.retain(|record| {
-                record.entry > *through
-                    || self
-                        .state
-                        .compaction_inputs
-                        .binary_search(&record.entry)
-                        .is_ok()
-                    || self
-                        .state
-                        .active_inputs
-                        .binary_search(&record.entry)
-                        .is_ok()
-            });
-            self.settled.retain(|entry| entry > through);
-        }
-        if self.state.compaction.is_some() || self.state.replay_epoch_start != 0 {
-            self.context_changes.clear();
-        }
-    }
-
-    pub(super) fn orphaned_backgrounds(&self, session: uuid::Uuid) -> Vec<SessionEntry> {
-        self.state
-            .backgrounds
-            .iter()
-            .filter(|(run, link)| {
-                link.site.session == session
-                    && self
-                        .live_backgrounds
-                        .get(run)
-                        .is_none_or(|lease| lease.strong_count() == 0)
-            })
-            .map(|(run, _)| SessionEntry::DelegationSettled {
-                run: *run,
-                outcome: crate::DelegationOutcome::Unknown,
-            })
-            .collect()
-    }
-
     pub(super) fn append(&mut self, entries: &[SessionEntry]) -> Result<(), SessionError> {
         self.ensure_healthy()?;
-        let prepared = journal::AppendBasis {
-            identity: self.identity,
-            state: &self.state,
-            context_index: &self.context_index,
-            settled: &self.settled,
-            message_count: self.messages.len(),
-        }
-        .prepare(
+        let prepared = self.working.prepare(
             entries,
             |entry| read_entry(&self.connection, entry),
             |reference| artifacts::validate(&self.connection, reference),
         )?;
         let committed = self.commit_append(prepared)?;
-        self.publish_append(committed);
+        self.working.publish(committed);
         Ok(())
-    }
-
-    fn publish_append(&mut self, committed: CommittedAppend<'_>) {
-        let journal::AppendProjection {
-            entries,
-            candidate,
-            resolved_tools,
-            replacement,
-            replace_pending_message,
-            new_messages,
-            new_settled,
-            new_context_changes,
-        } = committed.into_projection();
-        let mut sequence = self.state.sequence;
-        for (entry, resolved) in entries.iter().zip(resolved_tools) {
-            sequence += 1;
-            self.child_records.observe(sequence, entry);
-            self.context_index.observe(entry);
-            self.context_index.link_display(entry, resolved);
-            if let SessionEntry::DelegationSettled { run, .. } = entry {
-                self.live_backgrounds.remove(run);
-            }
-        }
-        if entries.iter().any(|entry| {
-            matches!(
-                entry,
-                SessionEntry::ContextSelected { .. }
-                    | SessionEntry::Compacted { .. }
-                    | SessionEntry::ProviderReplayRebased { .. }
-                    | SessionEntry::EffectiveModelChanged { .. }
-                    | SessionEntry::ModelSelected { .. }
-                    | SessionEntry::ReasoningSelected { .. }
-                    | SessionEntry::ModelContextChanged { .. }
-            )
-        }) {
-            self.calibration = None;
-        }
-        self.state = candidate;
-        if let Some(WorkingContext {
-            messages,
-            settled,
-            changes,
-        }) = replacement
-        {
-            self.messages = messages;
-            self.settled = settled;
-            self.context_changes = changes;
-        } else {
-            self.settled.extend(new_settled);
-            if replace_pending_message {
-                self.messages.pop();
-            }
-            self.messages.extend(new_messages);
-            self.context_changes.extend(new_context_changes);
-        }
-        self.prune_context();
     }
 
     fn commit_append<'a>(

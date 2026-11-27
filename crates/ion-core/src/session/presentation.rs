@@ -164,21 +164,21 @@ impl Session {
         let connection = self.open_file_reader()?;
         let (snapshot, cursor, bundles) = {
             let store = self.lock_store()?;
-            let index = &store.context_index;
+            let index = &store.working.context_index;
             let cursor = before.unwrap_or_else(|| TranscriptCursor {
                 session: self.id(),
                 selection: index.selection,
-                cut: store.state.sequence,
+                cut: store.working.state.sequence,
                 root: index.display_head(),
             });
             if cursor.session != self.id()
                 || cursor.selection != index.selection
-                || cursor.cut > store.state.sequence
+                || cursor.cut > store.working.state.sequence
             {
                 return Ok(None);
             }
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
             let mut bundles = Vec::new();
             let mut root = cursor.root;
             let mut available = PAGE_RECORDS;
@@ -267,10 +267,10 @@ impl Session {
         let connection = self.open_file_reader()?;
         let (snapshot, records) = {
             let store = self.lock_store()?;
-            let index = &store.context_index;
+            let index = &store.working.context_index;
             if page.session != self.id()
                 || page.selection != index.selection
-                || page.cut > store.state.sequence
+                || page.cut > store.working.state.sequence
                 || source.entry == 0
             {
                 return Ok(None);
@@ -292,7 +292,7 @@ impl Session {
                 return Err(SessionError::EntryTooLarge);
             }
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
             (
                 snapshot,
                 std::iter::once(root)
@@ -313,16 +313,16 @@ impl Session {
         let connection = self.open_file_reader()?;
         let (snapshot, cursor, number, total, occurrence, records) = {
             let store = self.lock_store()?;
-            let index = &store.context_index;
+            let index = &store.working.context_index;
             let cursor = cursor.unwrap_or_else(|| ToolEvidenceCursor {
                 session: self.id(),
                 selection: index.selection,
-                cut: store.state.sequence,
+                cut: store.working.state.sequence,
                 head: index.tool_head(),
             });
             if cursor.session != self.id()
                 || cursor.selection != index.selection
-                || cursor.cut > store.state.sequence
+                || cursor.cut > store.working.state.sequence
             {
                 return Ok(None);
             }
@@ -352,7 +352,7 @@ impl Session {
                 records.push(fact.entry);
             }
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, store.state.sequence)?;
+            self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
             (snapshot, cursor, number, total, occurrence, records)
         };
         let activity = read_bounded_evidence(&snapshot, records)?
@@ -383,16 +383,21 @@ impl Session {
         let connection = self.open_file_reader()?;
         let (snapshot, cut, mut head) = {
             let store = self.lock_store()?;
-            let cut = store.state.sequence;
+            let cut = store.working.state.sequence;
             let snapshot = connection.unchecked_transaction()?;
             self.check_display_snapshot(&snapshot, cut)?;
-            (snapshot, cut, store.context_index.tool_head())
+            (snapshot, cut, store.working.context_index.tool_head())
         };
         while head != 0 {
             // Batch links and already-committed results are immutable. An
             // append after the pinned WAL cut can fill a zero result slot;
             // never read that newer coordinate from this historical walk.
-            let batch = self.lock_store()?.context_index.tool_batch(head).clone();
+            let batch = self
+                .lock_store()?
+                .working
+                .context_index
+                .tool_batch(head)
+                .clone();
             let SessionEntry::Assistant {
                 turn,
                 message,
@@ -456,7 +461,12 @@ impl Session {
 
     /// Bounded editable text observed from committed inputs across all branches.
     pub fn recent_prompts(&self) -> Result<Vec<String>, SessionError> {
-        Ok(self.lock_store()?.context_index.prompt_recall.snapshot())
+        Ok(self
+            .lock_store()?
+            .working
+            .context_index
+            .prompt_recall
+            .snapshot())
     }
 
     /// Anchor an uninterrupted observed turn without reading journal payloads.
@@ -470,14 +480,14 @@ impl Session {
         closure: u64,
     ) -> Result<Option<PresentationCursor>, SessionError> {
         let store = self.lock_store()?;
-        let index = &store.context_index;
-        let revision = store.state.sequence;
+        let index = &store.working.context_index;
+        let revision = store.working.state.sequence;
         if prefix.session != self.id()
             || prefix.selection != index.selection
             || admission <= prefix.revision
             || closure <= admission
-            || store.state.active.is_some()
-            || store.state.pending_shell.is_some()
+            || store.working.state.active.is_some()
+            || store.working.state.pending_shell.is_some()
             || index.transcript_checkpoint() != Some(closure)
             || index.transcript_parent(admission) != prefix.through
         {
@@ -513,10 +523,11 @@ impl Session {
         ) = {
             let store = self.lock_store()?;
             let snapshot = connection.unchecked_transaction()?;
-            let header = self.check_display_snapshot(&snapshot, store.state.sequence)?;
-            let revision = store.state.sequence;
-            let index = &store.context_index;
-            let unfinished = store.state.active.is_some() || store.state.pending_shell.is_some();
+            let header = self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
+            let revision = store.working.state.sequence;
+            let index = &store.working.context_index;
+            let unfinished =
+                store.working.state.active.is_some() || store.working.state.pending_shell.is_some();
             let after = after.filter(|cut| {
                 cut.session == header.id
                     && cut.selection == index.selection
@@ -550,7 +561,7 @@ impl Session {
                 revision,
                 index.selection,
                 index.head(),
-                store.state.reasoning,
+                store.working.state.reasoning,
                 unfinished,
                 index.usage,
                 selected,

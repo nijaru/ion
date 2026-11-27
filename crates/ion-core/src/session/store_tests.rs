@@ -62,9 +62,9 @@ fn seed_append_and_reopen_use_only_the_acquired_connection() {
     // lease exists, and no synthetic repair may be appended on reconstruction.
     let (mut reopened, retained) = Store::reopen(working.connection).unwrap();
     assert_eq!(retained.identity(), header.identity());
-    assert_eq!(reopened.state.sequence, 2);
-    assert_eq!(reopened.state.active, Some(1));
-    assert_eq!(reopened.messages[0].message, input);
+    assert_eq!(reopened.working.state.sequence, 2);
+    assert_eq!(reopened.working.state.active, Some(1));
+    assert_eq!(reopened.working.messages[0].message, input);
     let accepted = submission::request_receipt(&reopened.connection, header.id, &key, Some(&input))
         .unwrap()
         .unwrap();
@@ -78,8 +78,8 @@ fn seed_append_and_reopen_use_only_the_acquired_connection() {
         }])
         .unwrap();
     let (final_store, _) = Store::reopen(reopened.connection).unwrap();
-    assert_eq!(final_store.state.sequence, 3);
-    assert_eq!(final_store.state.active, None);
+    assert_eq!(final_store.working.state.sequence, 3);
+    assert_eq!(final_store.working.state.active, None);
     let settled =
         submission::request_receipt(&final_store.connection, header.id, &key, Some(&input))
             .unwrap()
@@ -268,7 +268,7 @@ fn stale_append_refuses_to_write_or_publish_working_state() {
     assert!(!refusal.is_commit_uncertain());
     assert_faulted(session.entry_count());
     assert_faulted(session.select_model(model("must not write again")));
-    assert_eq!(session.store().lock().unwrap().state.sequence, 1);
+    assert_eq!(session.store().lock().unwrap().working.state.sequence, 1);
     let saved = Session::inspect(fixture.path()).unwrap();
     assert_eq!(saved.entries.len(), 2);
     assert_eq!(saved.last_model, Some(model("other writer")));
@@ -477,8 +477,8 @@ fn commit_phase_failure_never_publishes_and_fences_until_reopen() {
     );
     {
         let store = session.store().lock().unwrap();
-        assert_eq!(store.state.sequence, 1);
-        assert_eq!(store.state.last_model, Some(model("before")));
+        assert_eq!(store.working.state.sequence, 1);
+        assert_eq!(store.working.state.last_model, Some(model("before")));
         assert_eq!(read_entries(&store.connection).unwrap(), before.entries);
         assert_faulted(store.ensure_healthy());
     }

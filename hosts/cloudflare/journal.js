@@ -118,6 +118,34 @@ class JournalWriter {
     this.#owner = { ...identity, generation };
   }
 
+  #checkHead(current, expectedTail) {
+    if (!sameIdentity(current, this.#owner)) {
+      return new JournalError("identity", "journal identity changed");
+    }
+    if (current.generation !== this.#owner.generation) {
+      return new JournalError("generation", "writer generation is stale");
+    }
+    if (current.tail !== expectedTail) {
+      return new JournalError("tail", `journal tail changed: expected ${expectedTail}, found ${current.tail}`);
+    }
+    return null;
+  }
+
+  // Only the current idle writer can read against its projected tail. No
+  // staged SQL becomes an input to preparing a dependent append.
+  readRecord(seq, expectedTail) {
+    if (this.#state !== "idle") {
+      throw new JournalError(this.#state, `journal writer is ${this.#state}`);
+    }
+    const { sql } = this.#storage;
+    const refused = this.#checkHead(head(sql), coordinate(expectedTail));
+    if (refused !== null) {
+      this.#state = "fenced";
+      throw refused;
+    }
+    return readRecord(sql, seq, expectedTail);
+  }
+
   // Resolution acknowledges exactly this batch. Rejection with `uncertain`
   // requires reopening committed history, never retrying on this writer.
   async append({ identity, expectedTail, bodies }) {
@@ -140,16 +168,8 @@ class JournalWriter {
     let rolledBack;
     try {
       refused = this.#storage.transactionSync(() => {
-        const current = head(sql);
-        if (!sameIdentity(current, this.#owner)) {
-          return new JournalError("identity", "journal identity changed");
-        }
-        if (current.generation !== this.#owner.generation) {
-          return new JournalError("generation", "writer generation is stale");
-        }
-        if (current.tail !== expectedTail) {
-          return new JournalError("tail", `journal tail changed: expected ${expectedTail}, found ${current.tail}`);
-        }
+        const refused = this.#checkHead(head(sql), expectedTail);
+        if (refused !== null) return refused;
         try {
           let seq = expectedTail;
           for (const body of bodies) {
@@ -171,11 +191,8 @@ class JournalWriter {
       if (refused === null) {
         // The SQL callback has returned; no transaction or mutex spans this wait.
         await this.#storage.sync();
-        const current = head(sql);
-        if (!sameIdentity(current, this.#owner) || current.generation !== this.#owner.generation ||
-            current.tail !== next) {
-          throw new Error("journal writer changed before acknowledgment");
-        }
+        const changed = this.#checkHead(head(sql), next);
+        if (changed !== null) throw changed;
       }
     } catch (error) {
       if (rolledBack !== undefined && error === rolledBack) {
@@ -228,26 +245,30 @@ class JournalCut {
   // Rows are immutable. A tail captured before later appends or writer claims
   // still delimits the same records, without a long-lived SQLite transaction.
   readRecord(seq) {
-    coordinate(seq);
-    if (seq === 0n || seq > this.#tail) throw new RangeError("record is outside this cut");
     const sql = this.#storage.sql;
     if (!sameIdentity(head(sql), this.#identity)) {
       throw new JournalError("identity", "journal identity changed");
     }
-    const key = `${seq}`;
-    const { bytes } = sql.exec("SELECT bytes FROM ion_records WHERE seq = CAST(? AS INTEGER)", key).one();
-    const body = new Uint8Array(bytes);
-    let offset = 0;
-    let expectPart = 0;
-    for (const { part, body: blob } of sql.exec(
-      "SELECT part, body FROM ion_chunks WHERE seq = CAST(? AS INTEGER) ORDER BY part", key)) {
-      if (offset === bytes || part !== expectPart++ || blob.byteLength !== Math.min(CHUNK_BYTES, bytes - offset)) {
-        throw new JournalError("corrupt", "invalid journal record chunks");
-      }
-      body.set(new Uint8Array(blob), offset);
-      offset += blob.byteLength;
-    }
-    if (offset !== bytes) throw new JournalError("corrupt", "missing journal record chunks");
-    return body;
+    return readRecord(sql, seq, this.#tail);
   }
+}
+
+function readRecord(sql, seq, tail) {
+  coordinate(seq);
+  if (seq === 0n || seq > tail) throw new RangeError("record is outside this cut");
+  const key = `${seq}`;
+  const { bytes } = sql.exec("SELECT bytes FROM ion_records WHERE seq = CAST(? AS INTEGER)", key).one();
+  const body = new Uint8Array(bytes);
+  let offset = 0;
+  let expectPart = 0;
+  for (const { part, body: blob } of sql.exec(
+    "SELECT part, body FROM ion_chunks WHERE seq = CAST(? AS INTEGER) ORDER BY part", key)) {
+    if (offset === bytes || part !== expectPart++ || blob.byteLength !== Math.min(CHUNK_BYTES, bytes - offset)) {
+      throw new JournalError("corrupt", "invalid journal record chunks");
+    }
+    body.set(new Uint8Array(blob), offset);
+    offset += blob.byteLength;
+  }
+  if (offset !== bytes) throw new JournalError("corrupt", "missing journal record chunks");
+  return body;
 }

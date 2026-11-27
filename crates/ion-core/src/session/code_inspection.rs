@@ -132,6 +132,7 @@ impl Session {
             Query::Parents { before } => {
                 let upper = before.map_or(Unbounded, Excluded);
                 let mut parents = store
+                    .working
                     .child_records
                     .0
                     .range((Unbounded, upper))
@@ -139,6 +140,7 @@ impl Session {
                     .filter(|(parent, _)| {
                         parent.assistant_entry < issuer.assistant_entry
                             && !store
+                                .working
                                 .state
                                 .pending
                                 .iter()
@@ -241,6 +243,7 @@ fn visible_children(
     if parent != issuer
         && (parent.assistant_entry >= issuer.assistant_entry
             || store
+                .working
                 .state
                 .pending
                 .iter()
@@ -251,6 +254,7 @@ fn visible_children(
         ));
     }
     store
+        .working
         .child_records
         .0
         .get(&parent)

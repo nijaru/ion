@@ -163,8 +163,11 @@ async fn no_live_admission_or_dispatch_until_acknowledged_even_if_the_wal_is_com
         assert!(provider.requests().is_empty());
         {
             let store = session.store().lock().unwrap();
-            assert_eq!(store.state.sequence, 0, "commit was never acknowledged");
-            assert_eq!(store.state.active, None);
+            assert_eq!(
+                store.working.state.sequence, 0,
+                "commit was never acknowledged"
+            );
+            assert_eq!(store.working.state.active, None);
         }
         assert_faulted(session.view());
         shutdown.await.unwrap();

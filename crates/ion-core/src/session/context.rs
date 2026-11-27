@@ -1,5 +1,8 @@
 //! Model context uses the resident, committed message projection, not raw audits.
-use super::{CompactionPlan, CompactionPlanning, Session, SessionError, Store, summary_message};
+use super::{
+    CompactionPlan, CompactionPlanning, Session, SessionError, journal::WorkingJournal,
+    summary_message,
+};
 use ion_ai::{Content, Message, ModelRef, Role};
 
 /// A model-visible message and its committed coordinate. Shell settlement
@@ -16,44 +19,47 @@ impl ProjectedMessage {
 }
 
 fn inputs_at<'a>(
-    store: &'a Store,
+    working: &'a WorkingJournal,
     entries: &'a [u64],
 ) -> impl Iterator<Item = &'a ProjectedMessage> {
     entries.iter().map(|entry| {
-        let index = store
+        let index = working
             .messages
             .binary_search_by_key(entry, |record| record.entry)
             .expect("input coordinates derive from messages on the selected path");
-        &store.messages[index]
+        &working.messages[index]
     })
 }
 
 // The summary is generated text, projected separately. Only these committed
 // records contribute original content: pinned inputs followed by the cut's suffix.
-fn selected_context_records(store: &Store) -> impl Iterator<Item = &ProjectedMessage> {
-    let through = store
+fn selected_context_records(working: &WorkingJournal) -> impl Iterator<Item = &ProjectedMessage> {
+    let through = working
         .state
         .compaction
         .as_ref()
         .map_or(0, |(through, _)| *through);
-    let first = store
+    let first = working
         .messages
         .partition_point(|record| record.entry <= through);
-    inputs_at(store, &store.state.compaction_inputs).chain(store.messages[first..].iter())
+    inputs_at(working, &working.state.compaction_inputs).chain(working.messages[first..].iter())
 }
 
-pub(super) fn context_projection(store: &Store, model: Option<&ModelRef>) -> Vec<Message> {
-    let mut messages = store
+pub(super) fn context_projection(
+    working: &WorkingJournal,
+    model: Option<&ModelRef>,
+) -> Vec<Message> {
+    let mut messages = working
         .state
         .compaction
         .as_ref()
         .map(|(through, summary)| vec![summary_message(*through, summary)])
         .unwrap_or_default();
-    let clear_all = model != store.state.last_effective_model.as_ref();
-    messages.extend(selected_context_records(store).map(|record| Message {
+    let clear_all = model != working.state.last_effective_model.as_ref();
+    messages.extend(selected_context_records(working).map(|record| Message {
         role: record.message.role,
         content: record.message.content.clone(),
-        provider_replay: if clear_all || record.entry < store.state.replay_epoch_start {
+        provider_replay: if clear_all || record.entry < working.state.replay_epoch_start {
             None
         } else {
             record.message.provider_replay.clone()
@@ -68,7 +74,7 @@ impl Session {
     /// top-level content and remain subject to request preparation's validation.
     pub(crate) fn context_has_images(&self) -> Result<bool, SessionError> {
         let store = self.lock_store()?;
-        Ok(selected_context_records(&store).any(|record| {
+        Ok(selected_context_records(&store.working).any(|record| {
             record
                 .message
                 .content
@@ -90,19 +96,22 @@ impl Session {
     ) -> Result<CompactionPlanning, SessionError> {
         let store = self.lock_store()?;
         let previous = store
+            .working
             .state
             .compaction
             .as_ref()
             .map_or(0, |(through, _)| *through);
-        let boundaries = store.settled.range((previous + 1)..);
+        let boundaries = store.working.settled.range((previous + 1)..);
         let Some(latest) = boundaries.clone().next_back().copied() else {
             return Ok(CompactionPlanning::NothingToCompact);
         };
         let first = store
+            .working
             .messages
             .partition_point(|record| record.entry <= previous);
-        let projected = &store.messages[first..];
+        let projected = &store.working.messages[first..];
         let summary_bytes = store
+            .working
             .state
             .compaction
             .as_ref()
@@ -113,13 +122,13 @@ impl Session {
             .map_or(0, |bytes| bytes + 1);
         let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
         let mut prefix_bytes = crate::summary::framing_bytes(instructions)?;
-        if let Some((through, summary)) = &store.state.compaction {
+        if let Some((through, summary)) = &store.working.state.compaction {
             prefix_bytes = prefix_bytes.saturating_add(crate::summary::content_bytes(
                 &summary_message(*through, summary),
                 summary_images,
             )?);
         }
-        for record in inputs_at(&store, &store.state.compaction_inputs) {
+        for record in inputs_at(&store.working, &store.working.state.compaction_inputs) {
             prefix_bytes = prefix_bytes.saturating_add(crate::summary::content_bytes(
                 &record.message,
                 summary_images,
@@ -153,7 +162,7 @@ impl Session {
         // The suffix target still uses all settled cuts, not just bounded ones:
         // choosing a smaller prefix must retain the original chunking policy.
         let mut suffix_bytes = 2usize;
-        for record in inputs_at(&store, &store.state.active_inputs) {
+        for record in inputs_at(&store.working, &store.working.state.active_inputs) {
             suffix_bytes = suffix_bytes
                 .saturating_add(crate::json_size::encoded_len(
                     &crate::prompt_size::NeutralMessage::from(&record.message),
@@ -162,9 +171,10 @@ impl Session {
         }
         let mut through = None;
         let mut suffix = projected.iter().rev().peekable();
-        for &boundary in store.settled.range((previous + 1)..).rev() {
+        for &boundary in store.working.settled.range((previous + 1)..).rev() {
             while let Some(record) = suffix.next_if(|record| record.entry > boundary) {
                 if store
+                    .working
                     .state
                     .active_inputs
                     .binary_search(&record.entry)
@@ -186,13 +196,14 @@ impl Session {
         // New input does not consume the active assistant's call/result batch.
         // Keep it even when only an empty recent suffix would fit, but never
         // pin an ended Turn's batch merely because the next Turn has started.
-        let through = if keep_bytes > 0 && store.state.active.is_some() {
+        let through = if keep_bytes > 0 && store.working.state.active.is_some() {
             projected
                 .iter()
                 .rev()
                 .find(|record| record.message.role == Role::Assistant)
                 .filter(|record| {
                     store
+                        .working
                         .state
                         .active_inputs
                         .first()
@@ -205,6 +216,7 @@ impl Session {
                 })
                 .and_then(|call| {
                     store
+                        .working
                         .settled
                         .range((previous + 1)..call.entry)
                         .next_back()
@@ -222,14 +234,15 @@ impl Session {
             .checked_sub(1)
             .map(|last| prefix_fits[last / 2]);
         let mut messages = Vec::new();
-        if let Some((through, summary)) = &store.state.compaction {
+        if let Some((through, summary)) = &store.working.state.compaction {
             messages.push(summary_message(*through, summary));
         }
         messages.extend(
-            inputs_at(&store, &store.state.compaction_inputs).map(|record| record.message.clone()),
+            inputs_at(&store.working, &store.working.state.compaction_inputs)
+                .map(|record| record.message.clone()),
         );
         let mut retained_input_bytes = 0usize;
-        for record in inputs_at(&store, &store.state.active_inputs)
+        for record in inputs_at(&store.working, &store.working.state.active_inputs)
             .take_while(|record| record.entry <= through_entry)
         {
             retained_input_bytes = retained_input_bytes

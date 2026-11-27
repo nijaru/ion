@@ -114,8 +114,8 @@ impl Session {
     fn position(&self, store: &Store) -> ContextPosition {
         ContextPosition {
             session: self.id(),
-            revision: store.state.sequence,
-            head_entry: store.context_index.head(),
+            revision: store.working.state.sequence,
+            head_entry: store.working.context_index.head(),
         }
     }
     fn check_position(&self, store: &Store, expected: ContextPosition) -> Result<(), SessionError> {
@@ -136,10 +136,11 @@ impl Session {
         let idle = self.reserve_idle()?;
         let store = self.lock_store()?;
         self.check_position(&store, expected)?;
-        if !store.context_index.can_select(head_entry) {
+        if !store.working.context_index.can_select(head_entry) {
             return Err(SessionError::InvalidContextPoint);
         }
         let context = store
+            .working
             .context_index
             .read_context(head_entry, &|entry| read_entry(&store.connection, entry))?;
         Ok(PreparedNavigation {

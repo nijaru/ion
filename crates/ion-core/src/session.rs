@@ -673,13 +673,29 @@ struct HistoryProjection {
     settled: BTreeSet<u64>,
     messages: Vec<ProjectedMessage>,
     #[cfg_attr(
-        not(any(unix, test)),
-        expect(dead_code, reason = "consumed by the native live Store")
+        not(any(
+            unix,
+            test,
+            all(
+                target_arch = "wasm32",
+                target_os = "unknown",
+                feature = "cloudflare-journal"
+            )
+        )),
+        expect(dead_code, reason = "consumed by the live journal")
     )]
     context_changes: Vec<ModelContextChange>,
     #[cfg_attr(
-        not(any(unix, test)),
-        expect(dead_code, reason = "consumed by the native live Store")
+        not(any(
+            unix,
+            test,
+            all(
+                target_arch = "wasm32",
+                target_os = "unknown",
+                feature = "cloudflare-journal"
+            )
+        )),
+        expect(dead_code, reason = "consumed by the live journal")
     )]
     child_records: ChildRecordIndex,
     context_index: ContextIndex,
@@ -998,7 +1014,7 @@ impl Session {
             exclude_from_context,
         });
         store.append(&entries)?;
-        Ok(store.state.sequence)
+        Ok(store.working.state.sequence)
     }
 
     fn record_user_shell(
@@ -1066,7 +1082,7 @@ impl Session {
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
-        Ok(self.lock_store()?.state.sequence)
+        Ok(self.lock_store()?.working.state.sequence)
     }
 
     /// Provider-neutral context projection when no effective target is supplied.
@@ -1077,33 +1093,33 @@ impl Session {
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
         let store = self.lock_store()?;
         let direct = match (
-            store.state.last_model.as_ref(),
-            store.state.last_effective_model.as_ref(),
+            store.working.state.last_model.as_ref(),
+            store.working.state.last_effective_model.as_ref(),
         ) {
             (Some(logical), Some(effective)) if logical == effective => Some(effective),
             _ => None,
         };
-        Ok(context_projection(&store, direct))
+        Ok(context_projection(&store.working, direct))
     }
 
     pub fn model_context(&self) -> Result<Option<ModelContextSnapshot>, SessionError> {
-        Ok(self.lock_store()?.state.last_context.clone())
+        Ok(self.lock_store()?.working.state.last_context.clone())
     }
 
     pub(crate) fn request_basis(&self, model: &ModelRef) -> Result<RequestBasis, SessionError> {
         let store = self.lock_store()?;
         Ok(RequestBasis {
-            revision: store.state.sequence,
-            turn: store.state.active,
-            messages: context_projection(&store, Some(model)),
-            previous: store.state.last_context.clone(),
-            reasoning: store.state.reasoning,
-            assistant_seen: store.state.assistant_seen_in_turn,
-            prefix_bound: store.state.prefix_bound_in_turn,
-            context_changes: (store.state.compaction.is_none()
-                && store.state.replay_epoch_start == 0
-                && store.state.last_effective_model.as_ref() == Some(model))
-            .then(|| store.context_changes.clone()),
+            revision: store.working.state.sequence,
+            turn: store.working.state.active,
+            messages: context_projection(&store.working, Some(model)),
+            previous: store.working.state.last_context.clone(),
+            reasoning: store.working.state.reasoning,
+            assistant_seen: store.working.state.assistant_seen_in_turn,
+            prefix_bound: store.working.state.prefix_bound_in_turn,
+            context_changes: (store.working.state.compaction.is_none()
+                && store.working.state.replay_epoch_start == 0
+                && store.working.state.last_effective_model.as_ref() == Some(model))
+            .then(|| store.working.context_changes.clone()),
         })
     }
 
@@ -1128,7 +1144,7 @@ impl Session {
         model: &ModelRef,
     ) -> Result<Vec<Message>, SessionError> {
         let store = self.lock_store()?;
-        Ok(context_projection(&store, Some(model)))
+        Ok(context_projection(&store.working, Some(model)))
     }
 
     /// Preparing an incompatible request must not discard evidence belonging
@@ -1139,6 +1155,7 @@ impl Session {
     ) -> Result<Option<RequestCalibration>, SessionError> {
         let store = self.lock_store()?;
         Ok(store
+            .working
             .calibration
             .as_ref()
             .filter(|calibration| calibration.matches_scope(scope))
@@ -1152,11 +1169,12 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.lock_store()?;
         if store
+            .working
             .calibration
             .as_ref()
             .is_some_and(|calibration| !calibration.applies(measurement, scope))
         {
-            store.calibration = None;
+            store.working.calibration = None;
         }
         Ok(())
     }
@@ -1166,7 +1184,7 @@ impl Session {
         calibration: RequestCalibration,
     ) -> Result<(), SessionError> {
         let mut store = self.lock_store()?;
-        store.calibration = Some(calibration);
+        store.working.calibration = Some(calibration);
         Ok(())
     }
 
@@ -1179,13 +1197,14 @@ impl Session {
         context: ModelContextSnapshot,
     ) -> Result<bool, SessionError> {
         let mut store = self.lock_store()?;
-        if store.state.active != Some(turn) || !store.state.pending.is_empty() {
+        if store.working.state.active != Some(turn) || !store.working.state.pending.is_empty() {
             return Err(SessionError::InvalidHistory);
         }
         let mut entries = Vec::new();
         // The first observed assistant still establishes the initial effective
         // model; preparation must not manufacture a completed execution fact.
         if store
+            .working
             .state
             .last_effective_model
             .as_ref()
@@ -1193,7 +1212,7 @@ impl Session {
         {
             entries.push(SessionEntry::EffectiveModelChanged { turn, model });
         }
-        if store.state.last_context.as_ref() != Some(&context) {
+        if store.working.state.last_context.as_ref() != Some(&context) {
             entries.push(SessionEntry::ModelContextChanged { turn, context });
         }
         if entries.is_empty() {
@@ -1247,6 +1266,7 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.lock_store()?;
         let retained_inputs = store
+            .working
             .state
             .active_inputs
             .iter()
@@ -1267,8 +1287,8 @@ impl Session {
         Ok(SessionStatus {
             cwd: header.cwd,
             name: header.name,
-            reasoning: store.state.reasoning,
-            entries: store.state.sequence,
+            reasoning: store.working.state.reasoning,
+            entries: store.working.state.sequence,
         })
     }
 
@@ -1291,7 +1311,7 @@ impl Session {
             let store = self.lock_store()?;
             let mut view = self.view_at(&store, read_header(&store.connection)?)?;
             view.entries = read_entries(&store.connection)?;
-            (view, store.state.sequence)
+            (view, store.working.state.sequence)
         };
         if view.entries.len() as u64 != sequence {
             return Err(SessionError::InvalidHistory);
@@ -1311,14 +1331,17 @@ impl Session {
         // is released; header, cursor and hot state belong to this one cut.
         let snapshot = connection.unchecked_transaction()?;
         let view = self.view_at(&store, read_header(&snapshot)?)?;
-        Ok((snapshot, view, store.state.sequence))
+        Ok((snapshot, view, store.working.state.sequence))
     }
 
     fn view_at(&self, store: &Store, header: Header) -> Result<SessionView, SessionError> {
         if header.identity() != self.header.identity() {
             return Err(SessionError::InvalidHistory);
         }
-        let context_path = store.context_index.path(store.context_index.head());
+        let context_path = store
+            .working
+            .context_index
+            .path(store.working.context_index.head());
         Ok(SessionView {
             id: header.id,
             cwd: header.cwd,
@@ -1326,20 +1349,25 @@ impl Session {
             context_path,
             entries: Vec::new(),
             messages: Vec::new(),
-            unfinished_turn: store.state.active,
-            unfinished_user_shell: store.state.pending_shell.as_ref().map(|shell| {
+            unfinished_turn: store.working.state.active,
+            unfinished_user_shell: store.working.state.pending_shell.as_ref().map(|shell| {
                 UnobservedUserShell {
                     admission_entry: shell.admission_entry,
                 }
             }),
-            last_end: store.state.last_end.clone(),
-            last_model: store.state.last_model.clone(),
-            reasoning: store.state.reasoning,
-            last_effective_model: store.state.last_effective_model.clone(),
-            last_context: store.state.last_context.clone(),
-            compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
-            last_execution: store.state.last_execution.clone(),
-            last_usage: store.state.last_usage,
+            last_end: store.working.state.last_end.clone(),
+            last_model: store.working.state.last_model.clone(),
+            reasoning: store.working.state.reasoning,
+            last_effective_model: store.working.state.last_effective_model.clone(),
+            last_context: store.working.state.last_context.clone(),
+            compacted_through: store
+                .working
+                .state
+                .compaction
+                .as_ref()
+                .map(|(through, _)| *through),
+            last_execution: store.working.state.last_execution.clone(),
+            last_usage: store.working.state.last_usage,
         })
     }
 
@@ -1368,11 +1396,11 @@ impl Session {
     }
 
     pub fn model_preference(&self) -> Result<Option<ModelRef>, SessionError> {
-        Ok(self.lock_store()?.state.last_model.clone())
+        Ok(self.lock_store()?.working.state.last_model.clone())
     }
 
     pub fn reasoning(&self) -> Result<Reasoning, SessionError> {
-        Ok(self.lock_store()?.state.reasoning)
+        Ok(self.lock_store()?.working.state.reasoning)
     }
 
     /// Caller holds this Session's operation gate through preflight and publication.
@@ -1386,11 +1414,11 @@ impl Session {
     ) -> Result<(), SessionError> {
         let mut store = self.lock_store()?;
         let mut entries = Vec::new();
-        if store.state.last_model.as_ref() != Some(&model) {
+        if store.working.state.last_model.as_ref() != Some(&model) {
             entries.push(SessionEntry::ModelSelected { model });
         }
         if let Some(reasoning) = reasoning
-            && store.state.reasoning != reasoning
+            && store.working.state.reasoning != reasoning
         {
             entries.push(SessionEntry::ReasoningSelected { reasoning });
         }
@@ -1434,7 +1462,10 @@ impl Session {
 
     pub(crate) fn selected_context_path(&self) -> Result<Vec<u64>, SessionError> {
         let store = self.lock_store()?;
-        Ok(store.context_index.path(store.context_index.head()))
+        Ok(store
+            .working
+            .context_index
+            .path(store.working.context_index.head()))
     }
 
     pub(crate) fn admit_turn(
@@ -1468,8 +1499,9 @@ impl Session {
             return Ok(TurnAdmission::Existing(receipt));
         }
         let mut entries = interrupted_operation_entries(&store, self.id());
-        let interrupted = store.state.pending.len();
+        let interrupted = store.working.state.pending.len();
         let turn = store
+            .working
             .state
             .last_id
             .checked_add(1)
@@ -1488,7 +1520,7 @@ impl Session {
         };
         Ok(TurnAdmission::New {
             turn,
-            entry: store.state.sequence,
+            entry: store.working.state.sequence,
             interrupted,
             input,
         })
@@ -1505,6 +1537,7 @@ impl Session {
         let activities = default_tool_activities(&message);
         let logical = self
             .lock_store()?
+            .working
             .state
             .last_model
             .clone()
@@ -1513,6 +1546,7 @@ impl Session {
         {
             let mut store = self.lock_store()?;
             if store
+                .working
                 .state
                 .last_effective_model
                 .as_ref()
@@ -1581,7 +1615,7 @@ impl Session {
             });
         }
         let mut store = self.lock_store()?;
-        let entry = store.state.sequence + 1;
+        let entry = store.working.state.sequence + 1;
         store.append(&entries)?;
         let mut inputs = CommittedInputEntries::default();
         let mut end = None;
@@ -1638,7 +1672,7 @@ impl Session {
                 .map(|result| SessionEntry::ToolResult { turn, result }),
         );
         let mut store = self.lock_store()?;
-        let entry = store.state.sequence + 1;
+        let entry = store.working.state.sequence + 1;
         store.append(&entries)?;
         Ok((entry, results))
     }
@@ -1654,10 +1688,10 @@ impl Session {
 
     pub(crate) fn steering_slot_open(&self, turn: u64) -> Result<bool, SessionError> {
         let store = self.lock_store()?;
-        if store.state.active != Some(turn) || !store.state.pending.is_empty() {
+        if store.working.state.active != Some(turn) || !store.working.state.pending.is_empty() {
             return Err(SessionError::InvalidHistory);
         }
-        Ok(!store.state.steering_waits_for_response)
+        Ok(!store.working.state.steering_waits_for_response)
     }
 
     pub(crate) fn record_inputs(
@@ -1682,7 +1716,7 @@ impl Session {
             return Ok(CommittedInputEntries::default());
         }
         let mut store = self.lock_store()?;
-        let first = store.state.sequence + 1;
+        let first = store.working.state.sequence + 1;
         store.append(&entries)?;
         Ok(CommittedInputEntries {
             steering: first..first + steering_count,
@@ -1740,10 +1774,11 @@ impl Session {
         call_id: &str,
     ) -> Result<crate::ToolOccurrence, SessionError> {
         let store = self.lock_store()?;
-        if store.state.active != Some(turn) {
+        if store.working.state.active != Some(turn) {
             return Err(SessionError::InvalidHistory);
         }
         store
+            .working
             .state
             .pending
             .iter()
@@ -1789,11 +1824,12 @@ impl Session {
         unstarted: &BTreeSet<String>,
     ) -> Result<TurnClosure, SessionError> {
         let mut store = self.lock_store()?;
-        if store.state.active != Some(turn) {
+        if store.working.state.active != Some(turn) {
             return Err(SessionError::InvalidHistory);
         }
         if unstarted.iter().any(|id| {
             !store
+                .working
                 .state
                 .pending
                 .iter()
@@ -1802,6 +1838,7 @@ impl Session {
             return Err(SessionError::InvalidHistory);
         }
         let settlements = store
+            .working
             .state
             .pending
             .iter()
@@ -1812,19 +1849,19 @@ impl Session {
                 )
             })
             .collect();
-        let mut entries = pending_results(turn, &store.state.pending, unstarted);
+        let mut entries = pending_results(turn, &store.working.state.pending, unstarted);
         entries.push(SessionEntry::TurnEnded { turn, reason });
         store.append(&entries)?;
         Ok(TurnClosure {
-            entry: store.state.sequence,
+            entry: store.working.state.sequence,
             settlements,
         })
     }
 }
 
 fn interrupted_operation_entries(store: &Store, session: uuid::Uuid) -> Vec<SessionEntry> {
-    let state = &store.state;
-    let mut entries = store.orphaned_backgrounds(session);
+    let state = &store.working.state;
+    let mut entries = store.working.orphaned_backgrounds(session);
     if let Some(shell) = &state.pending_shell {
         entries.push(SessionEntry::UserShellSettled {
             admission_entry: shell.admission_entry,

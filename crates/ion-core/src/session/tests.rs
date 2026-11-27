@@ -1478,7 +1478,7 @@ fn rejected_batch_does_not_publish_projection_or_settled_cut() {
     };
     {
         let mut store = session.store().lock().unwrap();
-        let before = store.settled.clone();
+        let before = store.working.settled.clone();
         assert!(matches!(
             store.append(&[
                 SessionEntry::Assistant {
@@ -1509,8 +1509,8 @@ fn rejected_batch_does_not_publish_projection_or_settled_cut() {
             ],),
             Err(SessionError::InvalidHistory)
         ));
-        assert_eq!(store.settled, before);
-        assert_eq!(store.messages.len(), 1);
+        assert_eq!(store.working.settled, before);
+        assert_eq!(store.working.messages.len(), 1);
     }
     session
         .record_assistant(turn, answer, Usage::unknown(), false)

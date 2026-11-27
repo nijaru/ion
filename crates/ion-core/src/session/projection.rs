@@ -294,11 +294,25 @@ impl JournalKeys {
         target_os = "unknown",
         feature = "cloudflare-journal"
     ))]
-    pub(super) fn validate_extension(&self, entries: &[SessionEntry]) -> Result<(), SessionError> {
+    pub(super) fn extension(&self, entries: &[SessionEntry]) -> Result<Self, SessionError> {
         let mut pending = Self::default();
-        entries
-            .iter()
-            .try_for_each(|entry| pending.observe(Some(self), entry))
+        for entry in entries {
+            pending.observe(Some(self), entry)?;
+        }
+        Ok(pending)
+    }
+
+    #[cfg(all(
+        target_arch = "wasm32",
+        target_os = "unknown",
+        feature = "cloudflare-journal"
+    ))]
+    pub(super) fn extend(&mut self, pending: Self) {
+        self.requests.extend(pending.requests);
+        self.runs.extend(pending.runs);
+        self.created_delegations.extend(pending.created_delegations);
+        self.bindings.extend(pending.bindings);
+        self.created_children.extend(pending.created_children);
     }
 }
 
