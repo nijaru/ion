@@ -1,5 +1,6 @@
 //! Persistent ancestry and sparse selected-context metadata; no raw payload cache.
 use super::*;
+use navigation::{PointKind, PointLocation};
 
 #[derive(Default)]
 pub(super) struct ContextIndex {
@@ -29,6 +30,7 @@ struct Node {
     transcript_boundary: bool,
     display_root: bool,
     projection: ProjectionKind,
+    navigation: Option<PointKind>,
     selectable: bool,
     settled: bool,
 }
@@ -96,6 +98,49 @@ impl ContextIndex {
                 .nodes
                 .get((head - 1) as usize)
                 .is_some_and(|node| node.selectable)
+    }
+
+    pub(super) fn navigation_locations(&self, entry: Option<u64>) -> Vec<PointLocation> {
+        let location = |node: &Node, entry, selected_path| {
+            let kind = node.navigation?;
+            Some(PointLocation {
+                entry,
+                head_entry: if kind == PointKind::RestoreInput {
+                    node.parent
+                } else {
+                    entry
+                },
+                kind,
+                selected_path,
+            })
+        };
+        if let Some(entry) = entry {
+            let Some(node) = entry
+                .checked_sub(1)
+                .and_then(|index| usize::try_from(index).ok())
+                .and_then(|index| self.nodes.get(index))
+                .filter(|node| node.navigation.is_some())
+            else {
+                return Vec::new();
+            };
+            let mut ancestor = self.head;
+            while ancestor > entry {
+                ancestor = self.parent(ancestor);
+            }
+            return location(node, entry, ancestor == entry)
+                .into_iter()
+                .collect();
+        }
+        let mut selected = self.path(self.head).into_iter().peekable();
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(index, node)| {
+                let entry = index as u64 + 1;
+                let on_path = selected.next_if_eq(&entry).is_some();
+                location(node, entry, on_path)
+            })
+            .collect()
     }
 
     pub(super) fn path(&self, mut head: u64) -> Vec<u64> {
@@ -459,6 +504,19 @@ impl ContextIndex {
                 | SessionEntry::UserShellSettled { .. }
                 | SessionEntry::TurnEnded { .. }
         );
+        let selectable =
+            selection.is_none() && detached.is_none() && self.pending == 0 && !self.shell;
+        let navigation = match entry {
+            SessionEntry::TurnStarted { completion, .. } if !completion.is_empty() => {
+                Some(PointKind::AutomatedInput)
+            }
+            SessionEntry::TurnStarted { .. } | SessionEntry::Steering { .. } => {
+                Some(PointKind::RestoreInput)
+            }
+            SessionEntry::Assistant { .. } if selectable => Some(PointKind::Assistant),
+            SessionEntry::ToolResult { .. } if selectable => Some(PointKind::ToolResult),
+            _ => None,
+        };
         self.nodes.push(Node {
             parent,
             transcript_parent: self.transcript_head(parent),
@@ -483,10 +541,8 @@ impl ContextIndex {
                 ),
             context,
             projection,
-            selectable: selection.is_none()
-                && detached.is_none()
-                && self.pending == 0
-                && !self.shell,
+            navigation,
+            selectable,
             settled,
         });
         if let Some(head) = selection {

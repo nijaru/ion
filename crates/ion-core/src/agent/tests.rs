@@ -2406,14 +2406,13 @@ async fn completion_modes_preserve_natural_requests_and_typed_idle_turns() {
         live.projection().sealed_prefix(),
         live.projection().items.len()
     );
-    assert!(
-        !view
-            .context_points()
-            .iter()
-            .find(|point| point.entry == automated)
-            .unwrap()
-            .restore_input
-    );
+    let mut automated_restore = None;
+    session
+        .visit_context_points(Some(automated), |_, point| {
+            automated_restore = Some(point.restore_input);
+        })
+        .unwrap();
+    assert_eq!(automated_restore, Some(false));
     assert!(
         crate::TranscriptProjection::from_session(&view)
             .items

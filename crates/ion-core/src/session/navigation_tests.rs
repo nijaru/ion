@@ -24,6 +24,14 @@ fn fixture() -> (PathBuf, PathBuf, Session) {
     let session = Session::create(&path, Some(&root)).unwrap();
     (root, path, session)
 }
+fn tree_points(session: &Session) -> Vec<ContextPoint> {
+    let mut points = Vec::new();
+    session
+        .visit_context_points(None, |_, point| points.push(point))
+        .unwrap();
+    points
+}
+
 fn finish(session: &Session, input: &str, output: &str) -> u64 {
     let (turn, _) = session.begin_turn(input.into(), model("one")).unwrap();
     session
@@ -37,6 +45,76 @@ fn select(session: &Session, head: u64) -> ContextPosition {
         .unwrap()
         .commit()
         .unwrap()
+}
+
+#[tokio::test]
+async fn context_browser_reads_only_indexed_points_and_direct_selection_reads_one() {
+    let (root, path, session) = fixture();
+    finish(&session, "original input", "original answer");
+    let original_end = session.context_position().unwrap().head_entry;
+    select(&session, 0);
+    finish(&session, "alternate input", "alternate answer");
+    let other_input = session.context_position().unwrap().head_entry - 2;
+    drop(session);
+
+    let session = Arc::new(Session::open(&path).unwrap());
+    let expected = session.context_position().unwrap();
+    let reader = session.reader().unwrap();
+    let independent = Connection::open(&path).unwrap();
+    let corrupt = |entry| {
+        independent
+            .execute(
+                "UPDATE entries SET body=CAST('{}' AS BLOB) WHERE seq=?1",
+                [i64::try_from(entry).unwrap()],
+            )
+            .unwrap()
+    };
+    // A closure matters to validation on open, but isn't a navigation point.
+    corrupt(original_end);
+    assert!(reader.view().await.is_err());
+    let read = |entry| {
+        reader.map_context_points(
+            entry,
+            |_, point| point,
+            |position, points| (position, points),
+        )
+    };
+    let (position, points) = read(None).await.unwrap();
+    assert_eq!(position, expected);
+    assert_eq!(
+        points
+            .iter()
+            .map(|point| (point.entry, point.selected_path))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, false),
+            (2, false),
+            (other_input, true),
+            (other_input + 1, true)
+        ]
+    );
+    assert!(read(Some(original_end)).await.unwrap().1.is_empty());
+
+    // The explicit selector doesn't decode even other eligible input points.
+    corrupt(other_input);
+    let (position, points) = read(Some(1)).await.unwrap();
+    assert_eq!(position, expected);
+    let [point] = points.as_slice() else {
+        panic!("expected the original prompt only")
+    };
+    assert_eq!(point.entry, 1);
+    assert_eq!(point.head_entry, 0);
+    assert!(point.restore_input);
+    assert!(!point.selected_path);
+    assert_eq!(
+        point.message,
+        Message::user_input("original input".into(), [])
+    );
+    assert!(read(None).await.is_err());
+    drop(independent);
+    drop(reader);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[tokio::test]
@@ -878,8 +956,7 @@ fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
         .unwrap();
     let original = session.view().unwrap();
     let original_head = original.context_position().head_entry;
-    let original_answer = original
-        .context_points()
+    let original_answer = tree_points(&session)
         .into_iter()
         .find(|point| !point.restore_input)
         .unwrap();
@@ -937,7 +1014,7 @@ fn alternatives_survive_selection_reopen_copies_and_new_global_turn_ids() {
     let view = session.view().unwrap();
     assert_eq!(view.entries[..alternate_entries.len()], alternate_entries);
     assert!(
-        view.context_points()
+        tree_points(&session)
             .iter()
             .any(|point| !point.selected_path && point.message == answer("alternate result"))
     );
@@ -1113,7 +1190,7 @@ fn complete_tool_groups_context_metadata_and_compaction_follow_the_selected_path
     session
         .end_turn(turn, TurnEndReason::Completed, &BTreeSet::new())
         .unwrap();
-    let points = session.view().unwrap().context_points();
+    let points = tree_points(&session);
     assert!(!points.iter().any(|point| point.entry == unsettled));
     assert!(points.iter().any(|point| point.entry == settled
         && point.head_entry == settled

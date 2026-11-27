@@ -168,6 +168,24 @@ impl SessionReader {
         self.run(Session::last_completed_answer).await
     }
 
+    /// Project one navigation point at a time and finish the result on the
+    /// retained blocking lane, for example by encoding a reply.
+    pub async fn map_context_points<P, T: Send + 'static>(
+        &self,
+        entry: Option<u64>,
+        mut project: impl FnMut(super::ContextPosition, super::ContextPoint) -> P + Send + 'static,
+        finish: impl FnOnce(super::ContextPosition, Vec<P>) -> T + Send + 'static,
+    ) -> Result<T, SessionError> {
+        self.run(move |session| {
+            let mut output = Vec::new();
+            let position = session.visit_context_points(entry, |position, point| {
+                output.push(project(position, point));
+            })?;
+            Ok(finish(position, output))
+        })
+        .await
+    }
+
     /// Project terminal history in a retained read, without a full SessionView.
     pub async fn map_presentation<T: Send + 'static>(
         &self,

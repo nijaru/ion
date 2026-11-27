@@ -79,6 +79,53 @@ impl State {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PointKind {
+    RestoreInput,
+    AutomatedInput,
+    Assistant,
+    ToolResult,
+}
+
+pub(super) struct PointLocation {
+    pub(super) entry: u64,
+    pub(super) head_entry: u64,
+    pub(super) kind: PointKind,
+    pub(super) selected_path: bool,
+}
+
+impl PointLocation {
+    fn read(self, snapshot: &Connection) -> Result<ContextPoint, SessionError> {
+        let message = match (self.kind, read_entry(snapshot, self.entry)?) {
+            (
+                PointKind::RestoreInput,
+                SessionEntry::TurnStarted {
+                    input, completion, ..
+                },
+            ) if completion.is_empty() => input,
+            (PointKind::RestoreInput, SessionEntry::Steering { input, .. }) => input,
+            (
+                PointKind::AutomatedInput,
+                SessionEntry::TurnStarted {
+                    input, completion, ..
+                },
+            ) if !completion.is_empty() => input,
+            (PointKind::Assistant, SessionEntry::Assistant { message, .. }) => message,
+            (PointKind::ToolResult, SessionEntry::ToolResult { result, .. }) => {
+                result.message(self.entry, true)
+            }
+            _ => return Err(SessionError::InvalidHistory),
+        };
+        Ok(ContextPoint {
+            entry: self.entry,
+            head_entry: self.head_entry,
+            message,
+            restore_input: self.kind == PointKind::RestoreInput,
+            selected_path: self.selected_path,
+        })
+    }
+}
+
 /// Holds the engine operation gate across host preflight and durable publication.
 /// Dropping an uncommitted navigation leaves history and selection untouched.
 pub struct PreparedNavigation<'a> {
@@ -128,6 +175,54 @@ impl Session {
         let store = self.lock_store()?;
         Ok(self.position(&store))
     }
+    /// Visit navigation boundaries in journal order, across all alternatives,
+    /// or read just one requested entry. The position and each point belong to
+    /// one committed cut. The visitor runs outside Store locks and receives one
+    /// owned point at a time. Project data only; the file-backed walk holds a
+    /// read transaction until it finishes. An ineligible target produces no point.
+    pub fn visit_context_points(
+        &self,
+        entry: Option<u64>,
+        mut visit: impl FnMut(ContextPosition, ContextPoint),
+    ) -> Result<ContextPosition, SessionError> {
+        if self.journal().file.is_none() {
+            // The in-memory journal can't hold an independent read cut. Own
+            // the results before releasing the Store and calling host code.
+            let (position, points) = {
+                let store = self.lock_store()?;
+                let points = store
+                    .working
+                    .context_index
+                    .navigation_locations(entry)
+                    .into_iter()
+                    .map(|location| location.read(&store.connection))
+                    .collect::<Result<Vec<_>, _>>()?;
+                (self.position(&store), points)
+            };
+            for point in points {
+                visit(position, point);
+            }
+            return Ok(position);
+        }
+
+        let connection = self.open_file_reader()?;
+        let (snapshot, position, locations) = {
+            let store = self.lock_store()?;
+            let position = self.position(&store);
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_read_snapshot(&snapshot, position.revision)?;
+            (
+                snapshot,
+                position,
+                store.working.context_index.navigation_locations(entry),
+            )
+        };
+        for location in locations {
+            visit(position, location.read(&snapshot)?);
+        }
+        Ok(position)
+    }
+
     pub fn prepare_navigation(
         &self,
         expected: ContextPosition,
@@ -161,43 +256,5 @@ impl SessionView {
             revision: self.entries.len() as u64,
             head_entry: self.context_path.last().copied().unwrap_or(0),
         }
-    }
-    /// User points restore input from before its admission. Assistant points are
-    /// offered only after a complete call/result group, never mid-tool dispatch.
-    pub fn context_points(&self) -> Vec<ContextPoint> {
-        let mut index = ContextIndex::default();
-        let selected: BTreeSet<_> = self.context_path.iter().copied().collect();
-        let mut points = Vec::new();
-        for (offset, entry) in self.entries.iter().enumerate() {
-            index.observe(entry);
-            let coordinate = offset as u64 + 1;
-            let tool_message;
-            let (message, restore_input) = match entry {
-                SessionEntry::TurnStarted {
-                    input, completion, ..
-                } => (input, completion.is_empty()),
-                SessionEntry::Steering { input, .. } => (input, true),
-                SessionEntry::Assistant { message, .. } if index.can_select(coordinate) => {
-                    (message, false)
-                }
-                SessionEntry::ToolResult { result, .. } if index.can_select(coordinate) => {
-                    tool_message = result.message(coordinate, true);
-                    (&tool_message, false)
-                }
-                _ => continue,
-            };
-            points.push(ContextPoint {
-                entry: coordinate,
-                head_entry: if restore_input {
-                    index.parent(coordinate)
-                } else {
-                    coordinate
-                },
-                message: message.clone(),
-                restore_input,
-                selected_path: selected.contains(&coordinate),
-            });
-        }
-        points
     }
 }

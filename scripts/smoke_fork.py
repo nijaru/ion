@@ -267,7 +267,12 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         image_view = json.loads(ion("--session", image_session, "inspect").stdout)
         image_entry = next(index + 1 for index, entry in enumerate(image_view["entries"]) if entry["kind"] == "turn_started")
         image_affinity = requests[-1]["session_id"]
-        for command, notice, mode in ((command, notice, mode) for command, notice in ((b"/fork 1\r", b"Forked as"), (b"/tree\r", b"Context selected")) for mode in ("inline", "fullscreen")):
+        restore_commands = (
+            (b"/fork 1\r", b"Forked as"),
+            (b"/tree\r", b"Context selected"),
+            (f"/tree {image_entry}\r".encode(), b"Context selected"),
+        )
+        for command, notice, mode in ((command, notice, mode) for command, notice in restore_commands for mode in ("inline", "fullscreen")):
             master, slave = pty.openpty()
             fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
             child = subprocess.Popen([binary, "--cwd", workspace, "--session", image_session, "--tui-mode", mode, "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
@@ -334,7 +339,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         assert tree_view["entries"][:len(image_view["entries"])] == image_view["entries"], "tree rewrote original facts"
         selections = [entry["data"]["head_entry"] for entry in tree_view["entries"] if entry["kind"] == "context_selected"]
         original_parent = max((entry for entry in image_view["context_path"] if entry < image_entry), default=0)
-        assert selections == [original_parent, original_parent], "search selected a different source boundary"
+        assert selections == [original_parent] * 4, "picker and direct selection must restore the same boundary"
         # Export through the passive CLI after a real same-Session branch change.
         # A hidden branch must not survive inside HTML's source or media payload.
         selected = tree_view["context_path"][-1]

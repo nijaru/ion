@@ -44,21 +44,49 @@ impl Control {
         match command {
             "submit_request" => self.queue_request(value, id, credit)?,
             "get_request" => self.queue_request_read(value, id, credit)?,
-            "inspect" | "get_context" | "list_turns" => {
-                let command = match command {
-                    "inspect" => "inspect",
-                    "get_context" => "get_context",
-                    _ => "list_turns",
+            "get_context" => {
+                let reader = self.host.session().reader()?;
+                let reply_id = id.clone();
+                self.queue_access(id, "get_context", credit, async move {
+                    reader
+                        .map_context_points(
+                            None,
+                            |_, point| {
+                                json!({
+                                    "entry":point.entry,
+                                    "head_entry":point.head_entry,
+                                    "restore_input":point.restore_input,
+                                    "selected_path":point.selected_path,
+                                    "preview":preview_input(&point.message),
+                                })
+                            },
+                            move |position, points| {
+                                let data = json!({"position":position,"points":points});
+                                let bytes =
+                                    crate::publication::encode(crate::publication::Record::Json(
+                                        success(reply_id, "get_context", data),
+                                    ))?;
+                                Ok(AccessData::Encoded(bytes))
+                            },
+                        )
+                        .await?
+                });
+            }
+            "inspect" | "list_turns" => {
+                let command = if command == "inspect" {
+                    "inspect"
+                } else {
+                    "list_turns"
                 };
                 let reader = self.host.session().reader()?;
                 let reply_id = id.clone();
                 self.queue_access(id, command, credit, async move {
                     let result = reader.map_view(move |view| -> Result<AccessData> {
-                        let data = match command {
-                            "inspect" => inspection::to_value(&view),
-                            "get_context" => Ok(json!({"position":view.context_position(),"points":view.context_points().iter().map(|point| json!({"entry":point.entry,"head_entry":point.head_entry,"restore_input":point.restore_input,"selected_path":point.selected_path,"preview":preview_input(&point.message)})).collect::<Vec<_>>()})),
-                            _ => Ok(json!(view.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
-                        }?;
+                        let data = if command == "inspect" {
+                            inspection::to_value(&view)?
+                        } else {
+                            json!(view.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())
+                        };
                         let bytes = crate::publication::encode(crate::publication::Record::Json(success(reply_id, command, data)))?;
                         Ok(AccessData::Encoded(bytes))
                     }).await??;

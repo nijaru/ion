@@ -17,7 +17,18 @@ const MAX_MODEL_METADATA_WIDTH: usize = 96;
 
 pub(super) struct ContextPickerValue {
     expected: ion_core::ContextPosition,
-    point: ion_core::ContextPoint,
+    head_entry: u64,
+    restore: Option<Message>,
+}
+
+impl ContextPickerValue {
+    fn new(expected: ion_core::ContextPosition, point: ion_core::ContextPoint) -> Self {
+        Self {
+            expected,
+            head_entry: point.head_entry,
+            restore: point.restore_input.then_some(point.message),
+        }
+    }
 }
 
 pub(super) fn apply_context(
@@ -30,9 +41,9 @@ pub(super) fn apply_context(
         ui,
         ion_app::BindingChange::NavigateContext {
             expected: value.expected,
-            head_entry: value.point.head_entry,
+            head_entry: value.head_entry,
         },
-        value.point.restore_input.then_some(value.point.message),
+        value.restore,
     )
 }
 
@@ -45,68 +56,63 @@ pub(super) fn tree(
         .then(|| args.parse::<u64>().context("use /tree [ENTRY]"))
         .transpose()?;
     let reader = runtime.session().reader()?;
-    let read = async move {
-        reader
-            .map_view(move |view| prepare_tree(view, entry))
-            .await?
-    };
-    if entry.is_some() {
-        ui.session_io.start_binding_read(runtime.session(), read)
+    if let Some(entry) = entry {
+        ui.session_io
+            .start_binding_read(runtime.session(), async move {
+                reader
+                    .map_context_points(Some(entry), ContextPickerValue::new, |_, mut targets| {
+                        let target = targets.pop().context(
+                            "selected message does not exist or is not a complete boundary",
+                        )?;
+                        Ok(super::session_io::ReadOutput::Context(target))
+                    })
+                    .await?
+            })
     } else {
-        ui.session_io.start(runtime.session(), read)
+        ui.session_io.start(runtime.session(), async move {
+            reader
+                .map_context_points(None, context_item, tree_picker)
+                .await?
+        })
     }
 }
 
-fn prepare_tree(
-    view: ion_core::SessionView,
-    entry: Option<u64>,
-) -> Result<super::session_io::ReadOutput> {
-    let expected = view.context_position();
-    let points = view.context_points();
-    if let Some(entry) = entry {
-        let point = points
-            .into_iter()
-            .find(|point| point.entry == entry)
-            .context("selected message does not exist or is not a complete boundary")?;
-        return Ok(super::session_io::ReadOutput::Context(ContextPickerValue {
-            expected,
-            point,
-        }));
+fn context_item(expected: ion_core::ContextPosition, point: ion_core::ContextPoint) -> PickerItem {
+    let metadata = format!(
+        "{} entry {} · {}",
+        if point.selected_path {
+            "[path]"
+        } else {
+            "[alternative]"
+        },
+        point.entry,
+        if point.restore_input {
+            "edit before"
+        } else if point.message.role == ion_ai::Role::Tool {
+            "after tool group"
+        } else {
+            "continue after"
+        },
+    );
+    PickerItem {
+        label: format!(
+            "{metadata} · {}",
+            plain(&crate::preview_input(&point.message))
+        ),
+        detail: Some("Changes model context only; workspace files remain current".into()),
+        value: PickerValue::Context {
+            search: MessageSearch::new(&point.message, &metadata),
+            target: ContextPickerValue::new(expected, point),
+        },
     }
-    let mut items = points
-        .into_iter()
-        .rev()
-        .map(|point| {
-            let metadata = format!(
-                "{} entry {} · {}",
-                if point.selected_path {
-                    "[path]"
-                } else {
-                    "[alternative]"
-                },
-                point.entry,
-                if point.restore_input {
-                    "edit before"
-                } else if point.message.role == ion_ai::Role::Tool {
-                    "after tool group"
-                } else {
-                    "continue after"
-                },
-            );
-            PickerItem {
-                label: format!(
-                    "{metadata} · {}",
-                    plain(&crate::preview_input(&point.message))
-                ),
-                detail: Some("Changes model context only; workspace files remain current".into()),
-                value: PickerValue::Context {
-                    search: MessageSearch::new(&point.message, &metadata),
-                    target: ContextPickerValue { expected, point },
-                },
-            }
-        })
-        .collect::<Vec<_>>();
+}
+
+fn tree_picker(
+    expected: ion_core::ContextPosition,
+    mut items: Vec<PickerItem>,
+) -> Result<super::session_io::ReadOutput> {
     anyhow::ensure!(!items.is_empty(), "no messages to explore");
+    items.reverse();
     // A message boundary can precede the selected head's metadata. Keeping the
     // current context must not navigate to that boundary or rebind the runtime.
     items.insert(
