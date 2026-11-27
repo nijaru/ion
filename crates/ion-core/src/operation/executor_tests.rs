@@ -155,6 +155,54 @@ fn dropping_the_observer_does_not_release_running_work() {
 }
 
 #[test]
+fn pending_async_admission_survives_abandoned_receipt_wait_and_joins_on_shutdown() {
+    let executor = Arc::new(ManualExecutor::default());
+    let owner = Arc::new(OperationOwner::new(executor.executor()));
+    let stop = CancellationToken::new();
+    let running = Arc::new(AtomicBool::new(false));
+    let running_after_ack = running.clone();
+    let (acknowledge, held_commit) = oneshot::channel();
+    let mut waiting = Box::pin(owner.start_admitting(stop.clone(), async move {
+        let receipt = held_commit.await.unwrap();
+        Ok((
+            receipt,
+            Some(async move {
+                running_after_ack.store(true, Ordering::SeqCst);
+                Ok::<_, SessionError>(())
+            }),
+        ))
+    }));
+    let mut cx = Context::from_waker(Waker::noop());
+    assert!(waiting.as_mut().poll(&mut cx).is_pending());
+    assert!(executor.step(), "the actual task entered its commit wait");
+    assert!(owner.try_state().unwrap().running.is_some());
+    assert!(matches!(owner.try_lock(), Err(OperationError::Active)));
+    assert!(!running.load(Ordering::SeqCst));
+    drop(waiting);
+    assert!(
+        !stop.is_cancelled(),
+        "losing the admission observer is not Stop"
+    );
+
+    let mut shutdown = std::pin::pin!(owner.shutdown());
+    assert!(shutdown.as_mut().poll(&mut cx).is_pending());
+    assert!(
+        stop.is_cancelled(),
+        "shutdown reached the operation before commit completed"
+    );
+    assert!(executor.step());
+    assert!(!running.load(Ordering::SeqCst));
+    assert!(shutdown.as_mut().poll(&mut cx).is_pending());
+    acknowledge.send(42).unwrap();
+    executor.complete(shutdown).unwrap();
+    assert!(
+        running.load(Ordering::SeqCst),
+        "a positive commit still requires settlement"
+    );
+    assert!(matches!(owner.try_lock(), Err(OperationError::Closed)));
+}
+
+#[test]
 fn lost_dispatch_cannot_turn_an_admitted_operation_into_success_or_idle() {
     let executor = Arc::new(ManualExecutor::default());
     let owner = Arc::new(OperationOwner::new(executor.executor()));

@@ -293,6 +293,9 @@ impl Agent {
     /// Accept a literal message with stable delivery correlation. Only the message
     /// defines conflicting reuse; redelivery cannot change the original binding.
     /// An accepted request reconciles even while another operation is active.
+    /// Dropping the wait does not stop a reserved admission or its Turn. Use
+    /// the returned operation, the parent cancellation token, or Session shutdown
+    /// to stop execution; inspect the request key to reconcile a lost reply.
     pub async fn submit_request<F, M: Send + 'static>(
         &self,
         session: Arc<Session>,
@@ -319,75 +322,82 @@ impl Agent {
         let admission = async {
             self.preflight_access(&stop).await?;
             let io = session.io()?;
-            // The Root may start before the admission worker joins. Its storage
-            // lane must not overlap the worker's retained operation.
-            let turn_io = session.io()?;
             let agent = self.clone();
             let key = key.clone();
             let input = input.clone();
-            io.run_with(move |session| {
-                // Borrow this slot in prepare: an early error must release the
-                // operation gate before dropping arbitrary observer captures.
-                let mut observe = Some(observe);
-                let (receipt, operation) =
-                    session.operations.start_prepared(stop.clone(), || {
-                        if let Some(receipt) = session.reconcile_request(&key, &input)? {
-                            return Ok((receipt, None));
-                        }
-                        agent.validate_submission(session, &input, &stop)?;
-                        let (binding, catalog) = agent.admission_binding(session, &instructions)?;
-                        let admission = session.admit_turn(
-                            input,
-                            agent.model.clone(),
-                            Some(key.clone()),
-                            binding,
-                        )?;
-                        let (turn, entry, interrupted, input) = match admission {
-                            TurnAdmission::Existing(receipt) => return Ok((receipt, None)),
-                            TurnAdmission::New {
-                                turn,
-                                entry,
-                                interrupted,
+            let (receipt, operation) = session
+                .operations
+                .start_admitting(stop.clone(), async move {
+                    let admission_agent = agent.clone();
+                    let admission_stop = stop.clone();
+                    let admission_instructions = instructions.clone();
+                    let (receipt, start) = io
+                        .run_with(move |session| -> Result<_, AgentError> {
+                            if let Some(receipt) = session.reconcile_request(&key, &input)? {
+                                return Ok((receipt, None));
+                            }
+                            admission_agent.validate_submission(
+                                session,
+                                &input,
+                                &admission_stop,
+                            )?;
+                            let (binding, catalog) = admission_agent
+                                .admission_binding(session, &admission_instructions)?;
+                            let admission = session.admit_turn(
                                 input,
-                            } => (turn, entry, interrupted, input),
-                        };
-                        let receipt = RequestReceipt {
-                            session: session.id(),
-                            key,
-                            turn,
-                            end: None,
-                        };
-                        let observe = observe.take().expect("new admission owns its observer");
-                        Ok((
-                            receipt,
-                            Some(async move {
-                                let (mut observe, failed) =
-                                    contained_observer(observe, stop.clone());
-                                let result = agent
-                                    .run_admitted(
-                                        turn_io,
-                                        TurnStart {
-                                            turn,
-                                            interrupted,
-                                            origin: TurnOrigin::User { entry, input },
-                                            catalog,
-                                        },
-                                        instructions,
-                                        stop,
-                                        steering.as_ref(),
-                                        &mut observe,
-                                    )
-                                    .await;
-                                observation_result(
-                                    result,
-                                    failed.load(std::sync::atomic::Ordering::Relaxed),
+                                admission_agent.model,
+                                Some(key.clone()),
+                                binding,
+                            )?;
+                            match admission {
+                                TurnAdmission::Existing(receipt) => Ok((receipt, None)),
+                                TurnAdmission::New {
+                                    turn,
+                                    entry,
+                                    interrupted,
+                                    input,
+                                } => Ok((
+                                    RequestReceipt {
+                                        session: session.id(),
+                                        key,
+                                        turn,
+                                        end: None,
+                                    },
+                                    Some(TurnStart {
+                                        turn,
+                                        interrupted,
+                                        origin: TurnOrigin::User { entry, input },
+                                        catalog,
+                                    }),
+                                )),
+                            }
+                        })
+                        .await?;
+                    // The storage task has joined. The same lane can now carry
+                    // the accepted Turn, and nothing runs on the pre-commit path.
+                    Ok((
+                        receipt,
+                        start.map(|start| async move {
+                            let (mut observe, failed) = contained_observer(observe, stop.clone());
+                            let result = agent
+                                .run_admitted(
+                                    io,
+                                    start,
+                                    instructions,
+                                    stop,
+                                    steering.as_ref(),
+                                    &mut observe,
                                 )
-                            }),
-                        ))
-                    })?;
-                Ok::<_, AgentError>(RequestSubmission { receipt, operation })
-            })
-            .await
+                                .await;
+                            observation_result(
+                                result,
+                                failed.load(std::sync::atomic::Ordering::Relaxed),
+                            )
+                        }),
+                    ))
+                })
+                .await?;
+            Ok::<_, AgentError>(RequestSubmission { receipt, operation })
         }
         .await;
         match admission {

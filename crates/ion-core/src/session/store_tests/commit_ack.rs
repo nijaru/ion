@@ -32,7 +32,7 @@ async fn submit(
 
 #[tokio::test(flavor = "current_thread")]
 async fn no_live_admission_or_dispatch_until_acknowledged_even_if_the_wal_is_committed() {
-    for lose_ack in [false, true] {
+    for (lose_ack, stop_while_pending) in [(false, false), (true, false), (false, true)] {
         let fixture = Fixture::new();
         let session = Arc::new(fixture.session());
         let key = RequestKey::new("commit-fixture".into(), "once".into()).unwrap();
@@ -119,6 +119,14 @@ async fn no_live_admission_or_dispatch_until_acknowledged_even_if_the_wal_is_com
             session.reserve_idle(),
             Err(SessionError::OperationActive)
         ));
+        let mut shutdown = Box::pin(session.shutdown());
+        if stop_while_pending {
+            tokio::select! {
+                biased;
+                result = &mut shutdown => panic!("shutdown returned before admission finished: {result:?}"),
+                () = std::future::ready(()) => {}
+            }
+        }
         release.send(()).unwrap();
 
         let result = tokio::time::timeout(TIMEOUT, waiting)
@@ -128,10 +136,25 @@ async fn no_live_admission_or_dispatch_until_acknowledged_even_if_the_wal_is_com
         if !lose_ack {
             let started = result.unwrap();
             assert_eq!(started.receipt, persisted);
-            assert_eq!(started.operation.unwrap().await.unwrap(), "done");
+            let result = tokio::time::timeout(TIMEOUT, started.operation.unwrap())
+                .await
+                .unwrap();
             assert!(accepted_event.load(Ordering::SeqCst));
-            assert_eq!(provider.requests().len(), 1);
-            session.shutdown().await.unwrap();
+            if stop_while_pending {
+                assert!(matches!(result, Err(AgentError::Cancelled)));
+                assert!(provider.requests().is_empty());
+                assert_eq!(
+                    history.request_receipt(&key).await.unwrap().unwrap().end,
+                    Some(crate::TurnEndReason::Cancelled)
+                );
+            } else {
+                assert_eq!(result.unwrap(), "done");
+                assert_eq!(provider.requests().len(), 1);
+            }
+            tokio::time::timeout(TIMEOUT, &mut shutdown)
+                .await
+                .unwrap()
+                .unwrap();
             continue;
         }
 
@@ -144,7 +167,7 @@ async fn no_live_admission_or_dispatch_until_acknowledged_even_if_the_wal_is_com
             assert_eq!(store.state.active, None);
         }
         assert_faulted(session.view());
-        session.shutdown().await.unwrap();
+        shutdown.await.unwrap();
         drop(session);
 
         let reopened = Arc::new(Session::open(fixture.path()).unwrap());

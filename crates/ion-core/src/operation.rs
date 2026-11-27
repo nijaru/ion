@@ -14,7 +14,7 @@ pub(crate) use task::Executor;
 pub use task::OperationFence;
 use task::{Task, TaskResult};
 use thiserror::Error;
-use tokio::sync::{Notify, futures::OwnedNotified};
+use tokio::sync::{Notify, futures::OwnedNotified, oneshot};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Error)]
@@ -103,6 +103,7 @@ pub struct Operation<T, E> {
     stop: CancellationToken,
     completion: Arc<Completion<T, E>>,
     joined: bool,
+    stop_on_drop: bool,
     fence: OperationFence,
     notified: Option<Pin<Box<OwnedNotified>>>,
 }
@@ -120,6 +121,7 @@ impl<T, E> Operation<T, E> {
                 unreported_failure: None,
             }))),
             joined: false,
+            stop_on_drop: true,
             fence: OperationFence::completed(),
             notified: None,
         }
@@ -132,6 +134,23 @@ impl<T, E> Operation<T, E> {
     pub fn fence(&self) -> OperationFence {
         self.fence.clone()
     }
+
+    fn poll_task(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), OperationError>> {
+        let result = match &self.owner {
+            Some(owner) => std::task::ready!(
+                owner.poll_join(
+                    self.id,
+                    cx,
+                    self.notified
+                        .as_mut()
+                        .expect("running operation notification"),
+                )
+            ),
+            None => Ok(()),
+        };
+        self.joined = true;
+        Poll::Ready(result)
+    }
 }
 
 impl<T, E: From<OperationError>> Future for Operation<T, E> {
@@ -139,23 +158,7 @@ impl<T, E: From<OperationError>> Future for Operation<T, E> {
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
-        if let Some(owner) = &this.owner {
-            match owner.poll_join(
-                this.id,
-                cx,
-                this.notified
-                    .as_mut()
-                    .expect("running operation notification"),
-            ) {
-                Poll::Pending => return Poll::Pending,
-                Poll::Ready(Err(error)) => {
-                    this.joined = true;
-                    return Poll::Ready(Err(error.into()));
-                }
-                Poll::Ready(Ok(())) => {}
-            }
-        }
-        this.joined = true;
+        std::task::ready!(this.poll_task(cx))?;
         let mut outcome = this
             .completion
             .0
@@ -173,7 +176,7 @@ impl<T, E: From<OperationError>> Future for Operation<T, E> {
 
 impl<T, E> Drop for Operation<T, E> {
     fn drop(&mut self) {
-        if !self.joined {
+        if !self.joined && self.stop_on_drop {
             self.stop.cancel();
         }
     }
@@ -408,6 +411,66 @@ impl OperationOwner {
         Ok((prepared, Some(operation)))
     }
 
+    /// The retained task owns admission and the work it authorizes. The
+    /// caller observes the decision without acquiring stop-on-drop custody
+    /// until it receives a new admission. Shutdown can stop and join at either
+    /// phase; the prepare future must drive any started commit to its outcome.
+    pub(crate) async fn start_admitting<P, T, E, A, F>(
+        self: &Arc<Self>,
+        stop: CancellationToken,
+        prepare: A,
+    ) -> Result<(P, Option<Operation<T, E>>), E>
+    where
+        P: Send + 'static,
+        T: Send + 'static,
+        E: Send + From<OperationError> + OperationFailure + 'static,
+        A: Future<Output = Result<(P, Option<F>), E>> + Send + 'static,
+        F: Future<Output = Result<T, E>> + Send + 'static,
+    {
+        let (acknowledge, decision) = oneshot::channel();
+        let mut operation = {
+            let spawner = self.executor.bind().map_err(E::from)?;
+            let mut idle = self.try_lock().map_err(E::from)?;
+            let (operation, previous) =
+                self.install(&mut idle, stop, |completion, failure_stop| {
+                    spawner.spawn(async move {
+                        match prepare.await {
+                            Ok((prepared, work)) => {
+                                let _ = acknowledge.send((prepared, work.is_some()));
+                                if let Some(work) = work {
+                                    completion.finish(work.await);
+                                }
+                            }
+                            Err(error) => completion.finish(Err(error)),
+                        }
+                        failure_stop.disarm();
+                    })
+                });
+            drop(idle);
+            drop(previous);
+            operation
+        };
+        operation.stop_on_drop = false;
+        match decision.await {
+            Ok((prepared, true)) => {
+                operation.stop_on_drop = true;
+                Ok((prepared, Some(operation)))
+            }
+            Ok((prepared, false)) => {
+                // Passive reconciliation has no execution result, but must
+                // still join its actual admission task before returning.
+                poll_fn(|cx| operation.poll_task(cx)).await?;
+                Ok((prepared, None))
+            }
+            // Failure or scheduler loss: join the task and surface the real
+            // error, including uncertainty. No admission was acknowledged.
+            Err(_) => {
+                operation.await?;
+                Err(OperationError::CompletionConsumed.into())
+            }
+        }
+    }
+
     fn install<T, E>(
         self: &Arc<Self>,
         idle: &mut IdleSession<'_>,
@@ -452,6 +515,7 @@ impl OperationOwner {
                 stop,
                 completion,
                 joined: false,
+                stop_on_drop: true,
                 fence,
                 notified: Some(Box::pin(self.wake.clone().notified_owned())),
             },
