@@ -39,6 +39,150 @@ fn select(session: &Session, head: u64) -> ContextPosition {
         .unwrap()
 }
 
+#[tokio::test]
+async fn copy_reads_only_the_latest_selected_answer_from_a_globally_completed_turn() {
+    let (root, path, session) = fixture();
+    let session = Arc::new(session);
+    let reader = session.reader().unwrap();
+    let (first, _) = session.begin_turn("input".into(), model("one")).unwrap();
+    let mut message = answer("  first");
+    message.content.extend([
+        Content::Thinking("private reasoning".into()),
+        Content::Text("".into()),
+        Content::Text("last  ".into()),
+    ]);
+    session
+        .record_assistant(first, message, Usage::unknown(), false)
+        .unwrap();
+    let original = "  first\n\nlast  ";
+    let (pending, _) = session.begin_turn("pending".into(), model("one")).unwrap();
+    session
+        .record_assistant(pending, answer("not finished"), Usage::unknown(), true)
+        .unwrap();
+    assert_eq!(
+        reader.last_completed_answer().await.unwrap().as_deref(),
+        Some(original)
+    );
+    session
+        .end_turn(pending, TurnEndReason::Cancelled, &BTreeSet::new())
+        .unwrap();
+    assert_eq!(
+        reader.last_completed_answer().await.unwrap().as_deref(),
+        Some(original)
+    );
+    finish(&session, "blank", " \n\t");
+    assert_eq!(
+        reader.last_completed_answer().await.unwrap().as_deref(),
+        Some(original)
+    );
+
+    select(&session, 0);
+    assert_eq!(reader.last_completed_answer().await.unwrap(), None);
+    finish(&session, "inactive input", "inactive answer");
+    select(&session, 2); // The selected response precedes its closure at entry 3.
+    assert_eq!(
+        reader.last_completed_answer().await.unwrap().as_deref(),
+        Some(original)
+    );
+    drop(reader);
+    drop(session);
+    let session = Arc::new(Session::open(&path).unwrap());
+    let reader = session.reader().unwrap();
+
+    // Independently damage an unrelated record without changing the WAL
+    // frontier. A SessionView would decode it; copy must not.
+    let unrelated = Connection::open(&path).unwrap();
+    unrelated
+        .execute("UPDATE entries SET body=CAST('{}' AS BLOB) WHERE seq=1", [])
+        .unwrap();
+    assert!(reader.view().await.is_err());
+    assert_eq!(
+        reader.last_completed_answer().await.unwrap().as_deref(),
+        Some(original)
+    );
+    // The selected payload itself is still read and errors are not hidden.
+    unrelated
+        .execute("UPDATE entries SET body=CAST('{}' AS BLOB) WHERE seq=2", [])
+        .unwrap();
+    assert!(reader.last_completed_answer().await.is_err());
+    drop(unrelated);
+    drop(reader);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn session_usage_snapshot_keeps_inactive_accounting_without_reading_its_payloads() {
+    let (root, path, session) = fixture();
+    session.set_name(Some("accounting")).unwrap();
+    let (first, _) = session.begin_turn("first".into(), model("one")).unwrap();
+    session
+        .record_assistant(first, answer("answer"), Usage::unknown(), true)
+        .unwrap();
+    let mut execution = session.view().unwrap().last_execution.unwrap();
+    execution.returned_model = Some("served".into());
+    session
+        .record_cache_warm(
+            first,
+            execution.clone(),
+            Usage::known_with_cache(50, 1, 42, 0),
+        )
+        .unwrap();
+    session
+        .end_turn(first, TurnEndReason::Completed, &BTreeSet::new())
+        .unwrap();
+    let through = session.entry_count().unwrap();
+    session
+        .record_compaction(
+            through,
+            "summary".into(),
+            execution.clone(),
+            Usage::known(5, 2),
+        )
+        .unwrap();
+    session
+        .record_uncommitted_usage(ModelUsagePurpose::Assistant, execution, Usage::known(12, 1))
+        .unwrap();
+
+    let (compacted, basis) = session.usage_and_request_basis(&model("one")).unwrap();
+    assert_eq!(compacted.compacted_through, Some(through));
+    assert_eq!(compacted.revision, basis.unwrap().revision);
+    select(&session, 0);
+    finish(&session, "new branch", "new answer");
+    let expected = session.view().unwrap().usage();
+    assert_eq!(expected.total().reported_tokens(), 71);
+    assert_eq!(expected.total().observations, 5);
+    assert_eq!(expected.models[1].returned_model.as_deref(), Some("served"));
+    let revision = session.entry_count().unwrap();
+    let check = |session: &Session| {
+        let (usage, context) = session.usage_and_request_basis(&model("one")).unwrap();
+        assert_eq!(context.unwrap().revision, revision);
+        assert_eq!(usage.revision, revision);
+        assert_eq!(usage.name.as_deref(), Some("accounting"));
+        assert_eq!(usage.turns, 2);
+        assert_eq!(
+            usage.compacted_through, None,
+            "compaction is selected, usage is global"
+        );
+        assert_eq!(usage.usage, expected);
+    };
+    check(&session);
+    drop(session);
+    let session = Session::open(&path).unwrap();
+    let unrelated = Connection::open(&path).unwrap();
+    unrelated
+        .execute("UPDATE entries SET body=CAST('{}' AS BLOB) WHERE seq=2", [])
+        .unwrap();
+    assert!(
+        session.view().is_err(),
+        "the inactive assistant is no longer decodable"
+    );
+    check(&session);
+    drop(unrelated);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn compacted_payloads_leave_the_working_set_but_remain_inspectable() {
     let (root, path, session) = fixture();

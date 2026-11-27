@@ -617,56 +617,6 @@ fn reopen_publishes_every_selected_turn_and_shell_once() {
 }
 
 #[test]
-fn copy_uses_the_last_completed_answer() {
-    let assistant = |turn, text: &str| SessionEntry::Assistant {
-        turn,
-        message: Message {
-            role: Role::Assistant,
-            content: vec![Content::Text(text.into())],
-            provider_replay: None,
-        },
-        tool_activities: Vec::new(),
-        execution: ion_ai::ModelExecution {
-            route: ion_ai::ModelRoute::direct(
-                ModelRef {
-                    provider: "test".into(),
-                    model: "test".into(),
-                },
-                ion_ai::ModelRouteReason::UserRequest,
-            ),
-            returned_model: None,
-        },
-        usage: ion_ai::Usage::unknown(),
-        termination: ion_ai::ResponseTermination::Completed,
-    };
-    let view = SessionView {
-        id: Default::default(),
-        cwd: Some(PathBuf::from("/tmp")),
-        name: None,
-        entries: vec![
-            assistant(1, "finished"),
-            SessionEntry::TurnEnded {
-                turn: 1,
-                reason: TurnEndReason::Completed,
-            },
-            assistant(2, "partial"),
-        ],
-        context_path: vec![1, 2, 3],
-        messages: vec![],
-        unfinished_turn: Some(2),
-        unfinished_user_shell: None,
-        last_end: None,
-        last_model: None,
-        reasoning: ion_ai::Reasoning::ProviderDefault,
-        last_effective_model: None,
-        last_context: None,
-        compacted_through: None,
-        last_execution: None,
-        last_usage: None,
-    };
-    assert_eq!(last_committed_answer(&view).unwrap(), "finished");
-}
-#[test]
 fn display_replaces_terminal_controls() {
     let mut rows = Vec::new();
     push_wrapped(&mut rows, "safe\u{1b}[31m", 30);

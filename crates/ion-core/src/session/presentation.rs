@@ -66,6 +66,34 @@ fn encoded_len(size: &mut rusqlite::Statement<'_>, record: u64) -> Result<usize,
     usize::try_from(len).map_err(|_| SessionError::InvalidHistory)
 }
 
+fn read_completed_answer(
+    snapshot: &Connection,
+    target: Option<(u64, u64)>,
+) -> Result<Option<String>, SessionError> {
+    let Some((entry, expected_turn)) = target else {
+        return Ok(None);
+    };
+    let SessionEntry::Assistant { turn, message, .. } = read_entry(snapshot, entry)? else {
+        return Err(SessionError::InvalidHistory);
+    };
+    if turn != expected_turn {
+        return Err(SessionError::InvalidHistory);
+    }
+    let text = message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            Content::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.trim().is_empty() {
+        return Err(SessionError::InvalidHistory);
+    }
+    Ok(Some(text))
+}
+
 fn read_display_bundle(
     snapshot: &Connection,
     records: Vec<u64>,
@@ -126,31 +154,29 @@ pub struct SessionPresentation {
 }
 
 impl Session {
-    fn check_display_snapshot(
-        &self,
-        snapshot: &Connection,
-        expected: u64,
-    ) -> Result<Header, SessionError> {
-        let header = read_header(snapshot)?;
-        // Separate scalar subqueries let SQLite seek either end. A row at
-        // zero is not an empty journal.
-        let (first, last): (Option<i64>, Option<i64>) = snapshot.query_row(
-            "SELECT (SELECT MIN(seq) FROM entries), (SELECT MAX(seq) FROM entries)",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        let revision = match (first, last) {
-            (None, None) => 0,
-            (Some(1), Some(last)) if last > 0 => last as u64,
-            _ => return Err(SessionError::InvalidHistory),
-        };
-        if header.id != self.id()
-            || header.provider_session_id != self.provider_session_id()
-            || revision != expected
-        {
-            return Err(SessionError::InvalidHistory);
+    /// Return the newest nonblank assistant text on the selected path whose
+    /// Turn completed anywhere in this journal cut. The closure need not be
+    /// on the selected path. Read only the chosen assistant record.
+    pub fn last_completed_answer(&self) -> Result<Option<String>, SessionError> {
+        if self.journal().file.is_none() {
+            let store = self.lock_store()?;
+            return read_completed_answer(
+                &store.connection,
+                store.working.context_index.last_completed_answer(),
+            );
         }
-        Ok(header)
+
+        let connection = self.open_file_reader()?;
+        let (snapshot, target) = {
+            let store = self.lock_store()?;
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
+            (
+                snapshot,
+                store.working.context_index.last_completed_answer(),
+            )
+        };
+        read_completed_answer(&snapshot, target)
     }
 
     /// Read one bounded page of committed history; `None` means the cursor's
@@ -178,7 +204,7 @@ impl Session {
                 return Ok(None);
             }
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
+            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
             let mut bundles = Vec::new();
             let mut root = cursor.root;
             let mut available = PAGE_RECORDS;
@@ -292,7 +318,7 @@ impl Session {
                 return Err(SessionError::EntryTooLarge);
             }
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
+            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
             (
                 snapshot,
                 std::iter::once(root)
@@ -352,7 +378,7 @@ impl Session {
                 records.push(fact.entry);
             }
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
+            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
             (snapshot, cursor, number, total, occurrence, records)
         };
         let activity = read_bounded_evidence(&snapshot, records)?
@@ -385,7 +411,7 @@ impl Session {
             let store = self.lock_store()?;
             let cut = store.working.state.sequence;
             let snapshot = connection.unchecked_transaction()?;
-            self.check_display_snapshot(&snapshot, cut)?;
+            self.check_read_snapshot(&snapshot, cut)?;
             (snapshot, cut, store.working.context_index.tool_head())
         };
         while head != 0 {
@@ -523,7 +549,7 @@ impl Session {
         ) = {
             let store = self.lock_store()?;
             let snapshot = connection.unchecked_transaction()?;
-            let header = self.check_display_snapshot(&snapshot, store.working.state.sequence)?;
+            let header = self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
             let revision = store.working.state.sequence;
             let index = &store.working.context_index;
             let unfinished =
@@ -563,7 +589,7 @@ impl Session {
                 index.head(),
                 store.working.state.reasoning,
                 unfinished,
-                index.usage,
+                index.usage.total(),
                 selected,
                 after,
                 checkpoint,

@@ -70,6 +70,7 @@ pub use storage::{SessionIo, SessionReader};
 ))]
 mod cloudflare;
 mod journal;
+use journal::WorkingJournal;
 #[cfg(unix)]
 mod native;
 #[cfg(not(unix))]
@@ -142,6 +143,7 @@ pub(crate) struct RequestBasis {
     pub reasoning: Reasoning,
     pub assistant_seen: bool,
     pub prefix_bound: bool,
+    pub calibration: Option<RequestCalibration>,
     context_changes: Option<Vec<ModelContextChange>>,
 }
 
@@ -1113,20 +1115,57 @@ impl Session {
 
     pub(crate) fn request_basis(&self, model: &ModelRef) -> Result<RequestBasis, SessionError> {
         let store = self.lock_store()?;
-        let (messages, message_bytes) = context::request_projection(&store.working, model)?;
+        Self::request_basis_at(&store.working, model)
+    }
+
+    pub(crate) fn usage_and_request_basis(
+        &self,
+        model: &ModelRef,
+    ) -> Result<
+        (
+            crate::SessionUsageSnapshot,
+            Result<RequestBasis, SessionError>,
+        ),
+        SessionError,
+    > {
+        let store = self.lock_store()?;
+        let working = &store.working;
+        let state = &working.state;
+        let header = {
+            let snapshot = store.connection.unchecked_transaction()?;
+            self.check_read_snapshot(&snapshot, state.sequence)?
+        };
+        let usage = crate::SessionUsageSnapshot {
+            revision: state.sequence,
+            name: header.name,
+            // Turns are numbered contiguously across all alternatives.
+            turns: state.last_id,
+            compacted_through: state.compaction.as_ref().map(|(through, _)| *through),
+            usage: working.context_index.usage.report(),
+        };
+        Ok((usage, Self::request_basis_at(working, model)))
+    }
+
+    fn request_basis_at(
+        working: &WorkingJournal,
+        model: &ModelRef,
+    ) -> Result<RequestBasis, SessionError> {
+        let state = &working.state;
+        let (messages, message_bytes) = context::request_projection(working, model)?;
         Ok(RequestBasis {
-            revision: store.working.state.sequence,
-            turn: store.working.state.active,
+            revision: state.sequence,
+            turn: state.active,
             messages,
             message_bytes,
-            previous: store.working.state.last_context.clone(),
-            reasoning: store.working.state.reasoning,
-            assistant_seen: store.working.state.assistant_seen_in_turn,
-            prefix_bound: store.working.state.prefix_bound_in_turn,
-            context_changes: (store.working.state.compaction.is_none()
-                && store.working.state.replay_epoch_start == 0
-                && store.working.state.last_effective_model.as_ref() == Some(model))
-            .then(|| store.working.context_changes.clone()),
+            previous: state.last_context.clone(),
+            reasoning: state.reasoning,
+            assistant_seen: state.assistant_seen_in_turn,
+            prefix_bound: state.prefix_bound_in_turn,
+            calibration: working.calibration.clone(),
+            context_changes: (state.compaction.is_none()
+                && state.replay_epoch_start == 0
+                && state.last_effective_model.as_ref() == Some(model))
+            .then(|| working.context_changes.clone()),
         })
     }
 
@@ -1154,21 +1193,8 @@ impl Session {
         Ok(context_projection(&store.working, Some(model)))
     }
 
-    /// Preparing an incompatible request must not discard evidence belonging
-    /// to the current binding. Only admitted issuance advances runtime scope.
-    pub(crate) fn request_calibration_for(
-        &self,
-        scope: &RequestScope,
-    ) -> Result<Option<RequestCalibration>, SessionError> {
-        let store = self.lock_store()?;
-        Ok(store
-            .working
-            .calibration
-            .as_ref()
-            .filter(|calibration| calibration.matches_scope(scope))
-            .cloned())
-    }
-
+    // Preparing an incompatible request does not discard the current
+    // calibration. Only admitted issuance advances runtime scope.
     pub(crate) fn activate_request_calibration(
         &self,
         measurement: &RequestMeasurement,
@@ -1276,6 +1302,33 @@ impl Session {
             reasoning: store.working.state.reasoning,
             entries: store.working.state.sequence,
         })
+    }
+
+    fn check_read_snapshot(
+        &self,
+        snapshot: &Connection,
+        expected: u64,
+    ) -> Result<Header, SessionError> {
+        let header = read_header(snapshot)?;
+        // Separate scalar subqueries let SQLite seek either end. A row at
+        // zero is not an empty journal.
+        let (first, last): (Option<i64>, Option<i64>) = snapshot.query_row(
+            "SELECT (SELECT MIN(seq) FROM entries), (SELECT MAX(seq) FROM entries)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        let revision = match (first, last) {
+            (None, None) => 0,
+            (Some(1), Some(last)) if last > 0 => last as u64,
+            _ => return Err(SessionError::InvalidHistory),
+        };
+        if header.id != self.id()
+            || header.provider_session_id != self.provider_session_id()
+            || revision != expected
+        {
+            return Err(SessionError::InvalidHistory);
+        }
+        Ok(header)
     }
 
     fn open_file_reader(&self) -> Result<Connection, SessionError> {

@@ -1,12 +1,11 @@
 //! Native coding application over shared Host control and the reusable agent runtime.
 #[cfg(test)]
-use ion_ai::{Message, Role};
+use ion_ai::{Content, Message};
 #[cfg(test)]
 use ion_terminal::{KeyCode, Modifiers};
 #[cfg(test)]
 use std::fs;
 use std::{
-    collections::HashSet,
     io::IsTerminal,
     path::{Path, PathBuf},
 };
@@ -16,13 +15,13 @@ use crate::keybindings::{self, COMPLETION, COMPOSER, DETAILS, HISTORY, KeyAction
 use crate::terminal_commands::Builtin;
 use crate::transcript_detail::DetailView;
 use anyhow::{Context, Result};
-use ion_ai::{Content, ModelRef};
+use ion_ai::ModelRef;
 use ion_app::attachments::AttachmentSource;
 
 use ion_app::{CredentialStore, QuestionResponder, Resources};
+use ion_core::{LiveTranscript, TranscriptItem};
 #[cfg(test)]
-use ion_core::Session;
-use ion_core::{LiveTranscript, SessionEntry, SessionView, TranscriptItem, TurnEndReason};
+use ion_core::{Session, SessionEntry, TurnEndReason};
 use ion_terminal::{
     Frame, InputEvent, KeyEvent, MouseKind, ProgramStatus, Screen, TerminalSession,
 };
@@ -788,42 +787,6 @@ async fn copy_detail_evidence(ui: &mut Frontend, terminal: &mut TerminalSession)
         Err(error) => crate::clipboard::failure_status(error)?,
     };
     Ok(())
-}
-
-fn last_committed_answer(view: &SessionView) -> Result<String> {
-    let completed: HashSet<u64> = view
-        .entries
-        .iter()
-        .filter_map(|entry| match entry {
-            SessionEntry::TurnEnded {
-                turn,
-                reason: TurnEndReason::Completed,
-            } => Some(*turn),
-            _ => None,
-        })
-        .collect();
-    let selected: HashSet<_> = view.context_path.iter().copied().collect();
-    view.entries
-        .iter()
-        .enumerate()
-        .rev()
-        .filter(|(offset, _)| selected.contains(&(*offset as u64 + 1)))
-        .find_map(|(_, entry)| match entry {
-            SessionEntry::Assistant { turn, message, .. } if completed.contains(turn) => {
-                let text = message
-                    .content
-                    .iter()
-                    .filter_map(|part| match part {
-                        Content::Text(text) => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                (!text.trim().is_empty()).then_some(text)
-            }
-            _ => None,
-        })
-        .context("no completed assistant answer to copy")
 }
 
 // The outer result owns terminal lifecycle; only the editor's own failure is

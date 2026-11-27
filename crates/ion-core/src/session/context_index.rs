@@ -8,9 +8,11 @@ pub(super) struct ContextIndex {
     head: u64,
     pub(super) selection: u64,
     pub(super) prompt_recall: super::prompt_recall::PromptRecall,
-    pub(super) usage: crate::UsageTotals,
+    pub(super) usage: crate::session_usage::UsageIndex,
     display_dependents: BTreeMap<u64, Vec<DisplayDependent>>,
     tool_batches: BTreeMap<u64, ToolBatch>,
+    text_assistants: BTreeMap<u64, u64>,
+    completed_turns: BTreeSet<u64>,
     pending: usize,
     shell: bool,
     admitted: BTreeMap<uuid::Uuid, crate::DelegationSite>,
@@ -64,6 +66,23 @@ struct ContextRefs {
 }
 
 impl ContextIndex {
+    pub(super) fn last_completed_answer(&self) -> Option<(u64, u64)> {
+        let mut head = self.head;
+        while head != 0 {
+            let assistant = self.context_refs(self.context_key(head)).assistant;
+            if assistant == 0 {
+                break;
+            }
+            if let Some(&turn) = self.text_assistants.get(&assistant)
+                && self.completed_turns.contains(&turn)
+            {
+                return Some((assistant, turn));
+            }
+            head = self.parent(assistant);
+        }
+        None
+    }
+
     pub(super) fn parent(&self, entry: u64) -> u64 {
         self.nodes[(entry - 1) as usize].parent
     }
@@ -205,22 +224,43 @@ impl ContextIndex {
         self.nodes[(entry - 1) as usize].display_parent
     }
 
-    // Branch navigation cannot select a point with pending tool or shell
-    // effects. Thus a selected admission with a dependent below the cut
-    // necessarily selects that dependent too.
-    pub(super) fn link_display(
+    // Only a working projection needs these presentation and usage facts.
+    // Called after observing the same acknowledged entry's ancestry.
+    pub(super) fn observe_display(
         &mut self,
         entry: &SessionEntry,
         resolved: Option<crate::ToolOccurrence>,
     ) {
+        self.prompt_recall.observe(entry);
+        self.usage.observe(entry);
+        let coordinate = self.nodes.len() as u64;
         let (root, ordinal) = match entry {
+            SessionEntry::Assistant { turn, message, .. } => {
+                if message
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, Content::Text(text) if !text.trim().is_empty()))
+                {
+                    self.text_assistants.insert(coordinate, *turn);
+                }
+                return;
+            }
+            SessionEntry::TurnEnded {
+                turn,
+                reason: TurnEndReason::Completed,
+            } => {
+                self.completed_turns.insert(*turn);
+                return;
+            }
+            // Branch navigation cannot select pending effects. A selected
+            // admission with a dependent below the cut selects it too.
             SessionEntry::ToolResult { .. } => {
                 let tool = resolved.expect("validated tool result");
                 let batch = self
                     .tool_batches
                     .get_mut(&tool.assistant_entry)
                     .expect("validated tool admission");
-                batch.results[tool.ordinal] = self.nodes.len() as u64;
+                batch.results[tool.ordinal] = coordinate;
                 (tool.assistant_entry, Some(tool.ordinal))
             }
             SessionEntry::ChildToolAdmitted { intent, .. } => {
@@ -238,7 +278,7 @@ impl ContextIndex {
             .entry(root)
             .or_default()
             .push(DisplayDependent {
-                entry: self.nodes.len() as u64,
+                entry: coordinate,
                 ordinal,
             });
     }
@@ -419,8 +459,6 @@ impl ContextIndex {
                 | SessionEntry::UserShellSettled { .. }
                 | SessionEntry::TurnEnded { .. }
         );
-        self.prompt_recall.observe(entry);
-        self.usage.observe(entry);
         self.nodes.push(Node {
             parent,
             transcript_parent: self.transcript_head(parent),

@@ -168,7 +168,36 @@ impl Agent {
         session: &Session,
         instructions: &str,
     ) -> Result<crate::ContextReport, AgentError> {
-        let basis = session.request_basis(&self.model)?;
+        self.report_context(session, instructions, session.request_basis(&self.model)?)
+    }
+
+    /// Inspect committed Session accounting and the retained model context at
+    /// the same revision. A planning error does not hide the usage report.
+    /// Like `context_report`, call on a retained blocking I/O lane.
+    pub fn session_report(
+        &self,
+        session: &Session,
+        instructions: &str,
+    ) -> Result<
+        (
+            crate::SessionUsageSnapshot,
+            Result<crate::ContextReport, AgentError>,
+        ),
+        SessionError,
+    > {
+        let (usage, basis) = session.usage_and_request_basis(&self.model)?;
+        let context = basis
+            .map_err(AgentError::from)
+            .and_then(|basis| self.report_context(session, instructions, basis));
+        Ok((usage, context))
+    }
+
+    fn report_context(
+        &self,
+        session: &Session,
+        instructions: &str,
+        basis: crate::session::RequestBasis,
+    ) -> Result<crate::ContextReport, AgentError> {
         let revision = basis.revision;
         let turn = basis.turn;
         let prepared = crate::request::PreparedRequest::new(

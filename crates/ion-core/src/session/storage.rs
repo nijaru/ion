@@ -164,6 +164,10 @@ impl SessionReader {
         self.run(move |session| Ok(project(session.view()?))).await
     }
 
+    pub async fn last_completed_answer(&self) -> Result<Option<String>, SessionError> {
+        self.run(Session::last_completed_answer).await
+    }
+
     /// Project terminal history in a retained read, without a full SessionView.
     pub async fn map_presentation<T: Send + 'static>(
         &self,

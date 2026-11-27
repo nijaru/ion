@@ -176,7 +176,9 @@ impl PreparedRequest {
             return Err(AgentError::ImagesUnsupported);
         }
         let scope = RequestScope::new(service, &request)?;
-        let calibration = session.request_calibration_for(&scope)?;
+        let calibration = basis
+            .calibration
+            .filter(|sample| sample.matches_scope(&scope));
         let context_overhead = service.context_encoding_overhead(&request)?;
         let measurement = RequestMeasurement::from_message_bytes(
             &request,

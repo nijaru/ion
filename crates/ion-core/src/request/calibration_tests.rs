@@ -182,7 +182,10 @@ async fn context_report_is_passive_and_shares_issuance_accounting() {
         .await
         .unwrap();
     let before = session.view().unwrap().entries;
-    let report = agent.context_report(&session, "base").unwrap();
+    let (usage, report) = agent.session_report(&session, "base").unwrap();
+    let report = report.unwrap();
+    assert_eq!(usage.revision, report.revision);
+    assert_eq!(usage.usage.total().reported_tokens(), 1_050);
     assert_eq!(report.basis, ContextEstimateBasis::Calibrated);
     assert_eq!(report.estimated_input_tokens, 1_050);
     assert_eq!(
@@ -267,9 +270,10 @@ async fn context_report_is_passive_and_shares_issuance_accounting() {
         .unwrap();
     assert!(
         session
-            .request_calibration_for(&issued.plan.prepared.scope)
+            .request_basis(&model)
             .unwrap()
-            .is_some()
+            .calibration
+            .is_some_and(|sample| sample.matches_scope(&issued.plan.prepared.scope))
     );
     let before = session.view().unwrap().entries;
     assert_eq!(
@@ -285,10 +289,10 @@ async fn context_report_is_passive_and_shares_issuance_accounting() {
             ..limits
         },
     );
-    assert!(matches!(
-        unsupported.context_report(&session, "base"),
-        Err(AgentError::ImagesUnsupported)
-    ));
+    let (usage, report) = unsupported.session_report(&session, "base").unwrap();
+    assert!(matches!(report, Err(AgentError::ImagesUnsupported)));
+    assert_eq!(usage.revision, before.len() as u64);
+    assert_eq!(usage.usage.total().reported_tokens(), 1_050);
     assert_eq!(session.view().unwrap().entries, before);
     assert_eq!(service.requests().len(), 2);
     session.shutdown().await.unwrap();

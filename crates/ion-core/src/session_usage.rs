@@ -5,7 +5,6 @@ use ion_ai::{ModelRef, Usage};
 use serde::Serialize;
 
 use crate::{SessionEntry, SessionView};
-use ion_ai::ModelExecution;
 
 /// A known subtotal, not an estimate for observations with missing measurements.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
@@ -42,12 +41,6 @@ pub struct UsageTotals {
 }
 
 impl UsageTotals {
-    pub(crate) fn observe(&mut self, entry: &SessionEntry) {
-        if let Some((_, usage, _)) = observation(entry) {
-            self.add(usage);
-        }
-    }
-
     fn add(&mut self, usage: Usage) {
         self.observations += 1;
         self.input_tokens.add(usage.input_tokens);
@@ -110,12 +103,25 @@ pub struct SessionUsage {
 impl SessionUsage {
     #[must_use]
     pub fn total(&self) -> UsageTotals {
-        let mut total = self.assistant;
-        total.merge(self.compaction);
-        total.merge(self.cache_warm);
-        total.merge(self.uncommitted);
-        total
+        combine(
+            self.assistant,
+            self.compaction,
+            self.cache_warm,
+            self.uncommitted,
+        )
     }
+}
+
+fn combine(
+    mut assistant: UsageTotals,
+    compaction: UsageTotals,
+    cache_warm: UsageTotals,
+    uncommitted: UsageTotals,
+) -> UsageTotals {
+    assistant.merge(compaction);
+    assistant.merge(cache_warm);
+    assistant.merge(uncommitted);
+    assistant
 }
 
 impl SessionView {
@@ -127,64 +133,102 @@ impl SessionView {
     }
 }
 
-type Subtotal = fn(&mut SessionUsage) -> &mut UsageTotals;
+/// Committed metadata for an explicit Session report. Usage and turn count
+/// include inactive branches; compaction describes the selected context.
+#[derive(Debug, Clone)]
+pub struct SessionUsageSnapshot {
+    pub revision: u64,
+    pub name: Option<String>,
+    pub turns: u64,
+    pub compacted_through: Option<u64>,
+    pub usage: SessionUsage,
+}
 
-fn observation(entry: &SessionEntry) -> Option<(&ModelExecution, Usage, Subtotal)> {
-    let (execution, usage, subtotal): (_, _, Subtotal) = match entry {
-        SessionEntry::Assistant {
-            execution, usage, ..
-        } => (execution, usage, |total| &mut total.assistant),
-        SessionEntry::Compacted {
-            execution, usage, ..
-        } => (execution, usage, |total| &mut total.compaction),
-        SessionEntry::CacheWarm {
-            execution, usage, ..
-        } => (execution, usage, |total| &mut total.cache_warm),
-        SessionEntry::UncommittedUsage {
-            execution, usage, ..
-        } => (execution, usage, |total| &mut total.uncommitted),
-        _ => return None,
-    };
-    Some((execution, *usage, subtotal))
+type ModelKey = (String, String, String, String, Option<String>);
+
+/// Rebuilt from validated records and advanced only after an acknowledged
+/// append. Keeps captured route identities and counters, never payloads.
+#[derive(Default)]
+pub(crate) struct UsageIndex {
+    assistant: UsageTotals,
+    compaction: UsageTotals,
+    cache_warm: UsageTotals,
+    uncommitted: UsageTotals,
+    models: BTreeMap<ModelKey, UsageTotals>,
+}
+
+impl UsageIndex {
+    pub(crate) fn observe(&mut self, entry: &SessionEntry) {
+        let (execution, usage, subtotal) = match entry {
+            SessionEntry::Assistant {
+                execution, usage, ..
+            } => (execution, usage, &mut self.assistant),
+            SessionEntry::Compacted {
+                execution, usage, ..
+            } => (execution, usage, &mut self.compaction),
+            SessionEntry::CacheWarm {
+                execution, usage, ..
+            } => (execution, usage, &mut self.cache_warm),
+            SessionEntry::UncommittedUsage {
+                execution, usage, ..
+            } => (execution, usage, &mut self.uncommitted),
+            _ => return,
+        };
+        subtotal.add(*usage);
+        let route = &execution.route;
+        self.models
+            .entry((
+                route.logical.provider.clone(),
+                route.logical.model.clone(),
+                route.effective.provider.clone(),
+                route.effective.model.clone(),
+                execution.returned_model.clone(),
+            ))
+            .or_default()
+            .add(*usage);
+    }
+
+    pub(crate) fn total(&self) -> UsageTotals {
+        combine(
+            self.assistant,
+            self.compaction,
+            self.cache_warm,
+            self.uncommitted,
+        )
+    }
+
+    pub(crate) fn report(&self) -> SessionUsage {
+        SessionUsage {
+            assistant: self.assistant,
+            compaction: self.compaction,
+            cache_warm: self.cache_warm,
+            uncommitted: self.uncommitted,
+            models: self
+                .models
+                .iter()
+                .map(|((lp, lm, ep, em, returned), &usage)| ModelUsage {
+                    logical: ModelRef {
+                        provider: lp.clone(),
+                        model: lm.clone(),
+                    },
+                    effective: ModelRef {
+                        provider: ep.clone(),
+                        model: em.clone(),
+                    },
+                    returned_model: returned.clone(),
+                    usage,
+                })
+                .collect(),
+        }
+    }
 }
 
 fn collect(entries: &[SessionEntry]) -> SessionUsage {
-    let mut result = SessionUsage::default();
-    let mut models = BTreeMap::new();
+    let mut index = UsageIndex::default();
     for entry in entries {
-        let Some((execution, usage, subtotal)) = observation(entry) else {
-            continue;
-        };
-        subtotal(&mut result).add(usage);
-        let route = &execution.route;
-        let key = (
-            route.logical.provider.as_str(),
-            route.logical.model.as_str(),
-            route.effective.provider.as_str(),
-            route.effective.model.as_str(),
-            execution.returned_model.as_deref(),
-        );
-        models
-            .entry(key)
-            .or_insert_with(UsageTotals::default)
-            .add(usage);
+        index.observe(entry);
     }
-    result.models = models
-        .into_iter()
-        .map(|((lp, lm, ep, em, returned), usage)| ModelUsage {
-            logical: ModelRef {
-                provider: lp.into(),
-                model: lm.into(),
-            },
-            effective: ModelRef {
-                provider: ep.into(),
-                model: em.into(),
-            },
-            returned_model: returned.map(str::to_owned),
-            usage,
-        })
-        .collect();
-    result
+    index.report()
 }
 
 #[cfg(test)]

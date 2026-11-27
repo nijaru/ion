@@ -1611,10 +1611,6 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
         ("unsent draft", 4)
     );
     assert_note(&ui.editor.attachments[0], "unsent tree image");
-    assert!(
-        last_committed_answer(&view).is_err(),
-        "copy cannot leak an unselected answer"
-    );
     view.entries
         .push(SessionEntry::ContextSelected { head_entry: 2 });
     view.context_path = vec![1, 2];
@@ -1624,10 +1620,6 @@ async fn context_selection_restarts_publication_without_losing_an_unsent_draft()
         "assistant selection must not overwrite an unsent draft"
     );
     assert_eq!(ui.conversation.items().count(), 2);
-    assert_eq!(
-        last_committed_answer(&view).unwrap(),
-        "ORIGINAL_TREE_ANSWER"
-    );
     fixture.control.shutdown().await;
 }
 

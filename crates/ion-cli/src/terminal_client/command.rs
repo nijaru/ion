@@ -248,8 +248,9 @@ pub(super) async fn dispatch_command(
             let result = ui.session_io.start(runtime.session(), async move {
                 Ok(super::session_io::ReadOutput::Copy(
                     reader
-                        .map_view(|view| super::last_committed_answer(&view))
-                        .await??,
+                        .last_completed_answer()
+                        .await?
+                        .context("no completed assistant answer to copy")?,
                 ))
             });
             match result {
@@ -478,28 +479,20 @@ pub(super) fn handle_builtin(
             let agent = runtime.agent().clone();
             let instructions = runtime.instructions().to_owned();
             ui.session_io.start(runtime.session(), async move {
-                let (view, report) = io
-                    .run(move |session| {
-                        Ok((
-                            session.view()?,
-                            agent.context_report(session, &instructions),
-                        ))
-                    })
+                let (usage, report) = io
+                    .run(move |session| agent.session_report(session, &instructions))
                     .await?;
-                let summary = view.compacted_through.map_or_else(String::new, |through| {
+                let summary = usage.compacted_through.map_or_else(String::new, |through| {
                     format!(" · summary through {through}")
                 });
                 Ok(super::session_io::ReadOutput::SessionInfo(format!(
                     "Session {} · {} turn(s) · {}{}\n{}\n{}",
                     path.display(),
-                    view.entries
-                        .iter()
-                        .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
-                        .count(),
-                    view.name.as_deref().unwrap_or("unnamed"),
+                    usage.turns,
+                    usage.name.as_deref().unwrap_or("unnamed"),
                     summary,
                     context_report(&report),
-                    crate::session_usage::render(&view.usage()),
+                    crate::session_usage::render(&usage.usage),
                 )))
             })?;
         }

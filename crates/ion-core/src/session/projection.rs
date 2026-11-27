@@ -382,7 +382,7 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
         }
         context_index.observe(entry);
         if !matches!(mode, ProjectionMode::Metadata) {
-            context_index.link_display(entry, transition.resolved_tool);
+            context_index.observe_display(entry, transition.resolved_tool);
             child_records.observe(state.sequence, entry);
         }
         if matches!(entry, SessionEntry::TurnStarted { .. }) {

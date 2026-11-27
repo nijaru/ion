@@ -107,7 +107,7 @@ impl WorkingJournal {
             sequence += 1;
             self.child_records.observe(sequence, entry);
             self.context_index.observe(entry);
-            self.context_index.link_display(entry, resolved);
+            self.context_index.observe_display(entry, resolved);
             if let SessionEntry::DelegationSettled { run, .. } = entry {
                 self.live_backgrounds.remove(run);
             }
