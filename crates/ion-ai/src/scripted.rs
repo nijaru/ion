@@ -32,10 +32,13 @@ impl ScriptedModelService {
 impl ModelService for ScriptedModelService {
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
-            self.requests.lock().expect("request mutex").push(request);
+            self.requests
+                .lock()
+                .expect("request mutex")
+                .push(request.clone());
             let script = self
                 .scripts
                 .lock()

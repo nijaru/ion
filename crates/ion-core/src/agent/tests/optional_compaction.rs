@@ -205,7 +205,7 @@ async fn optional_failure_does_not_multiply_generation_retries_or_accounting() {
 
         fn stream<'a>(
             &'a self,
-            request: ModelRequest,
+            request: &'a ModelRequest,
         ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
             Box::pin(async move {
                 match self.0.stream(request).await {

@@ -185,10 +185,10 @@ impl Model {
 impl ModelService for Model {
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
-            self.requests.lock().unwrap().push(request);
+            self.requests.lock().unwrap().push(request.clone());
             self.calls.fetch_add(1, Ordering::SeqCst);
             self.opened.notify_waiters();
             self.permits.acquire().await.unwrap().forget();

@@ -297,18 +297,18 @@ impl ModelService for HttpModelService {
 
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let native_anthropic = self.native_anthropic();
             let mut body = match self.wire {
-                HttpWire::OpenAiResponses => responses_body(&request, &self.endpoint)?,
+                HttpWire::OpenAiResponses => responses_body(request, &self.endpoint)?,
                 HttpWire::AnthropicMessages => anthropic_body_for_route(
-                    &request,
+                    request,
                     native_anthropic,
                     self.capabilities.context_mutation.inline_tool_definitions,
                 )?,
-                _ => chat_body(&request, self.wire)?,
+                _ => chat_body(request, self.wire)?,
             };
             if native_anthropic
                 && request.prompt_cache == PromptCacheIntent::Reusable
@@ -330,6 +330,8 @@ impl ModelService for HttpModelService {
                 .post(self.endpoint.clone())
                 .header("accept", "text/event-stream")
                 .json(&body);
+            // RequestBuilder now owns the serialized bytes, not this JSON tree.
+            drop(body);
             if let Some(header) = credential {
                 post = if self.wire == HttpWire::AnthropicMessages {
                     post.header("x-api-key", header)
@@ -455,6 +457,7 @@ impl ModelService for HttpModelService {
             }
             let wire = self.wire;
             let context_window_tokens = self.context_window_tokens;
+            let output = OutputContract::from(request);
             let stream: ModelStream = Box::pin(try_stream! {
                 let mut bytes = response.bytes_stream();
                 let mut frame = Vec::new();
@@ -480,7 +483,7 @@ impl ModelService for HttpModelService {
                         }
                         if !has_sse_event_boundary(&frame) { continue; }
                         frame_ended_with_cr = byte == b'\r';
-                        let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
+                        let events = decode_stream_frame(&frame, &mut decoder, &output, wire, &mut budget)?;
                         frame.clear();
                         let failure = decoder.take_error();
                         for event in events {
@@ -496,7 +499,7 @@ impl ModelService for HttpModelService {
                 // trailing blank line. Some Chat Completions servers also close after finish_reason rather
                 // than sending a separate [DONE] sentinel.
                 if !frame.is_empty() {
-                    let events = decode_stream_frame(&frame, &mut decoder, &request, wire, &mut budget)?;
+                    let events = decode_stream_frame(&frame, &mut decoder, &output, wire, &mut budget)?;
                     let failure = decoder.take_error();
                     for event in events {
                         let event = normalize_capacity(event, wire, context_window_tokens);
@@ -507,7 +510,7 @@ impl ModelService for HttpModelService {
                     if let Some(failure) = failure { Err(failure)?; }
                 }
                 if wire.is_chat() {
-                    yield normalize_capacity(ModelStreamEvent::Completed(decoder.complete(&request)?), wire, context_window_tokens);
+                    yield normalize_capacity(ModelStreamEvent::Completed(decoder.complete(&output)?), wire, context_window_tokens);
                     return;
                 }
                 Err(transport("provider stream ended before completion"))?;
@@ -612,12 +615,12 @@ struct SseFrame {
 fn decode_stream_frame(
     frame: &[u8],
     decoder: &mut Decoder,
-    request: &ModelRequest,
+    output: &OutputContract,
     wire: HttpWire,
     budget: &mut StreamBudget,
 ) -> Result<Vec<ModelStreamEvent>, ProviderError> {
     let before = decoder.retained_bytes();
-    let events = decode_frame(frame, decoder, request, wire)?;
+    let events = decode_frame(frame, decoder, output, wire)?;
     let progress = decoder.retained_bytes() > before
         || events
             .iter()
@@ -629,16 +632,14 @@ fn decode_stream_frame(
 fn decode_frame(
     frame: &[u8],
     decoder: &mut Decoder,
-    request: &ModelRequest,
+    output: &OutputContract,
     wire: HttpWire,
 ) -> Result<Vec<ModelStreamEvent>, ProviderError> {
     let Some(parsed) = parse_frame(frame)? else {
         return Ok(Vec::new());
     };
     if wire.is_chat() && parsed.data == "[DONE]" {
-        return Ok(vec![ModelStreamEvent::Completed(
-            decoder.complete(request)?,
-        )]);
+        return Ok(vec![ModelStreamEvent::Completed(decoder.complete(output)?)]);
     }
     let value: Value = serde_json::from_str(&parsed.data)
         .map_err(|_| invalid("provider sent invalid SSE JSON"))?;
@@ -653,7 +654,7 @@ fn decode_frame(
     {
         return Err(invalid("Responses SSE event and data type disagree"));
     }
-    decoder.accept(&value, request)
+    decoder.accept(&value, output)
 }
 fn parse_frame(bytes: &[u8]) -> Result<Option<SseFrame>, ProviderError> {
     let text = std::str::from_utf8(bytes).map_err(|_| invalid("provider sent non-UTF-8 SSE"))?;
@@ -768,7 +769,22 @@ fn valid_identifier(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(), ProviderError> {
+// An open response needs only attribution and the tool-choice constraint.
+struct OutputContract {
+    model: ion_ai::ModelRef,
+    controls: ion_ai::GenerationControls,
+}
+
+impl From<&ModelRequest> for OutputContract {
+    fn from(request: &ModelRequest) -> Self {
+        Self {
+            model: request.route.effective.clone(),
+            controls: request.controls.clone(),
+        }
+    }
+}
+
+fn validate_output(output: &OutputContract, response: &ModelResponse) -> Result<(), ProviderError> {
     let names = response
         .message
         .content
@@ -776,9 +792,8 @@ fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(
         .filter_map(|item| match item {
             Content::ToolCall(call) => Some(call.name.as_str()),
             _ => None,
-        })
-        .collect::<Vec<_>>();
-    if !request.controls.permits_tool_calls(names.iter().copied()) {
+        });
+    if !output.controls.permits_tool_calls(names) {
         return Err(invalid(
             "provider violated requested tool choice or parallel limit",
         ));
@@ -819,17 +834,17 @@ impl Decoder {
     fn accept(
         &mut self,
         value: &Value,
-        request: &ModelRequest,
+        output: &OutputContract,
     ) -> Result<Vec<ModelStreamEvent>, ProviderError> {
         match self {
             Self::Chat(state) => state.accept(value),
-            Self::Anthropic(state) => state.accept(value, request),
-            Self::Responses(state) => state.accept(value, request),
+            Self::Anthropic(state) => state.accept(value, output),
+            Self::Responses(state) => state.accept(value, output),
         }
     }
-    fn complete(&mut self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
+    fn complete(&mut self, output: &OutputContract) -> Result<ModelResponse, ProviderError> {
         match self {
-            Self::Chat(state) => std::mem::take(state).complete(request),
+            Self::Chat(state) => std::mem::take(state).complete(output),
             Self::Anthropic(_) => Err(invalid("[DONE] is not an Anthropic completion")),
             Self::Responses(_) => Err(invalid("Responses requires a terminal response event")),
         }

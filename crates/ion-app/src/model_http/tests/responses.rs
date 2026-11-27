@@ -76,7 +76,9 @@ fn text_and_refusal_blocks_retain_identity_across_items_snapshots_and_interleavi
     let reasoning = json!({"type":"reasoning","id":"rs_1","summary":[]});
     let second = json!({"type":"message","id":"msg_2","role":"assistant","status":"completed","phase":"final_answer","content":[]});
     for (index, item) in [first, reasoning, second].into_iter().enumerate() {
-        state.accept(&added(index, item), &r).unwrap();
+        state
+            .accept(&added(index, item), &OutputContract::from(&r))
+            .unwrap();
     }
     let mut observed = Vec::new();
     for (kind, output_index, item_id, part_index, delta) in [
@@ -92,7 +94,7 @@ fn text_and_refusal_blocks_retain_identity_across_items_snapshots_and_interleavi
         } else {
             "content_index"
         }] = json!(part_index);
-        observed.extend(state.accept(&frame, &r).unwrap());
+        observed.extend(state.accept(&frame, &OutputContract::from(&r)).unwrap());
     }
     assert_eq!(
         observed,
@@ -130,7 +132,7 @@ fn text_and_refusal_blocks_retain_identity_across_items_snapshots_and_interleavi
             state
                 .accept(
                     &json!({"type":"response.output_item.done","output_index":index,"item":item}),
-                    &r
+                    &OutputContract::from(&r)
                 )
                 .unwrap()
                 .iter()
@@ -142,7 +144,10 @@ fn text_and_refusal_blocks_retain_identity_across_items_snapshots_and_interleavi
     }
     let response = completed(
         state
-            .accept(&terminal(vec![first, reasoning, second]), &r)
+            .accept(
+                &terminal(vec![first, reasoning, second]),
+                &OutputContract::from(&r),
+            )
             .unwrap(),
     );
     assert_eq!(
@@ -166,11 +171,13 @@ fn message_phase_can_refine_before_finalization_and_retains_its_final_value_in_r
         let mut initial = text_item("");
         initial["status"] = json!("in_progress");
         initial["content"] = json!([]);
-        state.accept(&added(0, initial), &r).unwrap();
+        state
+            .accept(&added(0, initial), &OutputContract::from(&r))
+            .unwrap();
         let observed = state
             .accept(
                 &json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"Reading."}),
-                &r,
+                &OutputContract::from(&r),
             )
             .unwrap();
         assert_eq!(
@@ -186,15 +193,21 @@ fn message_phase_can_refine_before_finalization_and_retains_its_final_value_in_r
             let observed = state
                 .accept(
                     &json!({"type":"response.output_item.done","output_index":0,"item":commentary}),
-                    &r,
+                    &OutputContract::from(&r),
                 )
                 .unwrap();
             assert_eq!(observed, vec![ModelStreamEvent::OutputObserved]);
         }
         let call = call_item("call_1", "{\"path\":\"a\"}");
-        state.accept(&added(1, call.clone()), &r).unwrap();
+        state
+            .accept(&added(1, call.clone()), &OutputContract::from(&r))
+            .unwrap();
         let output = vec![commentary, call];
-        let response = completed(state.accept(&terminal(output.clone()), &r).unwrap());
+        let response = completed(
+            state
+                .accept(&terminal(output.clone()), &OutputContract::from(&r))
+                .unwrap(),
+        );
         assert_eq!(
             response.message.content[0],
             Content::Text("Reading.".into())
@@ -236,15 +249,17 @@ fn phase_refinement_does_not_allow_rewriting_final_phase_identity_or_observed_te
         let mut state = ResponsesState::default();
         let mut initial = text_item("");
         initial["content"] = json!([]);
-        state.accept(&added(0, initial), &r).unwrap();
-        state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"Reading."}), &r).unwrap();
+        state
+            .accept(&added(0, initial), &OutputContract::from(&r))
+            .unwrap();
+        state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"Reading."}), &OutputContract::from(&r)).unwrap();
         let mut final_item = text_item("Reading.");
         final_item["phase"] = json!("commentary");
         if finalize {
             state
                 .accept(
                     &json!({"type":"response.output_item.done","output_index":0,"item":final_item}),
-                    &r,
+                    &OutputContract::from(&r),
                 )
                 .unwrap();
         }
@@ -255,7 +270,9 @@ fn phase_refinement_does_not_allow_rewriting_final_phase_identity_or_observed_te
             }
         }
         assert!(
-            state.accept(&terminal(vec![final_item]), &r).is_err(),
+            state
+                .accept(&terminal(vec![final_item]), &OutputContract::from(&r))
+                .is_err(),
             "{field}, finalized: {finalize}"
         );
     }
@@ -384,14 +401,19 @@ fn foreign_namespaces_cannot_dispatch_a_same_named_local_function() {
         call["namespace"] = namespace;
         assert!(
             ResponsesState::default()
-                .accept(&terminal(vec![call.clone()]), &r)
+                .accept(&terminal(vec![call.clone()]), &OutputContract::from(&r))
                 .is_err()
         );
         let mut state = ResponsesState::default();
-        state.accept(&added(0, call), &r).unwrap();
+        state
+            .accept(&added(0, call), &OutputContract::from(&r))
+            .unwrap();
         assert!(
             state
-                .accept(&terminal(vec![call_item("a", "{}")]), &r)
+                .accept(
+                    &terminal(vec![call_item("a", "{}")]),
+                    &OutputContract::from(&r)
+                )
                 .is_err()
         );
     }
@@ -426,10 +448,14 @@ fn terminal_snapshot_backfills_reasoning_and_keeps_interleaved_calls_independent
     let mut second = call_item("b", "");
     second["status"] = json!("in_progress");
     // A terminal-only reasoning item occupies the missing index zero.
-    state.accept(&added(1, first), &r).unwrap();
-    state.accept(&added(2, second), &r).unwrap();
+    state
+        .accept(&added(1, first), &OutputContract::from(&r))
+        .unwrap();
+    state
+        .accept(&added(2, second), &OutputContract::from(&r))
+        .unwrap();
     for (i, id, args) in [(2, "fc_b", "{\"path\":\"b\"}"), (1, "fc_a", "not json")] {
-        let events=state.accept(&json!({"type":"response.function_call_arguments.delta","output_index":i,"item_id":id,"delta":args}),&r).unwrap();
+        let events=state.accept(&json!({"type":"response.function_call_arguments.delta","output_index":i,"item_id":id,"delta":args}),&OutputContract::from(&r)).unwrap();
         assert!(matches!(
             events.as_slice(),
             [ModelStreamEvent::OutputObserved]
@@ -440,7 +466,11 @@ fn terminal_snapshot_backfills_reasoning_and_keeps_interleaved_calls_independent
         call_item("a", "not json"),
         call_item("b", "{\"path\":\"b\"}"),
     ];
-    let response = completed(state.accept(&terminal(output.clone()), &r).unwrap());
+    let response = completed(
+        state
+            .accept(&terminal(output.clone()), &OutputContract::from(&r))
+            .unwrap(),
+    );
     assert_eq!(
         response.usage,
         Usage {
@@ -472,23 +502,26 @@ fn summary_is_human_progress_but_ciphertext_is_not() {
     state
         .accept(
             &added(0, json!({"id":"rs_1","type":"reasoning","summary":[]})),
-            &r,
+            &OutputContract::from(&r),
         )
         .unwrap();
-    let events=state.accept(&json!({"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_1","summary_index":0,"delta":"Checking"}),&r).unwrap();
+    let events=state.accept(&json!({"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_1","summary_index":0,"delta":"Checking"}),&OutputContract::from(&r)).unwrap();
     assert!(matches!(&events[0],ModelStreamEvent::ThinkingDelta{block:0,text} if text=="Checking"));
     let item = json!({"type":"reasoning","id":"rs_1","summary":[{"type":"summary_text","text":"Checking"}]});
     state
         .accept(
             &json!({"type":"response.output_item.done","output_index":0,"item":item}),
-            &r,
+            &OutputContract::from(&r),
         )
         .unwrap();
     let mut final_item = item;
     final_item["encrypted_content"] = json!("NOT_HUMAN");
     let response = completed(
         state
-            .accept(&terminal(vec![final_item, text_item("Done")]), &r)
+            .accept(
+                &terminal(vec![final_item, text_item("Done")]),
+                &OutputContract::from(&r),
+            )
             .unwrap(),
     );
     assert_eq!(
@@ -511,21 +544,29 @@ fn final_snapshots_cannot_rewrite_observed_or_finalized_output() {
                     0,
                     json!({"id":"msg_1","type":"message","role":"assistant","content":[]}),
                 ),
-                &r,
+                &OutputContract::from(&r),
             )
             .unwrap();
-        state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":delta}),&r).unwrap();
+        state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":delta}),&OutputContract::from(&r)).unwrap();
         assert!(
             state
-                .accept(&terminal(vec![text_item(final_text)]), &r)
+                .accept(
+                    &terminal(vec![text_item(final_text)]),
+                    &OutputContract::from(&r)
+                )
                 .is_err()
         );
     }
     let mut state = ResponsesState::default();
-    state.accept(&added(0, text_item("initial")), &r).unwrap();
+    state
+        .accept(&added(0, text_item("initial")), &OutputContract::from(&r))
+        .unwrap();
     assert!(
         state
-            .accept(&terminal(vec![text_item("changed")]), &r)
+            .accept(
+                &terminal(vec![text_item("changed")]),
+                &OutputContract::from(&r)
+            )
             .is_err()
     );
 }
@@ -540,16 +581,16 @@ fn finalized_parts_reject_late_deltas_and_unfinished_calls_never_handoff() {
                 0,
                 json!({"id":"msg_1","type":"message","role":"assistant","content":[]}),
             ),
-            &r,
+            &OutputContract::from(&r),
         )
         .unwrap();
-    state.accept(&json!({"type":"response.content_part.done","output_index":0,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":"done","annotations":[]}}),&r).unwrap();
-    assert!(state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"late"}),&r).is_err());
+    state.accept(&json!({"type":"response.content_part.done","output_index":0,"item_id":"msg_1","content_index":0,"part":{"type":"output_text","text":"done","annotations":[]}}),&OutputContract::from(&r)).unwrap();
+    assert!(state.accept(&json!({"type":"response.output_text.delta","output_index":0,"item_id":"msg_1","content_index":0,"delta":"late"}),&OutputContract::from(&r)).is_err());
     let mut call = call_item("a", "{}");
     call["status"] = json!("in_progress");
     assert!(
         ResponsesState::default()
-            .accept(&terminal(vec![call]), &r)
+            .accept(&terminal(vec![call]), &OutputContract::from(&r))
             .is_err()
     );
 }
@@ -720,12 +761,7 @@ async fn http_preserves_failure_evidence_without_authorizing_completion() {
         let endpoint = serve(event(&value), "200 OK").await;
         let service =
             HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
-        let events = service
-            .stream(r.clone())
-            .await
-            .unwrap()
-            .collect::<Vec<_>>()
-            .await;
+        let events = service.stream(&r).await.unwrap().collect::<Vec<_>>().await;
         assert_eq!(
             events
                 .iter()
@@ -764,7 +800,7 @@ async fn http_preserves_failure_evidence_without_authorizing_completion() {
     let endpoint = serve(payload, "200 OK").await;
     let service =
         HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
-    let events = service.stream(r).await.unwrap().collect::<Vec<_>>().await;
+    let events = service.stream(&r).await.unwrap().collect::<Vec<_>>().await;
     assert!(matches!(
         events.first().unwrap(),
         Ok(ModelStreamEvent::Usage(Usage {
@@ -817,7 +853,7 @@ fn migrated_aliases_pair_results_without_rewriting_native_continuation() {
     r.messages.push(
         completed(
             ResponsesState::default()
-                .accept(&terminal(output), &r)
+                .accept(&terminal(output), &OutputContract::from(&r))
                 .unwrap(),
         )
         .message,
@@ -859,7 +895,7 @@ fn unsigned_native_messages_keep_required_identity_across_models() {
     r.messages.push(
         completed(
             ResponsesState::default()
-                .accept(&terminal(output.clone()), &r)
+                .accept(&terminal(output.clone()), &OutputContract::from(&r))
                 .unwrap(),
         )
         .message,
@@ -878,14 +914,14 @@ fn readable_reasoning_is_not_confused_with_opaque_continuation() {
                 0,
                 json!({"id":"rs_1","type":"reasoning","summary":[],"content":[]}),
             ),
-            &r,
+            &OutputContract::from(&r),
         )
         .unwrap();
-    let events = state.accept(&json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"rs_1","content_index":0,"delta":"Readable"}),&r).unwrap();
+    let events = state.accept(&json!({"type":"response.reasoning_text.delta","output_index":0,"item_id":"rs_1","content_index":0,"delta":"Readable"}),&OutputContract::from(&r)).unwrap();
     assert!(
         matches!(&events[0],ModelStreamEvent::ThinkingDelta {block:0,text} if text=="Readable")
     );
-    let response = completed(state.accept(&terminal(vec![json!({"id":"rs_1","type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"Readable"}],"encrypted_content":"OPAQUE"}),text_item("Done")]),&r).unwrap());
+    let response = completed(state.accept(&terminal(vec![json!({"id":"rs_1","type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"Readable"}],"encrypted_content":"OPAQUE"}),text_item("Done")]),&OutputContract::from(&r)).unwrap());
     assert_eq!(
         response.message.content,
         vec![
@@ -902,7 +938,7 @@ fn decoded_replay_and_repeated_metadata_have_independent_bounds() {
     let oversized = json!({"type":"reasoning","id":"rs_1","summary":[],"encrypted_content":"x".repeat(8*1024*1024)});
     assert!(
         state
-            .accept(&terminal(vec![oversized]), &r)
+            .accept(&terminal(vec![oversized]), &OutputContract::from(&r))
             .unwrap_err()
             .message
             .contains("byte limit")
@@ -915,7 +951,7 @@ fn decoded_replay_and_repeated_metadata_have_independent_bounds() {
     decode_stream_frame(
         frame.as_bytes(),
         &mut decoder,
-        &r,
+        &OutputContract::from(&r),
         HttpWire::OpenAiResponses,
         &mut budget,
     )
@@ -926,7 +962,7 @@ fn decoded_replay_and_repeated_metadata_have_independent_bounds() {
         if decode_stream_frame(
             frame.as_bytes(),
             &mut decoder,
-            &r,
+            &OutputContract::from(&r),
             HttpWire::OpenAiResponses,
             &mut budget,
         )
@@ -940,7 +976,15 @@ fn decoded_replay_and_repeated_metadata_have_independent_bounds() {
     assert_eq!(decoder.retained_bytes(), retained);
     let mismatch =
         b"event: response.completed\ndata: {\"type\":\"response.in_progress\",\"response\":{}}\n\n";
-    assert!(decode_frame(mismatch, &mut decoder, &r, HttpWire::OpenAiResponses).is_err());
+    assert!(
+        decode_frame(
+            mismatch,
+            &mut decoder,
+            &OutputContract::from(&r),
+            HttpWire::OpenAiResponses
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -949,7 +993,12 @@ fn usage_remains_unknown_when_absent_and_rejects_double_counting() {
     let mut value = terminal(vec![text_item("Done")]);
     value["response"].as_object_mut().unwrap().remove("usage");
     assert_eq!(
-        completed(ResponsesState::default().accept(&value, &r).unwrap()).usage,
+        completed(
+            ResponsesState::default()
+                .accept(&value, &OutputContract::from(&r))
+                .unwrap()
+        )
+        .usage,
         Usage::unknown()
     );
     for usage in [
@@ -959,7 +1008,11 @@ fn usage_remains_unknown_when_absent_and_rejects_double_counting() {
         json!({"input_tokens":-1}),
     ] {
         value["response"]["usage"] = usage;
-        assert!(ResponsesState::default().accept(&value, &r).is_err());
+        assert!(
+            ResponsesState::default()
+                .accept(&value, &OutputContract::from(&r))
+                .is_err()
+        );
     }
 }
 
@@ -980,7 +1033,7 @@ async fn responses_stream_reports_unexpected_reasoning_removals_without_changing
     let endpoint = serve_split(event(&done), "200 OK", 23).await;
     let service =
         HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
-    let mut stream = service.stream(request()).await.unwrap();
+    let mut stream = service.stream(&request()).await.unwrap();
     let mut notices = Vec::new();
     let mut response = None;
     while let Some(event) = stream.next().await {
@@ -1015,7 +1068,7 @@ async fn full_snapshot_frames_are_bounded_separately_from_chat_deltas() {
     let endpoint = serve_split(event(&terminal(vec![text_item(&text)])), "200 OK", 997).await;
     let service =
         HttpModelService::new(&endpoint, HttpWire::OpenAiResponses, Arc::new(|| None)).unwrap();
-    let mut stream = service.stream(request()).await.unwrap();
+    let mut stream = service.stream(&request()).await.unwrap();
     let mut response = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(value) = event.unwrap() {

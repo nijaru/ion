@@ -27,7 +27,7 @@ impl ion_ai::ModelService for HeldContinuation {
 
     fn stream<'a>(
         &'a self,
-        request: ion_ai::ModelRequest,
+        request: &'a ion_ai::ModelRequest,
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         Box::pin(async move {
             if !self.model.requests().is_empty() {

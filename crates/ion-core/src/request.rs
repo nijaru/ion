@@ -329,18 +329,19 @@ impl RequestPlan {
             session.activate_request_calibration(&measurement, &scope)
         })
         .await?;
-        let attempt = generate_with_retry(model, &prepared.request, stop, observe, |observed| {
-            io.run_with(move |session| {
-                session
-                    .record_uncommitted_usage(
-                        crate::session::ModelUsagePurpose::Assistant,
-                        observed.execution,
-                        observed.usage,
-                    )
-                    .map_err(AgentError::from)
+        let attempt =
+            generate_with_retry(model, &mut prepared.request, stop, observe, |observed| {
+                io.run_with(move |session| {
+                    session
+                        .record_uncommitted_usage(
+                            crate::session::ModelUsagePurpose::Assistant,
+                            observed.execution,
+                            observed.usage,
+                        )
+                        .map_err(AgentError::from)
+                })
             })
-        })
-        .await;
+            .await;
         // Retain the route actually used by pre-output retry for cache warming.
         prepared.request.route = attempt.route.clone();
         Ok(IssuedRequest {

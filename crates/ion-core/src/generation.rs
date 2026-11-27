@@ -87,7 +87,7 @@ impl GenerationAttempt {
 
 pub(crate) async fn generate_with_retry<F, A, Accounting>(
     model: &Arc<dyn ModelService>,
-    request: &ModelRequest,
+    request: &mut ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
     mut account_failure: A,
@@ -107,14 +107,15 @@ where
             usage: None,
         };
     }
+    let reason = request.route.reason;
     for attempt in 0..=2 {
-        // The caller retains the frozen base; only the dispatched attempt
-        // needs an owned copy. Borrowing avoids a second full-history clone.
-        let mut attempt_request = request.clone();
+        // Only route metadata changes. The adapter borrows the same frozen
+        // history, including any large attachments, for every attempt.
         if attempt > 0 {
-            attempt_request.route.reason = ModelRouteReason::Retry;
+            request.route.reason = ModelRouteReason::Retry;
         }
-        let mut evidence = generate_once(model, attempt_request, stop, observe).await;
+        let mut evidence = generate_once(model, request, stop, observe).await;
+        request.route.reason = reason;
         // Settle failed evidence before any redispatch. A required accounting
         // write failing blocks the request just like other Session commits.
         if evidence.outcome.is_err()
@@ -159,7 +160,7 @@ where
 
 async fn generate_once<F>(
     model: &Arc<dyn ModelService>,
-    request: ModelRequest,
+    request: &ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
 ) -> GenerationAttempt
@@ -186,7 +187,7 @@ where
 
 async fn stream_response<F>(
     model: &Arc<dyn ModelService>,
-    request: ModelRequest,
+    request: &ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
     usage: &mut Option<ObservedUsage>,
@@ -305,7 +306,7 @@ pub(crate) async fn refresh_prompt_cache(
 ) -> bool {
     request.controls.max_output_tokens = 1;
     request.route.reason = ModelRouteReason::Auxiliary;
-    let (outcome, _) = stream_response(model, request, stop, &mut |_| {}, usage).await;
+    let (outcome, _) = stream_response(model, &request, stop, &mut |_| {}, usage).await;
     outcome.is_ok()
 }
 

@@ -56,7 +56,7 @@ async fn http_error_status_survives_truncated_diagnostic_body() {
         });
         let model =
             HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-        let failure = match model.stream(request()).await {
+        let failure = match model.stream(&request()).await {
             Ok(_) => panic!("HTTP error admitted a stream"),
             Err(failure) => failure,
         };
@@ -94,7 +94,7 @@ async fn http_error_diagnostic_deadline_does_not_reset_on_body_progress() {
     });
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let Err(failure) = model.stream(request()).await else {
+    let Err(failure) = model.stream(&request()).await else {
         panic!("HTTP error admitted a stream")
     };
     assert_eq!(failure.kind, ProviderErrorKind::Authentication);
@@ -246,7 +246,7 @@ async fn catalog_openrouter_route_keeps_affinity_controls_and_structured_replay(
     request.provider_session_id = Some("fixture-session".into());
     request.controls.reasoning = Reasoning::High;
     let service = HttpModelService::new(&endpoint, selection.wire, Arc::new(|| None)).unwrap();
-    let mut stream = service.stream(request.clone()).await.unwrap();
+    let mut stream = service.stream(&request).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -905,7 +905,7 @@ fn anthropic_sse_error_keeps_provider_reason_and_kind() {
     let error = decode_frame(
         b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Too busy\"}}\n\n",
         &mut decoder,
-        &request(),
+        &OutputContract::from(&request()),
         HttpWire::AnthropicMessages,
     )
     .unwrap_err();
@@ -916,7 +916,7 @@ fn anthropic_sse_error_keeps_provider_reason_and_kind() {
     let error = decode_frame(
         b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Slow down\"}}\n\n",
         &mut decoder,
-        &request(),
+        &OutputContract::from(&request()),
         HttpWire::AnthropicMessages,
     )
     .unwrap_err();
@@ -931,7 +931,7 @@ fn anthropic_unknown_sse_event_does_not_interrupt_a_message() {
         decode_frame(
             b"event: future_event\ndata: {\"type\":\"future_event\"}\n\n",
             &mut decoder,
-            &request(),
+            &OutputContract::from(&request()),
             HttpWire::AnthropicMessages,
         )
         .unwrap()
@@ -940,7 +940,7 @@ fn anthropic_unknown_sse_event_does_not_interrupt_a_message() {
     assert!(decode_frame(
         b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"role\":\"assistant\",\"model\":\"returned\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
         &mut decoder,
-        &request(),
+        &OutputContract::from(&request()),
         HttpWire::AnthropicMessages,
     )
     .is_ok());
@@ -948,7 +948,7 @@ fn anthropic_unknown_sse_event_does_not_interrupt_a_message() {
         decode_frame(
             b"event: future_event\ndata: {\"type\":\"future_event\"}\n\n",
             &mut decoder,
-            &request(),
+            &OutputContract::from(&request()),
             HttpWire::AnthropicMessages,
         )
         .unwrap()
@@ -1323,7 +1323,10 @@ fn direct_reasoning_survives_streaming_and_later_tool_requests() {
             );
         }
         state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-        let assistant = state.complete(&request).unwrap().message;
+        let assistant = state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .message;
         assert_eq!(
             assistant.provider_replay.as_ref().unwrap().data,
             "first second"
@@ -1383,7 +1386,10 @@ fn openrouter_replays_fragmented_plain_details() {
         );
     }
     state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-    let assistant = state.complete(&request).unwrap().message;
+    let assistant = state
+        .complete(&OutputContract::from(&request))
+        .unwrap()
+        .message;
     assert_eq!(
         assistant.provider_replay.as_ref().unwrap().data,
         json!([{"type":"reasoning.text","text":"plan read","format":"unknown","index":0}])
@@ -1412,7 +1418,10 @@ fn openrouter_replays_fragmented_plain_details() {
     let mut contradictory = ChatState::new(HttpWire::OpenRouterChat);
     contradictory.accept(&json!({"choices":[{"delta":{"reasoning":"one","reasoning_details":[{"type":"reasoning.text","text":"two"}]},"finish_reason":"stop"}]})).unwrap();
     assert_eq!(
-        contradictory.complete(&request).unwrap_err().kind,
+        contradictory
+            .complete(&OutputContract::from(&request))
+            .unwrap_err()
+            .kind,
         ProviderErrorKind::InvalidRequest
     );
     let mut generic = ChatState::default();
@@ -1450,7 +1459,11 @@ fn late_structured_thinking_keeps_summaries_without_duplicate_streams() {
         ]
     );
     assert_eq!(
-        state.complete(&request()).unwrap().message.content,
+        state
+            .complete(&OutputContract::from(&request()))
+            .unwrap()
+            .message
+            .content,
         vec![
             Content::Thinking("plain thought".into()),
             Content::Thinking("readable summary".into()),
@@ -1468,7 +1481,10 @@ fn openrouter_replays_plain_reasoning_without_details() {
         .accept(&json!({"choices":[{"delta":{"reasoning":"inspect file"},"finish_reason":null}]}))
         .unwrap();
     state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-    let assistant = state.complete(&request).unwrap().message;
+    let assistant = state
+        .complete(&OutputContract::from(&request))
+        .unwrap()
+        .message;
     assert_eq!(
         assistant.provider_replay.as_ref().unwrap().kind,
         OPENROUTER_PLAIN_REASONING_REPLAY
@@ -1499,7 +1515,10 @@ fn openrouter_replays_signed_and_encrypted_details_in_order() {
     state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"read","index":0,"signature":"signed","format":"google-gemini-v1"},{"type":"reasoning.summary","summary":"First ","index":1}]},"finish_reason":null}]})).unwrap();
     state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"inspect","index":1},{"type":"reasoning.encrypted","data":"opaque","format":"google-gemini-v1","id":"thought-1","index":2}]},"finish_reason":null}]})).unwrap();
     state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider-call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-    let assistant = state.complete(&request).unwrap().message;
+    let assistant = state
+        .complete(&OutputContract::from(&request))
+        .unwrap()
+        .message;
     assert_eq!(
         &assistant.content[..2],
         &[
@@ -1576,7 +1595,10 @@ fn openrouter_keeps_signature_only_text_detail() {
     state
         .accept(&json!({"choices":[{"delta":{"reasoning_details":[detail],"content":"Done"},"finish_reason":"stop"}]}))
         .unwrap();
-    let assistant = state.complete(&request).unwrap().message;
+    let assistant = state
+        .complete(&OutputContract::from(&request))
+        .unwrap()
+        .message;
     assert_eq!(
         assistant.provider_replay.as_ref().unwrap().data,
         json!([detail])
@@ -1610,7 +1632,7 @@ fn generic_chat_stop_accepts_only_complete_streamed_calls() {
         state
             .accept(&json!({"choices":[{"delta":{},"finish_reason":"stop"}]}))
             .unwrap();
-        state.complete(&request)
+        state.complete(&OutputContract::from(&request))
     };
     let arguments = r#"{"path":"note.txt"}"#;
     let completed = complete(HttpWire::ChatCompletions, arguments).unwrap();
@@ -1632,15 +1654,27 @@ fn chat_completion_needs_finish_and_valid_tool() {
     let request = request();
     let mut state = ChatState::default();
     state.accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-    assert_eq!(state.complete(&request).unwrap().message.content.len(), 1);
+    assert_eq!(
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .message
+            .content
+            .len(),
+        1
+    );
     let mut state = ChatState::default();
     state.accept(&json!({"choices":[]})).unwrap();
-    assert!(state.complete(&request).is_err());
+    assert!(state.complete(&OutputContract::from(&request)).is_err());
 
     let mut state = ChatState::default();
     state.accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invented","function":{"name":"not_a_tool","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
     assert_eq!(
-        state.complete(&request).unwrap().message.content,
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .message
+            .content,
         vec![Content::ToolCall(ToolCall {
             id: "invented".into(),
             name: "not_a_tool".into(),
@@ -1651,7 +1685,7 @@ fn chat_completion_needs_finish_and_valid_tool() {
 
     let mut state = ChatState::default();
     state.accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"broken","function":{"name":"exec","arguments":"{\"command\":"}}]},"finish_reason":"tool_calls"}]})).unwrap();
-    let response = state.complete(&request).unwrap();
+    let response = state.complete(&OutputContract::from(&request)).unwrap();
     assert_eq!(
         response.message.content,
         vec![Content::ToolCall(ToolCall {
@@ -1674,7 +1708,11 @@ fn chat_tool_metadata_is_stable_while_arguments_stream() {
         .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-first","function":{"name":"read","arguments":"README.md\"}"}}]},"finish_reason":"tool_calls"}]}))
         .unwrap();
     assert_eq!(
-        state.complete(&request).unwrap().message.content,
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .message
+            .content,
         vec![Content::ToolCall(ToolCall {
             id: "call-first".into(),
             name: "read".into(),
@@ -1703,7 +1741,7 @@ fn chat_tool_metadata_is_stable_while_arguments_stream() {
         {"index":1,"id":"same","function":{"name":"read","arguments":"{}"}}
     ]},"finish_reason":"tool_calls"}]}))
         .unwrap();
-    assert!(duplicate.complete(&request).is_err());
+    assert!(duplicate.complete(&OutputContract::from(&request)).is_err());
 }
 
 #[test]
@@ -1748,7 +1786,11 @@ fn chat_rejects_unrepresentable_output_instead_of_completing_text() {
     state.accept(&json!({"choices":[{"delta":{"content":"answer","function_call":null,"audio":null},"finish_reason":"stop"}]})).unwrap();
     state.accept(&json!({"choices":[{"delta":{"function_call":null,"audio":null},"finish_reason":"stop"}]})).unwrap();
     assert_eq!(
-        state.complete(&request()).unwrap().message.content,
+        state
+            .complete(&OutputContract::from(&request()))
+            .unwrap()
+            .message
+            .content,
         vec![Content::Text("answer".into())]
     );
 }
@@ -1768,7 +1810,11 @@ fn chat_tool_continuations_allow_omitted_null_and_empty_metadata() {
         .accept(&json!({"choices":[{"delta":null,"finish_reason":"tool_calls"}]}))
         .unwrap();
     assert_eq!(
-        state.complete(&request()).unwrap().message.content,
+        state
+            .complete(&OutputContract::from(&request()))
+            .unwrap()
+            .message
+            .content,
         vec![Content::ToolCall(ToolCall {
             id: "first".into(),
             name: "read".into(),
@@ -1786,7 +1832,7 @@ fn chat_refusal_does_not_override_incomplete_termination() {
     ] {
         let mut state = ChatState::default();
         state.accept(&json!({"choices":[{"delta":{"refusal":"Cannot help.","tool_calls":[{"index":0,"id":"call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":finish}]})).unwrap();
-        let response = state.complete(&request()).unwrap();
+        let response = state.complete(&OutputContract::from(&request())).unwrap();
         assert_eq!(
             response.termination,
             ResponseTermination::Incomplete(reason)
@@ -1809,7 +1855,7 @@ fn chat_length_stop_retains_calls_for_safe_rejection() {
     state
         .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"partial","function":{"name":"write","arguments":"{\"path\":\"short\",\"content\":\"hel\"}"}}]},"finish_reason":"length"}]}))
         .unwrap();
-    let response = state.complete(&request).unwrap();
+    let response = state.complete(&OutputContract::from(&request)).unwrap();
     assert_eq!(
         response.termination,
         ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
@@ -1827,7 +1873,13 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
     state.accept(&json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]})).unwrap();
     state.accept(&json!({"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop"}]})).unwrap();
     state.accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop"}]})).unwrap();
-    assert_eq!(state.complete(&request).unwrap().usage, Usage::known(2, 1));
+    assert_eq!(
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .usage,
+        Usage::known(2, 1)
+    );
 
     let mut state = ChatState::default();
     state
@@ -1836,19 +1888,37 @@ fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
     state
         .accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1}}))
         .unwrap();
-    assert_eq!(state.complete(&request).unwrap().usage, Usage::known(2, 1));
+    assert_eq!(
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .usage,
+        Usage::known(2, 1)
+    );
 
     let mut state = ChatState::default();
     state
         .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","usage":{"prompt_tokens":7,"completion_tokens":2}}]}))
         .unwrap();
-    assert_eq!(state.complete(&request).unwrap().usage, Usage::known(7, 2));
+    assert_eq!(
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .usage,
+        Usage::known(7, 2)
+    );
 
     let mut state = ChatState::default();
     state
         .accept(&json!({"usage":{"prompt_tokens":8,"completion_tokens":3},"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","usage":{"prompt_tokens":7,"completion_tokens":2}}]}))
         .unwrap();
-    assert_eq!(state.complete(&request).unwrap().usage, Usage::known(8, 3));
+    assert_eq!(
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .usage,
+        Usage::known(8, 3)
+    );
 
     for (delta, finish) in [
         (json!({"content":"late"}), json!("stop")),
@@ -1880,7 +1950,13 @@ fn chat_partial_usage_retains_previous_counts() {
     state
         .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","usage":{"completion_tokens":3}}]}))
         .unwrap();
-    assert_eq!(state.complete(&request).unwrap().usage, Usage::known(12, 3));
+    assert_eq!(
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .usage,
+        Usage::known(12, 3)
+    );
 
     let mut state = ChatState::default();
     state
@@ -1890,7 +1966,10 @@ fn chat_partial_usage_retains_previous_counts() {
         .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}))
         .unwrap();
     assert_eq!(
-        state.complete(&request).unwrap().usage,
+        state
+            .complete(&OutputContract::from(&request))
+            .unwrap()
+            .usage,
         Usage {
             input_tokens: Some(12),
             output_tokens: None,
@@ -1952,7 +2031,7 @@ async fn mimo_capacity_is_normalized_for_aliases_on_every_completion_path() {
             },
             ModelRouteReason::UserRequest,
         );
-        let mut stream = model.stream(request).await.unwrap();
+        let mut stream = model.stream(&request).await.unwrap();
         let mut completed = None;
         while let Some(event) = stream.next().await {
             if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -2092,7 +2171,7 @@ async fn chat_stream_accepts_cr_and_mixed_sse_line_endings() {
     let endpoint = serve_split(body.into(), "200 OK", 1).await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
         ModelStreamEvent::TextDelta { text, .. } if text == "hi"
@@ -2113,7 +2192,7 @@ async fn sse_crlf_does_not_charge_its_last_byte_to_next_frame() {
     let endpoint = serve_split(body, "200 OK", 1024).await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
         ModelStreamEvent::TextDelta { .. }
@@ -2135,7 +2214,7 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     let endpoint = serve(body.into(), "200 OK").await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -2155,7 +2234,7 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     let endpoint = serve(body.replace("data: [DONE]\n\n", ""), "200 OK").await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -2174,7 +2253,7 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     .await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
         ModelStreamEvent::TextDelta { .. }
@@ -2192,7 +2271,7 @@ async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
     .await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
         ModelStreamEvent::TextDelta { .. }
@@ -2215,7 +2294,7 @@ async fn generic_chat_displays_reasoning_once_without_replaying_it() {
     let wire = HttpWire::ChatCompletions;
     let model = HttpModelService::new(&endpoint, wire, Arc::new(|| None)).unwrap();
     let mut request = request();
-    let mut stream = model.stream(request.clone()).await.unwrap();
+    let mut stream = model.stream(&request).await.unwrap();
     let mut thinking = String::new();
     let message = loop {
         match stream.next().await.unwrap().unwrap() {
@@ -2250,7 +2329,7 @@ async fn initial_sse_bom_preserves_the_first_delta_across_chunks() {
         let endpoint = serve_split(body.into(), "200 OK", chunk_size).await;
         let model =
             HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-        let mut stream = model.stream(request()).await.unwrap();
+        let mut stream = model.stream(&request()).await.unwrap();
         let mut deltas = String::new();
         let mut completed = None;
         while let Some(event) = stream.next().await {
@@ -2326,7 +2405,7 @@ async fn ok_json_reports_only_structured_error_diagnostics_without_opening_a_str
         let endpoint = serve_typed(body.to_string(), "200 OK", mime, 12).await;
         let model =
             HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-        let failure = match model.stream(request()).await {
+        let failure = match model.stream(&request()).await {
             Ok(_) => panic!("non-SSE response opened a model stream"),
             Err(error) => error,
         };
@@ -2346,7 +2425,7 @@ async fn padded_http_quota_body_keeps_the_bounded_prefix_across_chunks() {
         let endpoint = serve_split(body.clone(), "429 Too Many Requests", chunk_size).await;
         let model =
             HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
-        let failure = match model.stream(request()).await {
+        let failure = match model.stream(&request()).await {
             Ok(_) => panic!("HTTP quota error opened a model stream"),
             Err(error) => error,
         };
@@ -2451,7 +2530,7 @@ async fn chat_stream_error_preserves_bounded_reason_and_never_completes() {
     let endpoint = serve(body.into(), "200 OK").await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::OpenRouterChat, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     assert!(matches!(
         stream.next().await.unwrap().unwrap(),
         ModelStreamEvent::TextDelta { .. }
@@ -2490,7 +2569,7 @@ async fn anthropic_stream_closes_tool_block_before_completion() {
     let endpoint = serve(body.into(), "200 OK").await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -2512,7 +2591,7 @@ async fn anthropic_stream_closes_tool_block_before_completion() {
     let endpoint = serve_split(body.replace('\n', "\r"), "200 OK", 1).await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -2544,7 +2623,10 @@ fn anthropic_projects_only_human_initial_and_streamed_thinking() {
         json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":7}}),
         json!({"type":"message_stop"}),
     ] {
-        for event in state.accept(&event, &request).unwrap() {
+        for event in state
+            .accept(&event, &OutputContract::from(&request))
+            .unwrap()
+        {
             match event {
                 ModelStreamEvent::ThinkingDelta { block, text } => projected.push((block, text)),
                 ModelStreamEvent::Completed(value) => response = Some(value),
@@ -2647,7 +2729,10 @@ fn anthropic_signed_blocks_survive_tool_continuation_and_reopen() {
     ];
     let mut completed = None;
     for event in events {
-        for output in state.accept(&event, &request).unwrap() {
+        for output in state
+            .accept(&event, &OutputContract::from(&request))
+            .unwrap()
+        {
             if let ModelStreamEvent::Completed(response) = output {
                 completed = Some(response);
             }
@@ -2734,11 +2819,16 @@ fn anthropic_unsigned_thinking_is_rejected_before_completion() {
         json!({"type":"content_block_start","index":0,
             "content_block":{"type":"thinking","thinking":"","signature":""}}),
     ] {
-        state.accept(&event, &request).unwrap();
+        state
+            .accept(&event, &OutputContract::from(&request))
+            .unwrap();
     }
     assert_eq!(
         state
-            .accept(&json!({"type":"content_block_stop","index":0}), &request)
+            .accept(
+                &json!({"type":"content_block_stop","index":0}),
+                &OutputContract::from(&request)
+            )
             .unwrap_err()
             .kind,
         ProviderErrorKind::InvalidRequest
@@ -2766,11 +2856,16 @@ fn signed_anthropic_tool_with_invalid_json_does_not_enter_history() {
         json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},
             "usage":{"output_tokens":3}}),
     ] {
-        state.accept(&event, &request).unwrap();
+        state
+            .accept(&event, &OutputContract::from(&request))
+            .unwrap();
     }
     assert_eq!(
         state
-            .accept(&json!({"type":"message_stop"}), &request)
+            .accept(
+                &json!({"type":"message_stop"}),
+                &OutputContract::from(&request)
+            )
             .unwrap_err()
             .kind,
         ProviderErrorKind::InvalidRequest
@@ -2839,7 +2934,7 @@ async fn anthropic_stream_accepts_multiple_message_deltas() {
     let endpoint = serve_split(body.into(), "200 OK", 1).await;
     let model =
         HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None)).unwrap();
-    let mut stream = model.stream(request()).await.unwrap();
+    let mut stream = model.stream(&request()).await.unwrap();
     let mut completed = None;
     while let Some(event) = stream.next().await {
         if let ModelStreamEvent::Completed(response) = event.unwrap() {
@@ -2856,20 +2951,26 @@ fn anthropic_partial_usage_delta_keeps_previous_counts() {
     let request = request();
     let mut state = anthropic_state(&request);
     state
-        .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
+        .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &OutputContract::from(&request))
         .unwrap();
     state
-        .accept(&json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}), &request)
+        .accept(&json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}), &OutputContract::from(&request))
         .unwrap();
     state
-        .accept(&json!({"type":"content_block_stop","index":0}), &request)
+        .accept(
+            &json!({"type":"content_block_stop","index":0}),
+            &OutputContract::from(&request),
+        )
         .unwrap();
     state
-        .accept(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}), &request)
+        .accept(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}), &OutputContract::from(&request))
         .unwrap();
     assert_eq!(state.usage().unwrap(), Usage::known(3, 2));
     let completed = state
-        .accept(&json!({"type":"message_stop"}), &request)
+        .accept(
+            &json!({"type":"message_stop"}),
+            &OutputContract::from(&request),
+        )
         .unwrap();
     assert!(
         matches!(&completed[0], ModelStreamEvent::Completed(response) if response.usage == Usage::known(3, 2))
@@ -2877,12 +2978,12 @@ fn anthropic_partial_usage_delta_keeps_previous_counts() {
 
     let mut state = anthropic_state(&request);
     state
-        .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
+        .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &OutputContract::from(&request))
         .unwrap();
     state
         .accept(
             &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
-            &request,
+            &OutputContract::from(&request),
         )
         .unwrap();
     assert_eq!(state.usage().unwrap(), Usage::known(3, 0));
@@ -2893,30 +2994,33 @@ fn anthropic_multiple_message_deltas_need_consistent_stop_reason() {
     let request = request();
     let mut state = anthropic_state(&request);
     state
-        .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
+        .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &OutputContract::from(&request))
         .unwrap();
     state
         .accept(
             &json!({"type":"message_delta","delta":{},"usage":{"output_tokens":1}}),
-            &request,
+            &OutputContract::from(&request),
         )
         .unwrap();
     assert!(
         state
-            .accept(&json!({"type":"message_stop"}), &request)
+            .accept(
+                &json!({"type":"message_stop"}),
+                &OutputContract::from(&request)
+            )
             .is_err()
     );
     state
         .accept(
             &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
-            &request,
+            &OutputContract::from(&request),
         )
         .unwrap();
     assert!(
         state
             .accept(
                 &json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
-                &request
+                &OutputContract::from(&request)
             )
             .is_err()
     );

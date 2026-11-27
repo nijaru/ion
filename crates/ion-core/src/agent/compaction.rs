@@ -179,7 +179,7 @@ impl Agent {
                 check_access = false;
             }
             let attempt =
-                generate_with_retry(&self.service, &request, stop, &mut |_| {}, |observed| {
+                generate_with_retry(&self.service, &mut request, stop, &mut |_| {}, |observed| {
                     io.run_with(move |session| {
                         session
                             .record_uncommitted_usage(

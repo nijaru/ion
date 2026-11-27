@@ -182,7 +182,7 @@ struct ProgressModel(watch::Sender<usize>);
 impl ion_ai::ModelService for ProgressModel {
     fn stream<'a>(
         &'a self,
-        _: ion_ai::ModelRequest,
+        _: &'a ion_ai::ModelRequest,
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         let progress = self.0.clone();
         Box::pin(async move {

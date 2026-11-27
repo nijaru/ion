@@ -249,7 +249,10 @@ impl ChatState {
         });
     }
 
-    pub(super) fn complete(self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
+    pub(super) fn complete(
+        self,
+        contract: &OutputContract,
+    ) -> Result<ModelResponse, ProviderError> {
         if self.wire == HttpWire::OpenRouterChat
             && !self.reasoning_content.is_empty()
             && !self.reasoning_details.is_empty()
@@ -329,7 +332,7 @@ impl ChatState {
                 content,
                 provider_replay: if !self.reasoning_details.is_empty() {
                     Some(ProviderReplay::new(
-                        &request.route.effective.provider,
+                        &contract.model.provider,
                         OPENROUTER_DETAILS_REPLAY,
                         Value::Array(self.reasoning_details),
                     ))
@@ -337,7 +340,7 @@ impl ChatState {
                     && !self.reasoning_content.is_empty()
                 {
                     Some(ProviderReplay::new(
-                        &request.route.effective.provider,
+                        &contract.model.provider,
                         if self.wire == HttpWire::OpenRouterChat {
                             OPENROUTER_PLAIN_REASONING_REPLAY
                         } else {
@@ -354,7 +357,7 @@ impl ChatState {
             returned_model: self.model,
         };
         if response.is_complete() {
-            validate_output(request, &response)?;
+            validate_output(contract, &response)?;
         }
         Ok(response)
     }

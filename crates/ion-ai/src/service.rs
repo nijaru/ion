@@ -49,8 +49,10 @@ pub trait ModelService: Send + Sync {
         Ok(0)
     }
 
+    /// Borrow the frozen request while opening a stream. The returned stream
+    /// owns its transport and decoder state; it cannot keep the prompt alive.
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>>;
 }

@@ -219,7 +219,7 @@ impl ResponsesState {
     pub(super) fn accept(
         &mut self,
         value: &Value,
-        request: &ModelRequest,
+        contract: &OutputContract,
     ) -> Result<Vec<ModelStreamEvent>, ProviderError> {
         let kind = string(value, "type")?;
         let mut events = Vec::new();
@@ -527,9 +527,9 @@ impl ResponsesState {
                         role: Role::Assistant,
                         content,
                         provider_replay: Some(ProviderReplay::new(
-                            &request.route.effective.provider,
+                            &contract.model.provider,
                             RESPONSES_REPLAY,
-                            json!({"model":request.route.effective.model,"output":output}),
+                            json!({"model":contract.model.model,"output":output}),
                         )),
                     },
                     usage: self.usage,
@@ -537,7 +537,7 @@ impl ResponsesState {
                     returned_model: self.model.clone(),
                 };
                 if response.is_complete() {
-                    validate_output(request, &response)?;
+                    validate_output(contract, &response)?;
                 }
                 events.extend(reasoning_removals(
                     &terminal_response["input_transformations"],

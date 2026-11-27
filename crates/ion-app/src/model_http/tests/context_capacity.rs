@@ -150,10 +150,10 @@ impl ModelService for NativeBoundary {
 
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
-            let body = anthropic_body_for_route(&request, true, true)?;
+            let body = anthropic_body_for_route(request, true, true)?;
             let prefix = anthropic_body_prefix_digest(&body)?;
             self.bodies.lock().unwrap().push(body);
             let response = ModelResponse {

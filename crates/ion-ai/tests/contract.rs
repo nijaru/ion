@@ -94,7 +94,7 @@ async fn scripted_service_streams_provider_neutral_events() {
     let service = ScriptedModelService::new([Script::Stream(expected.clone())]);
     let service_ref: &dyn ModelService = &service;
 
-    let stream = service_ref.stream(request()).await.expect("open stream");
+    let stream = service_ref.stream(&request()).await.expect("open stream");
     let observed: Vec<_> = stream
         .map(|event| event.expect("scripted event"))
         .collect()
@@ -139,7 +139,7 @@ async fn incomplete_termination_is_not_a_complete_answer() {
         },
         ModelStreamEvent::Completed(response),
     ])]);
-    let stream = service.stream(request()).await.expect("open stream");
+    let stream = service.stream(&request()).await.expect("open stream");
     let observed: Vec<_> = stream
         .map(|event| event.expect("scripted event"))
         .collect()
@@ -185,7 +185,7 @@ async fn typed_open_failure_has_no_hidden_retry() {
         retry_after_ms: None,
     })]);
 
-    let error = match service.stream(request()).await {
+    let error = match service.stream(&request()).await {
         Ok(_) => panic!("script must fail before stream creation"),
         Err(error) => error,
     };

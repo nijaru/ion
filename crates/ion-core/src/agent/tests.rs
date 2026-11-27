@@ -642,7 +642,7 @@ async fn unfinished_cache_refresh_retains_usage_when_tool_finishes_or_stop_joins
 
         fn stream<'a>(
             &'a self,
-            request: ModelRequest,
+            request: &'a ModelRequest,
         ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
             if request.controls.max_output_tokens != 1 {
                 return self.inner.stream(request);
@@ -756,7 +756,7 @@ impl ModelService for DelayedInitialResponse {
 
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         Box::pin(async move {
             if self.inner.requests().is_empty() {
@@ -875,7 +875,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
         response(vec![Content::Text("done".into())]),
     ]));
     let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
-    let request = ModelRequest {
+    let mut request = ModelRequest {
         route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
         provider_session_id: Some(uuid::Uuid::now_v7().to_string()),
         instructions: None,
@@ -895,7 +895,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
     let mut retry_delay = None;
     let generated = generate_with_retry(
         &agent.service,
-        &request,
+        &mut request,
         &CancellationToken::new(),
         &mut |event| {
             if let AgentEvent::ProviderRetry { delay_ms, .. } = event {
@@ -925,7 +925,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
     let mut visible = String::new();
     let error = generate_with_retry(
         &agent.service,
-        &request,
+        &mut request,
         &CancellationToken::new(),
         &mut |event| {
             if let AgentEvent::TextDelta { text, .. } = event {
@@ -952,7 +952,7 @@ async fn transient_provider_error_retries_only_before_stream_output() {
     let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)), model());
     let error = generate_with_retry(
         &agent.service,
-        &request,
+        &mut request,
         &CancellationToken::new(),
         &mut |_| {},
         |_| std::future::ready(Ok(())),
@@ -3666,7 +3666,7 @@ impl ModelService for ReasoningScripts {
     }
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
         self.0.stream(request)
     }
@@ -4384,7 +4384,7 @@ async fn output_pressure_compacts_before_issuing_a_coding_request() {
     impl ModelService for CodingFixture {
         fn stream<'a>(
             &'a self,
-            request: ModelRequest,
+            request: &'a ModelRequest,
         ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
             Box::pin(async move {
                 let earlier = request.messages.last().is_some_and(|message| message.content.iter().any(|part| matches!(part, Content::Text(text) if text.starts_with("earlier task"))));
@@ -4402,7 +4402,7 @@ async fn output_pressure_compacts_before_issuing_a_coding_request() {
                         raw_arguments: None,
                     })
                 };
-                self.requests.lock().unwrap().push(request);
+                self.requests.lock().unwrap().push(request.clone());
                 let event = ModelStreamEvent::Completed(ModelResponse {
                     message: Message {
                         role: Role::Assistant,
@@ -4852,7 +4852,7 @@ async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
 
         fn stream<'a>(
             &'a self,
-            request: ModelRequest,
+            request: &'a ModelRequest,
         ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
             Box::pin(async move {
                 if request.route.reason == ModelRouteReason::Auxiliary {
@@ -4958,14 +4958,14 @@ async fn full_dispatched_output_budget_does_not_trigger_context_recovery() {
     impl ModelService for FillBudget {
         fn stream<'a>(
             &'a self,
-            request: ModelRequest,
+            request: &'a ModelRequest,
         ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
             Box::pin(async move {
                 let budget = request.controls.max_output_tokens;
                 let step = {
                     let mut requests = self.requests.lock().unwrap();
                     let step = requests.len();
-                    requests.push(request);
+                    requests.push(request.clone());
                     step
                 };
                 let (text, termination, output) = match step {
@@ -5683,7 +5683,7 @@ async fn cancelled_summary_does_not_change_the_context_projection() {
     impl ModelService for CancelOnCompletion {
         fn stream<'a>(
             &'a self,
-            _request: ModelRequest,
+            _request: &'a ModelRequest,
         ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
             let stop = self.0.clone();
             Box::pin(async move {

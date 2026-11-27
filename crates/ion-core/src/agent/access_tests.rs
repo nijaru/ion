@@ -71,7 +71,7 @@ impl ModelService for AccessService {
     }
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         self.inner.stream(request)
     }

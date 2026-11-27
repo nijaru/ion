@@ -66,7 +66,6 @@ impl PromptCacheWarmingPolicy {
 const ACTIVE_CACHE_WARMING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
 pub(super) struct PromptCacheWarmer {
-    request: ModelRequest,
     policy: PromptCacheWarmingPolicy,
     refresh_after: std::time::Duration,
     next_refresh: tokio::time::Instant,
@@ -77,7 +76,6 @@ pub(super) struct PromptCacheWarmer {
 impl PromptCacheWarmer {
     pub(super) fn new(
         policy: PromptCacheWarmingPolicy,
-        request: &ModelRequest,
         usage: ion_ai::Usage,
         request_started: tokio::time::Instant,
     ) -> Option<Self> {
@@ -93,7 +91,6 @@ impl PromptCacheWarmer {
         let expires_at = request_started + std::time::Duration::from_secs(policy.lifetime_seconds);
         let stop_at = request_started + ACTIVE_CACHE_WARMING_LIMIT;
         Some(Self {
-            request: request.clone(),
             policy,
             refresh_after,
             next_refresh,
@@ -117,6 +114,7 @@ pub(super) async fn execute_with_cache_warming(
     service: &Arc<dyn ModelService>,
     io: &crate::SessionIo,
     turn: u64,
+    request: &ModelRequest,
     tool: ion_ai::BoxFuture<'_, Result<ToolExecution, AgentError>>,
     stop: &CancellationToken,
     warmer: &mut Option<PromptCacheWarmer>,
@@ -136,7 +134,6 @@ pub(super) async fn execute_with_cache_warming(
         };
         let deadline = state.next_refresh;
         let valid_until = state.expires_at.min(state.stop_at);
-        let request = state.request.clone();
         // The sample outlives the refresh future: a tool finishing or Stop may
         // drop that future after usage arrived but before provider completion.
         let mut observed = None;
@@ -145,7 +142,7 @@ pub(super) async fn execute_with_cache_warming(
                 tokio::time::sleep_until(deadline).await;
                 let started = tokio::time::Instant::now();
                 let completed = started < valid_until
-                    && refresh_prompt_cache(service, request, stop, &mut observed).await;
+                    && refresh_prompt_cache(service, request.clone(), stop, &mut observed).await;
                 (started, completed)
             };
             tokio::pin!(refresh);

@@ -16,7 +16,7 @@ fn visible(events: Vec<ModelStreamEvent>) -> Vec<ModelStreamEvent> {
 fn anthropic_text_identity_is_dense_lazy_and_independent_of_native_and_thinking_indices() {
     let request = request();
     let mut state = anthropic_state(&request);
-    state.accept(&json!({"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}), &request).unwrap();
+    state.accept(&json!({"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":10,"output_tokens":0}}}), &OutputContract::from(&request)).unwrap();
     let blocks = [
         json!({"type":"text","text":""}),
         json!({"type":"thinking","thinking":"T","signature":"signed"}),
@@ -30,13 +30,13 @@ fn anthropic_text_identity_is_dense_lazy_and_independent_of_native_and_thinking_
             state
                 .accept(
                     &json!({"type":"content_block_start","index":index,"content_block":block}),
-                    &request,
+                    &OutputContract::from(&request),
                 )
                 .unwrap(),
         ));
     }
     for (index, text) in [(3, "B"), (2, "a")] {
-        events.extend(visible(state.accept(&json!({"type":"content_block_delta","index":index,"delta":{"type":"text_delta","text":text}}), &request).unwrap()));
+        events.extend(visible(state.accept(&json!({"type":"content_block_delta","index":index,"delta":{"type":"text_delta","text":text}}), &OutputContract::from(&request)).unwrap()));
     }
     assert_eq!(
         events,
@@ -63,13 +63,16 @@ fn anthropic_text_identity_is_dense_lazy_and_independent_of_native_and_thinking_
         state
             .accept(
                 &json!({"type":"content_block_stop","index":index}),
-                &request,
+                &OutputContract::from(&request),
             )
             .unwrap();
     }
-    state.accept(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}), &request).unwrap();
+    state.accept(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}), &OutputContract::from(&request)).unwrap();
     let events = state
-        .accept(&json!({"type":"message_stop"}), &request)
+        .accept(
+            &json!({"type":"message_stop"}),
+            &OutputContract::from(&request),
+        )
         .unwrap();
     let ModelStreamEvent::Completed(response) = &events[0] else {
         panic!()
@@ -109,7 +112,7 @@ fn chat_refusal_deltas_are_visible_assistant_text() {
     state
         .accept(&json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}))
         .unwrap();
-    let response = state.complete(&request()).unwrap();
+    let response = state.complete(&OutputContract::from(&request())).unwrap();
     assert_eq!(
         response.message.content,
         vec![Content::Text("I cannot help with that 🦀.".into())]
@@ -151,7 +154,11 @@ fn chat_refusal_and_content_keep_distinct_dense_text_identities() {
             .unwrap();
         state.accept(&json!({"choices":[{"delta":{"content":null,"refusal":""},"finish_reason":"stop"}]})).unwrap();
         assert_eq!(
-            state.complete(&request()).unwrap().message.content,
+            state
+                .complete(&OutputContract::from(&request()))
+                .unwrap()
+                .message
+                .content,
             vec![Content::Text("Aa".into()), Content::Text("B".into())]
         );
     }

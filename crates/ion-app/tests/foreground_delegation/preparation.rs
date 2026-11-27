@@ -146,10 +146,10 @@ fn public_child_access_refusal_precedes_gateway_admission() {
                 .unwrap())
             })
         }
-        fn stream(
-            &self,
-            _: ion_ai::ModelRequest,
-        ) -> BoxFuture<'_, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
+        fn stream<'a>(
+            &'a self,
+            _: &'a ion_ai::ModelRequest,
+        ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
             panic!("refused child must not dispatch")
         }
     }

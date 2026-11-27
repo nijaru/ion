@@ -31,16 +31,16 @@ fn history_records(request: &ModelRequest) -> usize {
 impl ModelService for CapacityService {
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let summary = request.route.reason == ModelRouteReason::Auxiliary;
             let rejected = if summary {
-                history_records(&request) > self.max_records
+                history_records(request) > self.max_records
             } else {
                 request.messages.len() > self.max_answer_messages
             };
-            self.requests.lock().unwrap().push(request);
+            self.requests.lock().unwrap().push(request.clone());
             let capacity = || ProviderError {
                 kind: ProviderErrorKind::ContextLength,
                 message: "fixture provider capacity exceeded".into(),

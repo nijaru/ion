@@ -35,14 +35,14 @@ async fn required_credential_is_checked_at_preflight_and_again_after_logout() {
     .with_required_credential(true);
 
     authentication(service.validate_access().await);
-    authentication(service.stream(request()).await);
+    authentication(service.stream(&request()).await);
     no_connection(&listener).await;
 
     store.save_api_key(&provider, "secret-current-key").unwrap();
     service.validate_access().await.unwrap();
     no_connection(&listener).await;
     store.remove(&provider).unwrap();
-    authentication(service.stream(request()).await);
+    authentication(service.stream(&request()).await);
     no_connection(&listener).await;
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -61,7 +61,7 @@ async fn invalid_credentials_are_sanitized_before_transport_even_on_optional_rou
             let service =
                 HttpModelService::new(&endpoint, wire, Arc::new(move || Some(key.into()))).unwrap();
             authentication(service.validate_access().await);
-            authentication(service.stream(request()).await);
+            authentication(service.stream(&request()).await);
         }
         struct Unavailable;
         impl CredentialResolver for Unavailable {
@@ -74,7 +74,7 @@ async fn invalid_credentials_are_sanitized_before_transport_even_on_optional_rou
         }
         let service = HttpModelService::new(&endpoint, wire, Arc::new(Unavailable)).unwrap();
         authentication(service.validate_access().await);
-        authentication(service.stream(request()).await);
+        authentication(service.stream(&request()).await);
         no_connection(&listener).await;
     }
 }
@@ -116,7 +116,7 @@ async fn required_and_optional_routes_dispatch_with_the_selected_wire_header() {
                 .unwrap()
                 .with_required_credential(key.is_some());
         service.validate_access().await.unwrap();
-        drop(service.stream(request()).await.unwrap());
+        drop(service.stream(&request()).await.unwrap());
         let headers = server.await.unwrap();
         if key.is_none() {
             assert!(!headers.contains("authorization:") && !headers.contains("x-api-key:"));

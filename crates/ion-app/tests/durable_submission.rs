@@ -91,7 +91,7 @@ impl ion_ai::ModelService for FixtureService {
 
     fn stream<'a>(
         &'a self,
-        request: ion_ai::ModelRequest,
+        request: &'a ion_ai::ModelRequest,
     ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         Box::pin(async move {
             let index = self.calls.fetch_add(1, Ordering::Relaxed);

@@ -4,7 +4,7 @@ struct PendingModel(tokio::sync::Notify);
 impl ion_ai::ModelService for PendingModel {
     fn stream<'a>(
         &'a self,
-        _: ion_ai::ModelRequest,
+        _: &'a ion_ai::ModelRequest,
     ) -> ion_ai::BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
         Box::pin(async move {
             self.0.notify_one();

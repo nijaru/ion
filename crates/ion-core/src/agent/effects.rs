@@ -30,8 +30,7 @@ impl OrderedBatch {
         usage: ion_ai::Usage,
         started: tokio::time::Instant,
     ) -> Self {
-        let warmer = policy
-            .and_then(|policy| PromptCacheWarmer::new(policy, plan.request(), usage, started));
+        let warmer = policy.and_then(|policy| PromptCacheWarmer::new(policy, usage, started));
         Self {
             never_dispatched: calls.iter().map(|call| call.id.clone()).collect(),
             calls,
@@ -131,9 +130,16 @@ impl OrderedBatch {
                 }
             });
             let tool = Box::pin(async { gateway.run(session, stop, tool).await? });
-            let execution =
-                execute_with_cache_warming(&agent.service, io, turn, tool, stop, &mut self.warmer)
-                    .await?;
+            let execution = execute_with_cache_warming(
+                &agent.service,
+                io,
+                turn,
+                self.plan.request(),
+                tool,
+                stop,
+                &mut self.warmer,
+            )
+            .await?;
             let (outcome, activated) = match execution {
                 ToolExecution::NotDispatched { reason } => {
                     (crate::ToolOutcome::NotDispatched { reason }, Vec::new())

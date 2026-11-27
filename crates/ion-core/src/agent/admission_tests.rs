@@ -74,7 +74,7 @@ impl ModelService for PreflightService {
 
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         self.scripts.stream(request)
     }
@@ -626,7 +626,7 @@ struct HeldGeneration {
 impl ModelService for HeldGeneration {
     fn stream<'a>(
         &'a self,
-        _request: ModelRequest,
+        _request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);

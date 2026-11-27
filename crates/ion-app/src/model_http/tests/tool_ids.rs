@@ -136,7 +136,10 @@ fn signed_call(request: &ModelRequest, id: &str) -> Message {
         json!({"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":2}}),
         json!({"type":"message_stop"}),
     ] {
-        for output in state.accept(&event, request).unwrap() {
+        for output in state
+            .accept(&event, &OutputContract::from(request))
+            .unwrap()
+        {
             if let ModelStreamEvent::Completed(response) = output {
                 return serde_json::from_slice(&serde_json::to_vec(&response.message).unwrap())
                     .unwrap();

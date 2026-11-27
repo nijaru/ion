@@ -295,7 +295,7 @@ mod tests {
         impl ModelService for Service {
             fn stream<'a>(
                 &'a self,
-                _request: ModelRequest,
+                _request: &'a ModelRequest,
             ) -> ion_ai::BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>>
             {
                 Box::pin(async { unreachable!("measurement-only test service") })

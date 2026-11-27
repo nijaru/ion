@@ -165,7 +165,7 @@ impl AnthropicState {
     pub(super) fn accept(
         &mut self,
         value: &Value,
-        request: &ModelRequest,
+        contract: &OutputContract,
     ) -> Result<Vec<ModelStreamEvent>, ProviderError> {
         let kind = value["type"]
             .as_str()
@@ -592,7 +592,7 @@ impl AnthropicState {
                         content,
                         provider_replay: Some(
                             ProviderReplay::new(
-                                &request.route.effective.provider,
+                                &contract.model.provider,
                                 ANTHROPIC_CONTENT_REPLAY,
                                 json!({"blocks":wire_blocks,"prefix_sha256":self.prefix_digest}),
                             )
@@ -604,7 +604,7 @@ impl AnthropicState {
                     returned_model: self.model.take(),
                 };
                 if response.is_complete() {
-                    validate_output(request, &response)?;
+                    validate_output(contract, &response)?;
                 }
                 let mut events = anthropic_replay_notices(self.input_transformations.as_ref());
                 events.push(ModelStreamEvent::Completed(response));

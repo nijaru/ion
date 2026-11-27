@@ -53,7 +53,7 @@ struct Model {
 impl ModelService for Model {
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);

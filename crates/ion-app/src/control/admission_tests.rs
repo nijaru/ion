@@ -56,7 +56,7 @@ impl ModelService for AdmissionModel {
     }
     fn stream<'a>(
         &'a self,
-        request: ModelRequest,
+        request: &'a ModelRequest,
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         self.model.stream(request)
     }

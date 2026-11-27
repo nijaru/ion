@@ -10,7 +10,10 @@ struct InterruptedStream {
     requests: AtomicUsize,
 }
 impl ModelService for InterruptedStream {
-    fn stream<'a>(&'a self, _: ModelRequest) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
+    fn stream<'a>(
+        &'a self,
+        _: &'a ModelRequest,
+    ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         // A service may enqueue work when called, before its future is polled.
         self.requests.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
@@ -75,7 +78,7 @@ async fn cancellation_prevents_provider_construction_including_cache_warm() {
             !refresh_prompt_cache(&model, request(), &stop, &mut None).await
         } else {
             matches!(
-                generate_with_retry(&model, &request(), &stop, &mut |_| {}, |_| {
+                generate_with_retry(&model, &mut request(), &stop, &mut |_| {}, |_| {
                     std::future::ready(Ok(()))
                 })
                 .await
@@ -90,6 +93,68 @@ async fn cancellation_prevents_provider_construction_including_cache_warm() {
         );
         assert!(cancelled, "warming={warming}");
     }
+}
+
+#[tokio::test]
+async fn retry_borrows_one_frozen_history_and_changes_only_attempt_reason() {
+    struct Attempts(Mutex<Vec<(usize, ModelRouteReason)>>);
+
+    impl ModelService for Attempts {
+        fn stream<'a>(
+            &'a self,
+            request: &'a ModelRequest,
+        ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
+            Box::pin(async move {
+                let mut attempts = self.0.lock().unwrap();
+                attempts.push((request.messages.as_ptr().addr(), request.route.reason));
+                if attempts.len() == 1 {
+                    return Err(ProviderError {
+                        kind: ProviderErrorKind::Overloaded,
+                        message: "busy".into(),
+                        retry_after_ms: Some(0),
+                    });
+                }
+                Ok(Box::pin(futures_util::stream::iter([Ok(
+                    ModelStreamEvent::Completed(ModelResponse {
+                        message: Message {
+                            role: Role::Assistant,
+                            content: vec![Content::Text("done".into())],
+                            provider_replay: None,
+                        },
+                        usage: Usage::known(100, 1),
+                        termination: ion_ai::ResponseTermination::Completed,
+                        returned_model: None,
+                    }),
+                )])) as ModelStream)
+            })
+        }
+    }
+
+    let service = Arc::new(Attempts(Mutex::new(Vec::new())));
+    let model: Arc<dyn ModelService> = service.clone();
+    let mut request = request();
+    request
+        .messages
+        .push(Message::user_input("read this".into(), []));
+    let history = request.messages.as_ptr().addr();
+    let step = generate_with_retry(
+        &model,
+        &mut request,
+        &CancellationToken::new(),
+        &mut |_| {},
+        |_| std::future::ready(Ok(())),
+    )
+    .await;
+    assert!(step.outcome.is_ok());
+    assert_eq!(step.route.reason, ModelRouteReason::Retry);
+    assert_eq!(request.route.reason, ModelRouteReason::UserRequest);
+    assert_eq!(
+        *service.0.lock().unwrap(),
+        [
+            (history, ModelRouteReason::UserRequest),
+            (history, ModelRouteReason::Retry)
+        ]
+    );
 }
 
 #[tokio::test]
@@ -436,13 +501,13 @@ async fn only_generated_output_bars_retry_after_a_stream_error() {
             requests: AtomicUsize::new(0),
         });
         let model: Arc<dyn ModelService> = service.clone();
-        let request = request();
+        let mut request = request();
         let mut output = false;
         let mut retries = 0;
         let mut notices = 0;
         let result = generate_with_retry(
             &model,
-            &request,
+            &mut request,
             &CancellationToken::new(),
             &mut |event| match event {
                 AgentEvent::ProviderRetry { .. } => {
@@ -504,7 +569,7 @@ async fn completion_only_text_keeps_distinct_live_blocks() {
     let mut live = crate::LiveTranscript::default();
     let attempt = generate_with_retry(
         &model,
-        &request(),
+        &mut request(),
         &CancellationToken::new(),
         &mut |event| live.observe(&event),
         |_| std::future::ready(Ok(())),
@@ -566,13 +631,13 @@ async fn completion_only_attempt_evidence_does_not_depend_on_observer_events() {
                     returned_model: None,
                 })],
             )]));
-        let request = request();
+        let mut request = request();
         let before = tokio::time::Instant::now();
         // Summaries deliberately suppress provisional presentation, but still
         // must not replay any output, including completion-only thinking/calls.
         let attempt = generate_with_retry(
             &service,
-            &request,
+            &mut request,
             &CancellationToken::new(),
             &mut |_| {},
             |_| std::future::ready(Ok(())),

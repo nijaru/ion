@@ -30,7 +30,7 @@ async fn framing_overhead_does_not_consume_the_decoded_output_allowance() {
         HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
     let mut request = request();
     request.controls.max_output_tokens = 128_000;
-    let mut stream = model.stream(request).await.unwrap();
+    let mut stream = model.stream(&request).await.unwrap();
     let result = tokio::time::timeout(Duration::from_secs(30), async {
         let mut text = 0;
         let mut completed = None;
@@ -95,7 +95,9 @@ fn decoded_limits_cover_text_arguments_and_both_reasoning_channels() {
     ] {
         let mut state = anthropic_state(&request());
         let start = json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0}}});
-        state.accept(&start, &request()).unwrap();
+        state
+            .accept(&start, &OutputContract::from(&request()))
+            .unwrap();
         let block = match kind {
             "text_delta" => json!({"type":"text","text":""}),
             "signature_delta" => json!({"type":"thinking","thinking":"","signature":""}),
@@ -104,13 +106,17 @@ fn decoded_limits_cover_text_arguments_and_both_reasoning_channels() {
         state
             .accept(
                 &json!({"type":"content_block_start","index":0,"content_block":block}),
-                &request(),
+                &OutputContract::from(&request()),
             )
             .unwrap();
         let value =
             json!({"type":"content_block_delta","index":0,"delta":{"type":kind,field:part}});
         let error = (0..128)
-            .find_map(|_| state.accept(&value, &request()).err())
+            .find_map(|_| {
+                state
+                    .accept(&value, &OutputContract::from(&request()))
+                    .err()
+            })
             .expect("decoded output must be bounded");
         assert!(
             error.message.contains("decoded response exceeded"),
@@ -134,7 +140,7 @@ fn comments_and_repeated_metadata_do_not_refresh_progress() {
                 decode_stream_frame(
                     frame.as_bytes(),
                     &mut decoder,
-                    &request(),
+                    &OutputContract::from(&request()),
                     HttpWire::ChatCompletions,
                     &mut budget,
                 )
@@ -149,10 +155,12 @@ fn comments_and_repeated_metadata_do_not_refresh_progress() {
 fn anthropic_transformations_charge_changed_but_not_identical_snapshots() {
     let transformations = json!([{"type":"thinking_dropped","reason":"prefix_binding_mismatch","payload":"x".repeat(128 * 1024)}]);
     let mut state = anthropic_state(&request());
-    state.accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0},"input_transformations":transformations}}), &request()).unwrap();
+    state.accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"test-model","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":0},"input_transformations":transformations}}), &OutputContract::from(&request())).unwrap();
     let before = state.budget.used;
     let mut delta = json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0},"input_transformations":transformations});
-    state.accept(&delta, &request()).unwrap();
+    state
+        .accept(&delta, &OutputContract::from(&request()))
+        .unwrap();
     assert_eq!(
         state.budget.used, before,
         "identical snapshots do not add retention"
@@ -160,7 +168,9 @@ fn anthropic_transformations_charge_changed_but_not_identical_snapshots() {
     let error = (0..128)
         .find_map(|index| {
             delta["input_transformations"][0]["round"] = json!(index);
-            state.accept(&delta, &request()).err()
+            state
+                .accept(&delta, &OutputContract::from(&request()))
+                .err()
         })
         .expect("changed metadata snapshots must consume the response budget");
     assert!(
