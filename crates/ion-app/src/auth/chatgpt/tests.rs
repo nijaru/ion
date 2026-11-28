@@ -5,14 +5,14 @@ use aws_lc_rs::{
     signature::{KeyPair, RSA_PKCS1_SHA256},
 };
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
     time::timeout,
 };
 
-type Query = BTreeMap<String, String>;
+pub(super) type Query = BTreeMap<String, String>;
 pub(super) const CLIENT: &str = "oaiapp_ion_fixture";
 pub(super) const SUBJECT: &str = "local-fixture-account";
 pub(super) const DEADLINE: Duration = Duration::from_secs(5);
@@ -47,28 +47,43 @@ fn location(query: &Query) -> (Url, String) {
     (url, address)
 }
 
-pub(super) async fn deliver(auth: Authorization, client: Option<&str>) -> (CodeExchange, Query) {
-    let query: Query = auth.url().query_pairs().into_owned().collect();
+pub(super) async fn deliver<T, E: std::fmt::Debug>(
+    authorize_url: Url,
+    callback: impl Future<Output = Result<T, E>>,
+    client: Option<&str>,
+) -> (T, Query) {
+    let query: Query = authorize_url.query_pairs().into_owned().collect();
     let (url, address) = location(&query);
-    let task = tokio::spawn(async move { auth.callback(&CancellationToken::new()).await });
     let client = client.map_or_else(String::new, |value| format!("&client_id={value}"));
     let target = format!(
         "/auth/callback?code=fixture-code&state={}{client}",
         query["state"]
     );
-    let response = browser(&url, &target, &address).await;
+    let (exchange, response) = tokio::join!(
+        timeout(DEADLINE, callback),
+        browser(&url, &target, &address)
+    );
     assert!(response.starts_with("HTTP/1.1 200"));
     assert!(response.contains("Authorization received") && !response.contains("fixture-code"));
     assert!(
         response.contains("Cache-Control: no-store")
             && response.contains("Referrer-Policy: no-referrer")
     );
-    let exchange = timeout(DEADLINE, task).await.unwrap().unwrap().unwrap();
+    let exchange = exchange.unwrap().unwrap();
     assert!(
         TcpStream::connect(&address).await.is_err(),
         "callback listener still accepts requests"
     );
     (exchange, query)
+}
+
+async fn deliver_raw(auth: Authorization, client: &str) -> (CodeExchange, Query) {
+    deliver(
+        auth.url.clone(),
+        auth.callback(&CancellationToken::new()),
+        Some(client),
+    )
+    .await
 }
 
 pub(super) struct FixtureKey(SigningKey);
@@ -168,21 +183,23 @@ pub(super) async fn reply(socket: &mut TcpStream, status: &str, extra: &str, bod
     socket.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
 }
 
-pub(super) async fn exchange_with_keys(
-    exchange: CodeExchange,
+pub(super) fn code_reply(query: &Query, key: &FixtureKey, subject: &str) -> String {
+    let now = provider::unix_now().unwrap();
+    let id = key.sign(&header(), &claims(&query["nonce"], now, subject));
+    json!({"access_token":"fixture-access","refresh_token":"fixture-refresh","token_type":"Bearer",
+        "scope":SCOPES,"id_token":id,"expires_in":3600})
+    .to_string()
+}
+
+pub(super) async fn with_token_server<T>(
     query: Query,
     key: &FixtureKey,
     subject: &str,
-) -> Result<Grant, SignInError> {
+    complete: impl AsyncFnOnce(&provider::Provider<'_>) -> T,
+) -> T {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let id = key.sign(&header(), &claims(&query["nonce"], now, subject));
-    let response = json!({"access_token":"fixture-access","refresh_token":"fixture-refresh","token_type":"Bearer",
-        "scope":SCOPES,"id_token":id,"expires_in":3600}).to_string();
+    let response = code_reply(&query, key, subject);
     let keys = key.keys().to_string();
     let server = tokio::spawn(async move {
         let (mut socket, head, body) = read_request(&listener).await;
@@ -211,19 +228,18 @@ pub(super) async fn exchange_with_keys(
         assert!(!head.to_ascii_lowercase().contains("authorization:"));
         reply(&mut socket, "200 OK", "", &keys).await;
     });
-    let result = exchange
-        .exchange_at(
-            &format!("{endpoint}/token"),
-            &format!("{endpoint}/jwks"),
-            &CancellationToken::new(),
-        )
-        .await;
+    let provider = provider::Provider {
+        token: &format!("{endpoint}/token"),
+        jwks: &format!("{endpoint}/jwks"),
+        ..provider::OPENAI
+    };
+    let result = complete(&provider).await;
     server.await.unwrap();
     result
 }
 
 #[tokio::test]
-async fn native_sign_in_binds_the_code_pkce_issuer_and_account_to_one_registration() {
+async fn native_sign_in_binds_the_code_pkce_issuer_and_client() {
     assert_eq!(
         HostId::generate()
             .unwrap()
@@ -234,9 +250,9 @@ async fn native_sign_in_binds_the_code_pkce_issuer_and_account_to_one_registrati
             .len(),
         45
     );
-    let auth = Authorization::register(host()).await.unwrap();
-    assert!(auth.url().as_str().starts_with(AUTHORIZE));
-    let first: Query = auth.url().query_pairs().into_owned().collect();
+    let auth = Authorization::start(host(), None).await.unwrap();
+    assert!(auth.url.as_str().starts_with(AUTHORIZE));
+    let first: Query = auth.url.query_pairs().into_owned().collect();
     assert_eq!(first["client_id"], DYNAMIC_CLIENT);
     assert_eq!(first["ext_agent_host_id"], host().to_string());
     assert_eq!(first["agent_name_hint"], "Ion");
@@ -244,48 +260,45 @@ async fn native_sign_in_binds_the_code_pkce_issuer_and_account_to_one_registrati
     assert_eq!(first["scope"], SCOPES);
     assert!(first["nonce"] != first["state"]);
     let key = FixtureKey::new();
-    let (exchange, query) = deliver(auth, Some(CLIENT)).await;
-    assert_eq!(exchange.registration().client_id(), CLIENT);
-    assert_eq!(exchange.registration().subject(), None);
-    let grant = exchange_with_keys(exchange, query, &key, SUBJECT)
-        .await
-        .unwrap();
-    assert_eq!(grant.registration().subject(), Some(SUBJECT));
+    let (exchange, query) = deliver_raw(auth, CLIENT).await;
+    assert_eq!(exchange.profile.as_str(), CLIENT);
+    let id = exchange.profile.clone();
+    let stop = CancellationToken::new();
+    let grant = with_token_server(query, &key, SUBJECT, async |provider| {
+        exchange.exchange(provider, &stop).await
+    })
+    .await
+    .unwrap();
+    assert_eq!(grant.identity.sub, SUBJECT);
     assert_eq!(
-        grant.registration().email(),
+        grant.identity.email.as_deref(),
         Some("fixture@example.invalid")
     );
-    assert_eq!(grant.access_token(), "fixture-access");
-    assert_eq!(grant.refresh_token(), "fixture-refresh");
+    assert_eq!(grant.tokens.access_token, "fixture-access");
+    assert_eq!(grant.tokens.refresh_token, "fixture-refresh");
     assert!(
         grant
-            .scopes()
+            .tokens
+            .scope
+            .split_ascii_whitespace()
             .any(|scope| scope == "chatgpt.tokens.use.direct")
     );
-    assert!(grant.expires_at() > SystemTime::now());
-    let (returning, next) = deliver(
-        Authorization::reauthorize(grant.registration())
-            .await
-            .unwrap(),
-        None,
-    )
-    .await;
+    assert!(grant.tokens.expires_at > provider::unix_now().unwrap());
+    let auth = Authorization::start(host(), Some(&id)).await.unwrap();
+    let (returning, next) = deliver(auth.url.clone(), auth.callback(&stop), None).await;
+    assert_eq!(returning.profile, id);
     assert_eq!(next["client_id"], CLIENT);
     assert_eq!(next["ext_agent_host_id"], first["ext_agent_host_id"]);
     assert!(!next.contains_key("agent_name_hint"));
     for name in ["state", "nonce", "code_challenge"] {
         assert_ne!(first[name], next[name]);
     }
-    assert!(matches!(
-        exchange_with_keys(returning, next, &key, "different-account").await,
-        Err(SignInError::Identity)
-    ));
 }
 
 #[tokio::test]
 async fn unrelated_callbacks_cannot_settle_attempt_and_denial_never_yields_a_code() {
-    let auth = Authorization::register(host()).await.unwrap();
-    let query: Query = auth.url().query_pairs().into_owned().collect();
+    let auth = Authorization::start(host(), None).await.unwrap();
+    let query: Query = auth.url.query_pairs().into_owned().collect();
     let (url, address) = location(&query);
     let attempt = tokio::spawn(async move { auth.callback(&CancellationToken::new()).await });
     let state = &query["state"];
@@ -385,8 +398,8 @@ fn signed_identity_checks_claims_and_pinned_keys() {
 
 #[tokio::test]
 async fn cancelled_wait_closes_local_listener_and_token_failures_never_follow_redirects() {
-    let auth = Authorization::register(host()).await.unwrap();
-    let (_, address) = location(&auth.url().query_pairs().into_owned().collect());
+    let auth = Authorization::start(host(), None).await.unwrap();
+    let (_, address) = location(&auth.url.query_pairs().into_owned().collect());
     let stop = CancellationToken::new();
     stop.cancel();
     assert!(matches!(
@@ -409,8 +422,8 @@ async fn cancelled_wait_closes_local_listener_and_token_failures_never_follow_re
         ("307 Temporary Redirect", "", SignInError::ExchangeRejected),
     ] {
         let (exchange, _) =
-            deliver(Authorization::register(host()).await.unwrap(), Some(CLIENT)).await;
-        let issued = exchange.registration().clone();
+            deliver_raw(Authorization::start(host(), None).await.unwrap(), CLIENT).await;
+        let issued = exchange.profile.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}", listener.local_addr().unwrap());
         let target = format!("Location: {endpoint}/must-not-follow\r\n");
@@ -420,12 +433,12 @@ async fn cancelled_wait_closes_local_listener_and_token_failures_never_follow_re
             reply(&mut socket, status, &target, body).await;
             listener
         });
+        let provider = provider::Provider {
+            token: &format!("{endpoint}/token"),
+            ..provider::OPENAI
+        };
         let result = exchange
-            .exchange_at(
-                &format!("{endpoint}/token"),
-                &format!("{endpoint}/jwks"),
-                &CancellationToken::new(),
-            )
+            .exchange(&provider, &CancellationToken::new())
             .await;
         assert!(matches!(result, Err(error) if error == expected));
         let listener = server.await.unwrap();
@@ -434,15 +447,16 @@ async fn cancelled_wait_closes_local_listener_and_token_failures_never_follow_re
                 .await
                 .is_err()
         );
-        let returning = Authorization::reauthorize(&issued).await.unwrap();
-        let query: Query = returning.url().query_pairs().into_owned().collect();
+        let returning = Authorization::start(host(), Some(&issued)).await.unwrap();
+        let query: Query = returning.url.query_pairs().into_owned().collect();
         assert_eq!(query["client_id"], CLIENT);
     }
 }
 
 #[tokio::test]
 async fn stop_after_token_post_drops_the_wait_without_replaying_the_code() {
-    let (exchange, _) = deliver(Authorization::register(host()).await.unwrap(), Some(CLIENT)).await;
+    let (exchange, _) =
+        deliver_raw(Authorization::start(host(), None).await.unwrap(), CLIENT).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     let (observed, seen) = tokio::sync::oneshot::channel();
@@ -461,9 +475,11 @@ async fn stop_after_token_post_drops_the_wait_without_replaying_the_code() {
         listener
     });
     let stop = CancellationToken::new();
-    let token = format!("{endpoint}/token");
-    let jwks = format!("{endpoint}/jwks");
-    let (result, ()) = tokio::join!(exchange.exchange_at(&token, &jwks, &stop), async {
+    let provider = provider::Provider {
+        token: &format!("{endpoint}/token"),
+        ..provider::OPENAI
+    };
+    let (result, ()) = tokio::join!(exchange.exchange(&provider, &stop), async {
         timeout(DEADLINE, seen).await.unwrap().unwrap();
         stop.cancel();
     });

@@ -25,8 +25,8 @@ const SAFE_OPEN: OFlags = OFlags::NOFOLLOW
 const PRIVATE_FILE: Mode = Mode::RUSR.union(Mode::WUSR);
 const PRIVATE_DIR: Mode = PRIVATE_FILE.union(Mode::XUSR);
 
-pub(super) struct RecordFile {
-    directory: File,
+pub(super) struct RecordFile<'a> {
+    directory: &'a File,
     name: String,
     scratch: String,
     // Never replace/unlink the inode used as the lock. Dropping the owned
@@ -34,17 +34,16 @@ pub(super) struct RecordFile {
     _lease: File,
 }
 
-impl RecordFile {
+impl<'a> RecordFile<'a> {
     pub(super) async fn lock(
-        root: &Path,
+        directory: &'a File,
         name: &str,
         stop: &CancellationToken,
     ) -> Result<Self, StoreError> {
         check_stop(stop)?;
-        let directory = open_root(root)?;
         let lease = File::from(
             openat(
-                &directory,
+                directory,
                 format!("{name}.lock"),
                 SAFE_OPEN | OFlags::RDWR | OFlags::CREATE,
                 PRIVATE_FILE,
@@ -72,7 +71,7 @@ impl RecordFile {
         let scratch = format!("{name}.next");
         // This name is reserved under the same lease. If a previous process
         // died before rename, its unpublished snapshot must never be read.
-        match unlinkat(&directory, &scratch, AtFlags::empty()) {
+        match unlinkat(directory, &scratch, AtFlags::empty()) {
             Ok(()) | Err(Errno::NOENT) => {}
             Err(_) => return Err(StoreError::Storage),
         }
@@ -89,7 +88,7 @@ impl RecordFile {
 
     pub(super) fn read<T: DeserializeOwned>(&self) -> Result<Option<T>, StoreError> {
         let file = match openat(
-            &self.directory,
+            self.directory,
             &self.name,
             SAFE_OPEN | OFlags::RDONLY,
             Mode::empty(),
@@ -118,7 +117,7 @@ impl RecordFile {
         }
         let mut file = File::from(
             openat(
-                &self.directory,
+                self.directory,
                 &self.scratch,
                 SAFE_OPEN | OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL,
                 PRIVATE_FILE,
@@ -128,20 +127,20 @@ impl RecordFile {
         let result = (|| {
             file.write_all(&content).map_err(|_| StoreError::Storage)?;
             file.sync_all().map_err(|_| StoreError::Storage)?;
-            renameat(&self.directory, &self.scratch, &self.directory, &self.name)
+            renameat(self.directory, &self.scratch, self.directory, &self.name)
                 .map_err(|_| StoreError::Storage)?;
             self.directory
                 .sync_all()
                 .map_err(|_| StoreError::PublicationUnknown)
         })();
         if result.is_err() {
-            let _ = unlinkat(&self.directory, &self.scratch, AtFlags::empty());
+            let _ = unlinkat(self.directory, &self.scratch, AtFlags::empty());
         }
         result
     }
 }
 
-fn open_root(path: &Path) -> Result<File, StoreError> {
+pub(super) fn open_root(path: &Path) -> Result<File, StoreError> {
     if !path.is_absolute() {
         return Err(StoreError::Storage);
     }
