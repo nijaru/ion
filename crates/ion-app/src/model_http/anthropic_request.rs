@@ -481,11 +481,54 @@ pub(super) fn anthropic_body_uses_inline_tools(body: &Value) -> bool {
         })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum AnthropicThinkingMode {
+    /// Adaptive thinking only; Anthropic rejects `thinking: { type: "disabled" }`.
+    /// Uses prefix block binding on the native Anthropic API.
+    AdaptiveManaged,
+    /// Adaptive thinking with optional disable.
+    AdaptiveToggleable,
+    /// Legacy budget-based extended thinking.
+    Budget,
+}
+
 pub(super) fn managed_anthropic_thinking(model: &str) -> bool {
     matches!(
         model,
         "claude-fable-5-1" | "claude-opus-5-5" | "claude-sonnet-5-5"
     )
+}
+
+pub(super) fn anthropic_thinking_mode(model: &str) -> AnthropicThinkingMode {
+    if managed_anthropic_thinking(model) {
+        return AnthropicThinkingMode::AdaptiveManaged;
+    }
+    let normalized = model.to_ascii_lowercase();
+    if [
+        "opus-4-6",
+        "opus-4.6",
+        "opus-4-7",
+        "opus-4.7",
+        "opus-4-8",
+        "opus-4.8",
+        "opus-5",
+        "opus.5",
+        "sonnet-4-6",
+        "sonnet-4.6",
+        "sonnet-5",
+        "sonnet.5",
+        "haiku-5",
+        "haiku.5",
+        "fable-5",
+        "mythos-5",
+    ]
+    .iter()
+    .any(|fragment| normalized.contains(fragment))
+    {
+        AnthropicThinkingMode::AdaptiveToggleable
+    } else {
+        AnthropicThinkingMode::Budget
+    }
 }
 
 fn transcript_messages(

@@ -2075,9 +2075,10 @@ fn settings_cycle_only_rendered_choices_and_keep_search_and_draft() {
 #[tokio::test]
 async fn reasoning_choices_use_adapter_support_and_preselect_current() {
     let mut fixture = Fixture::new();
-    for (wire, expected) in [
+    for (wire, model_name, expected) in [
         (
             Wire::ChatCompletions,
+            "model",
             vec![
                 ion_ai::Reasoning::ProviderDefault,
                 ion_ai::Reasoning::Off,
@@ -2088,11 +2089,29 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
         ),
         (
             Wire::LlamaCppNoThinking,
+            "model",
             vec![ion_ai::Reasoning::ProviderDefault, ion_ai::Reasoning::Off],
         ),
         (
             Wire::AnthropicMessages,
-            vec![ion_ai::Reasoning::ProviderDefault],
+            "model",
+            vec![
+                ion_ai::Reasoning::ProviderDefault,
+                ion_ai::Reasoning::Off,
+                ion_ai::Reasoning::Low,
+                ion_ai::Reasoning::Medium,
+                ion_ai::Reasoning::High,
+            ],
+        ),
+        (
+            Wire::AnthropicMessages,
+            "claude-sonnet-5-5",
+            vec![
+                ion_ai::Reasoning::ProviderDefault,
+                ion_ai::Reasoning::Low,
+                ion_ai::Reasoning::Medium,
+                ion_ai::Reasoning::High,
+            ],
         ),
     ] {
         fixture
@@ -2105,7 +2124,7 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
             .models()
             .save_default(&SavedSelection {
                 provider: "effort".into(),
-                model: "model".into(),
+                model: model_name.into(),
                 endpoint: Some("http://127.0.0.1:1".into()),
                 wire: Some(wire),
                 api_key_env: None,

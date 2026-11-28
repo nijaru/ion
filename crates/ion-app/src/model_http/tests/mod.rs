@@ -2903,6 +2903,103 @@ fn current_claude_enforces_prefix_binding_only_on_native_api() {
 }
 
 #[test]
+fn anthropic_explicit_reasoning_maps_adaptive_effort_and_legacy_budgets() {
+    let mut request = request();
+    request.route.effective.provider = "anthropic".into();
+    request.controls.max_output_tokens = 32_768;
+
+    // Managed Claude 5 models: adaptive effort, no disable, no token budgets.
+    request.route.effective.model = "claude-opus-5-5".into();
+    request.controls.reasoning = Reasoning::High;
+    let native = anthropic_body(&request, true).unwrap();
+    assert_eq!(
+        native["thinking"],
+        json!({"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"error"}})
+    );
+    assert_eq!(native["output_config"], json!({"effort":"high"}));
+    let proxy = anthropic_body(&request, false).unwrap();
+    assert_eq!(proxy["thinking"], json!({"type":"adaptive"}));
+    assert_eq!(proxy["output_config"], json!({"effort":"high"}));
+    request.controls.reasoning = Reasoning::Off;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+    request.controls.reasoning = Reasoning::BudgetTokens(4_096);
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+
+    // Toggleable adaptive Claude 4.6 models: effort + disable, no token budgets.
+    request.route.effective.model = "claude-sonnet-4-6".into();
+    request.controls.reasoning = Reasoning::Medium;
+    let adaptive = anthropic_body(&request, true).unwrap();
+    assert_eq!(adaptive["thinking"], json!({"type":"adaptive"}));
+    assert_eq!(adaptive["output_config"], json!({"effort":"medium"}));
+    request.controls.tool_choice = ToolChoice::Required;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+    request.controls.reasoning = Reasoning::Off;
+    let disabled = anthropic_body(&request, true).unwrap();
+    assert_eq!(disabled["thinking"], json!({"type":"disabled"}));
+    assert!(disabled.get("output_config").is_none());
+    request.controls.tool_choice = ToolChoice::Auto;
+    request.controls.reasoning = Reasoning::BudgetTokens(4_096);
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+
+    // Budget-based Claude 4.5 models: effort clamps below max_tokens, supports explicit budget & off.
+    request.route.effective.model = "claude-haiku-4-5-20251001".into();
+    request.controls.reasoning = Reasoning::Low;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap()["thinking"],
+        json!({"type":"enabled","budget_tokens":2048})
+    );
+    request.controls.reasoning = Reasoning::High;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap()["thinking"],
+        json!({"type":"enabled","budget_tokens":16384})
+    );
+    // Compaction-sized output ceiling (4096) clamps high effort to leave 1024 answer tokens.
+    request.controls.max_output_tokens = 4_096;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap()["thinking"],
+        json!({"type":"enabled","budget_tokens":3072})
+    );
+    request.controls.max_output_tokens = 1_500;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+    request.controls.max_output_tokens = 8_192;
+    request.controls.reasoning = Reasoning::BudgetTokens(2_048);
+    assert_eq!(
+        anthropic_body(&request, true).unwrap()["thinking"],
+        json!({"type":"enabled","budget_tokens":2048})
+    );
+    request.controls.reasoning = Reasoning::BudgetTokens(512);
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+    request.controls.reasoning = Reasoning::BudgetTokens(8_192);
+    assert_eq!(
+        anthropic_body(&request, true).unwrap_err().kind,
+        ProviderErrorKind::Unsupported
+    );
+    request.controls.reasoning = Reasoning::Off;
+    assert_eq!(
+        anthropic_body(&request, true).unwrap()["thinking"],
+        json!({"type":"disabled"})
+    );
+}
+
+#[test]
 fn anthropic_reports_known_replay_transformations_without_unknown_entries() {
     let notices = anthropic_replay_notices(Some(&json!([
         {"type":"thinking_dropped","reason":"model_binding_mismatch","path":"messages.1.content.0"},

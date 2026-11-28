@@ -18,6 +18,7 @@ truncated_requests = []
 truncated_paths_before_request = []
 legacy_requests = []
 migration_requests = []
+reasoning_requests = []
 
 
 def event(kind, **fields):
@@ -160,6 +161,9 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/migration/v1/messages":
             migration_requests.append(body)
             payload = response(len(migration_requests))
+        elif self.path == "/reasoning/v1/messages":
+            reasoning_requests.append(body)
+            payload = response(5)
         elif self.path == "/truncated/v1/messages":
             truncated_requests.append(body)
             truncated_paths_before_request.append(((workspace / "sibling.txt").exists(), (workspace / "fixed.txt").exists()))
@@ -353,6 +357,32 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
             assert any(block.get("tool_use_id") == "tool_1"
                 for message in body["messages"] for block in message["content"]), body
         assert migration_view()["entries"][:len(original_entries)] == original_entries, "migration rewrote committed history"
+
+        # Explicit Anthropic reasoning: adaptive effort on Claude 5, refuse off before HTTP,
+        # and budget-based thinking on legacy/custom models.
+        reasoning_endpoint = f"{base}/reasoning/v1/messages"
+        run(binary, env, "use", "smoke", "claude-opus-5-5", "--endpoint", reasoning_endpoint, "--wire", "anthropic-messages")
+        adaptive = run(
+            binary, env, "--json", "--cwd", workspace, "--session", work / "adaptive.sqlite",
+            "--reasoning", "high", "run", "Adaptive effort check",
+        )
+        assert adaptive[-1] == {"type": "run_end", "status": "completed"}, adaptive
+        assert reasoning_requests[-1]["thinking"] == {"type": "adaptive"}, reasoning_requests[-1]
+        assert reasoning_requests[-1]["output_config"] == {"effort": "high"}, reasoning_requests[-1]
+        before_refusal = len(reasoning_requests)
+        refused = subprocess.run(
+            [binary, "--cwd", workspace, "--session", work / "refused.sqlite", "--reasoning", "off", "run", "Must refuse"],
+            env=env, check=False, capture_output=True, text=True, timeout=20,
+        )
+        assert refused.returncode != 0, refused.stdout
+        assert len(reasoning_requests) == before_refusal, reasoning_requests
+        run(binary, env, "use", "smoke", "claude-haiku-4-5-20251001", "--endpoint", reasoning_endpoint, "--wire", "anthropic-messages")
+        budget = run(
+            binary, env, "--json", "--cwd", workspace, "--session", work / "budget.sqlite",
+            "--reasoning", "low", "run", "Budget effort check",
+        )
+        assert budget[-1] == {"type": "run_end", "status": "completed"}, budget
+        assert reasoning_requests[-1]["thinking"] == {"type": "enabled", "budget_tokens": 2048}, reasoning_requests[-1]
     finally:
         server.shutdown()
         server.server_close()

@@ -38,13 +38,14 @@ mod transcript;
 use anthropic::AnthropicState;
 #[cfg(test)]
 use anthropic::anthropic_replay_notices;
+use anthropic_request::{
+    AnthropicThinkingMode, anthropic_context_encoding_overhead, anthropic_request_for_route,
+    anthropic_thinking_mode, managed_anthropic_thinking,
+};
 #[cfg(test)]
 use anthropic_request::{
     anthropic_body, anthropic_body_for_route, anthropic_body_prefix_digest,
     anthropic_body_uses_inline_tools,
-};
-use anthropic_request::{
-    anthropic_context_encoding_overhead, anthropic_request_for_route, managed_anthropic_thinking,
 };
 use chat::ChatState;
 use chat_request::chat_body;
