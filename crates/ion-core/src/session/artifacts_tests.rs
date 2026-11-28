@@ -458,6 +458,51 @@ fn midstream_flush_preserves_bytes_and_copy_integrity() {
 }
 
 #[test]
+fn copy_pins_artifact_bytes_and_history_without_holding_the_source_writer() {
+    let (root, path, session) = fixture();
+    let reference = session
+        .artifact_sink()
+        .capture("original", b"original")
+        .unwrap();
+    let admission = session
+        .admit_user_shell("synthetic observation".into(), false)
+        .unwrap();
+    session
+        .record_user_shell(
+            admission,
+            crate::ToolOutput {
+                artifacts: vec![reference.clone()],
+                ..crate::ToolOutput::success(json!({}))
+            },
+        )
+        .unwrap();
+    let reader = session.open_file_reader().unwrap();
+    let cut = session.pin_copy(&reader, None).unwrap();
+    assert!(session.store().try_lock().is_ok());
+    session.select_model(model()).unwrap();
+
+    // A change after pinning. Reading captures from a second source snapshot
+    // would reject these bytes instead of copying the earlier intact capture.
+    let independent = Connection::open(&path).unwrap();
+    independent
+        .execute(
+            "UPDATE artifact_chunks SET body=?1 WHERE artifact=?2",
+            params![b"changed!".as_slice(), reference.id.to_string()],
+        )
+        .unwrap();
+    let copy = cut
+        .materialize(&root.join("pinned.sqlite"), session.cwd())
+        .unwrap();
+    assert_eq!(bytes(&copy, &reference), b"original");
+    assert_eq!(copy.model_preference().unwrap(), None);
+    assert_eq!(session.model_preference().unwrap(), Some(model()));
+    assert!(session.clone_to(root.join("current.sqlite")).is_err());
+    assert!(!root.join("current.sqlite").exists());
+    drop((copy, independent, reader, session));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn failed_copy_removes_only_its_new_database_and_preserves_lock_identity() {
     let (root, _, session) = fixture();
     let reference = session

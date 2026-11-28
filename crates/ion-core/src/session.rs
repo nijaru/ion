@@ -724,6 +724,20 @@ pub struct Session {
     storage: Arc<storage::StorageWork>,
 }
 
+// Native copy inputs: immediate user copies have a pinned source; a managed
+// child may materialize later from the original parent affinity.
+#[cfg_attr(
+    not(unix),
+    expect(dead_code, reason = "native copy paths consume these fields")
+)]
+enum ArtifactSource<'a> {
+    Pinned(&'a Connection),
+    Saved {
+        path: &'a Path,
+        provider_session: uuid::Uuid,
+    },
+}
+
 struct OwnedJournal {
     // Rust drops fields in order: close SQLite before releasing the file lease.
     store: Mutex<Store>,
@@ -770,7 +784,7 @@ impl Session {
         cwd: Option<&Path>,
         id: uuid::Uuid,
         entries: &[SessionEntry],
-        artifact_source: Option<(&Path, uuid::Uuid)>,
+        artifact_source: Option<ArtifactSource<'_>>,
     ) -> Result<Self, SessionError> {
         let opened = OpenedStore::create(path, cwd, id, entries, artifact_source)?;
         Ok(Self::from_native(opened, Executor::default()))
@@ -782,7 +796,7 @@ impl Session {
         _: Option<&Path>,
         _: uuid::Uuid,
         _: &[SessionEntry],
-        _: Option<(&Path, uuid::Uuid)>,
+        _: Option<ArtifactSource<'_>>,
     ) -> Result<Self, SessionError> {
         Err(SessionError::FilePlatformUnsupported)
     }
@@ -824,30 +838,38 @@ impl Session {
     /// Copy committed conversation and context into a new Session. Future
     /// entries are independent; the working directory remains shared.
     pub fn clone_to(&self, path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let source = self.lock_store()?;
-        let entries = read_entries(&source.connection)?;
-        drop(source);
-        self.copy_entries_to(path.as_ref(), entries)
+        self.copy_at(path.as_ref(), None)
     }
 
     /// Copy the valid prefix at a selected Turn boundary into an independent
     /// Session. The source and target still share the live working directory.
     pub fn fork_to(&self, path: impl AsRef<Path>, point: ForkPoint) -> Result<Self, SessionError> {
+        self.copy_at(path.as_ref(), Some(point))
+    }
+
+    fn copy_at(&self, path: &Path, point: Option<ForkPoint>) -> Result<Self, SessionError> {
         let connection = self.open_file_reader()?;
-        let (snapshot, boundary) = {
-            let store = self.lock_store()?;
-            let boundary = ForkBoundary::locate(&store.working.context_index, point)?;
-            let snapshot = connection.unchecked_transaction()?;
-            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
-            (snapshot, boundary)
-        };
-        let selected_model = boundary.before_model(&snapshot)?;
-        let mut entries = boundary.read_prefix(&snapshot)?;
-        drop(snapshot);
-        if let Some(model) = selected_model {
-            entries.push(SessionEntry::ModelSelected { model });
-        }
-        self.copy_entries_to(path.as_ref(), entries)
+        self.pin_copy(&connection, point)?
+            .materialize(path, self.cwd())
+    }
+
+    fn pin_copy<'a>(
+        &self,
+        connection: &'a Connection,
+        point: Option<ForkPoint>,
+    ) -> Result<CopyCut<'a>, SessionError> {
+        let store = self.lock_store()?;
+        let revision = store.working.state.sequence;
+        let boundary = point
+            .map(|point| ForkBoundary::locate(&store.working.context_index, point))
+            .transpose()?;
+        let snapshot = connection.unchecked_transaction()?;
+        self.check_read_snapshot(&snapshot, revision)?;
+        Ok(CopyCut {
+            snapshot,
+            revision,
+            boundary,
+        })
     }
 
     /// Preferences of the exact prefix a fork will copy, not merely those at
@@ -871,20 +893,6 @@ impl Session {
             None => return Err(SessionError::InvalidForkPoint),
         };
         Ok((model, reasoning))
-    }
-
-    fn copy_entries_to(
-        &self,
-        path: &Path,
-        entries: Vec<SessionEntry>,
-    ) -> Result<Self, SessionError> {
-        Self::create_initial(
-            path,
-            self.header.cwd.as_deref(),
-            uuid::Uuid::new_v4(),
-            &without_delivery_keys(entries),
-            Some((self.file_path()?, self.provider_session_id())),
-        )
     }
 
     /// Read only the immutable logical identity, not execution status or history
@@ -1838,6 +1846,36 @@ impl Session {
         let mut store = self.lock_store()?;
         let change = store.working.plan_turn_end(turn, reason, unstarted)?;
         store.commit_turn_change(change)
+    }
+}
+
+// Hold the checked source snapshot through destination creation, so the
+// captured bytes and journal references cannot come from different cuts.
+struct CopyCut<'a> {
+    snapshot: rusqlite::Transaction<'a>,
+    revision: u64,
+    boundary: Option<ForkBoundary>,
+}
+
+impl CopyCut<'_> {
+    fn materialize(self, path: &Path, cwd: Option<&Path>) -> Result<Session, SessionError> {
+        let entries = match &self.boundary {
+            Some(boundary) => {
+                let mut entries = boundary.read_prefix(&self.snapshot)?;
+                if let Some(model) = boundary.before_model(&self.snapshot)? {
+                    entries.push(SessionEntry::ModelSelected { model });
+                }
+                entries
+            }
+            None => read_entries_through(&self.snapshot, self.revision)?,
+        };
+        Session::create_initial(
+            path,
+            cwd,
+            uuid::Uuid::new_v4(),
+            &without_delivery_keys(entries),
+            Some(ArtifactSource::Pinned(&self.snapshot)),
+        )
     }
 }
 

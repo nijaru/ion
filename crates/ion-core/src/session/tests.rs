@@ -1343,17 +1343,26 @@ fn failed_copy_retains_lock_identity_for_waiting_writers() {
         .create_new(true)
         .open(root.join("copy.sqlite.lock"))
         .unwrap();
-    assert!(
-        source
-            .copy_entries_to(
-                &destination,
-                vec![SessionEntry::TurnEnded {
-                    turn: 1,
-                    reason: TurnEndReason::Completed,
-                }]
-            )
-            .is_err()
-    );
+    // Inject an invalid but decodable journal prefix so the real copy path
+    // exercises destination seed validation.
+    source
+        .select_model("fixture/model".parse().unwrap())
+        .unwrap();
+    source
+        .store()
+        .lock()
+        .unwrap()
+        .connection
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=1",
+            [encode_entry(&SessionEntry::TurnEnded {
+                turn: 1,
+                reason: TurnEndReason::Completed,
+            })
+            .unwrap()],
+        )
+        .unwrap();
+    assert!(source.clone_to(&destination).is_err());
     assert!(!destination.exists());
     let writer = Session::create(&destination, Some(&root)).unwrap();
     assert!(matches!(

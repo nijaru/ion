@@ -332,7 +332,10 @@ impl Session {
                         &context,
                         artifact_source
                             .as_ref()
-                            .map(|(path, id)| (path.as_path(), *id)),
+                            .map(|(path, id)| ArtifactSource::Saved {
+                                path,
+                                provider_session: *id,
+                            }),
                     )?
                 };
                 let view = child.view()?;

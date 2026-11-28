@@ -8,7 +8,7 @@ use std::{
 use rusqlite::{Connection, OpenFlags};
 
 use super::{
-    SessionEntry, SessionError, artifacts,
+    ArtifactSource, SessionEntry, SessionError, artifacts,
     store::{FORMAT_VERSION, Header, Store, StoreSeed, configure_connection, read_header},
 };
 
@@ -44,7 +44,7 @@ impl OpenedStore {
         cwd: Option<&Path>,
         id: uuid::Uuid,
         entries: &[SessionEntry],
-        artifact_source: Option<(&Path, uuid::Uuid)>,
+        artifact_source: Option<ArtifactSource<'_>>,
     ) -> Result<Self, SessionError> {
         // Validate and encode the prefix before reserving a path or touching disk.
         let seed = StoreSeed::prepare(entries)?;
@@ -76,14 +76,22 @@ impl OpenedStore {
             name: None,
         };
         let store = seed.initialize(connection, &header, |tx| {
-            if let Some((path, id)) = artifact_source {
-                let source = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-                configure_connection(&source)?;
-                let snapshot = source.unchecked_transaction()?;
-                if read_header(&snapshot)?.provider_session_id != id {
-                    return Err(SessionError::InvalidDatabase);
+            match artifact_source {
+                Some(ArtifactSource::Pinned(source)) => artifacts::copy(source, tx, entries)?,
+                Some(ArtifactSource::Saved {
+                    path,
+                    provider_session,
+                }) => {
+                    let source =
+                        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                    configure_connection(&source)?;
+                    let snapshot = source.unchecked_transaction()?;
+                    if read_header(&snapshot)?.provider_session_id != provider_session {
+                        return Err(SessionError::InvalidDatabase);
+                    }
+                    artifacts::copy(&snapshot, tx, entries)?;
                 }
-                artifacts::copy(&snapshot, tx, entries)?;
+                None => {}
             }
             Ok(())
         })?;
