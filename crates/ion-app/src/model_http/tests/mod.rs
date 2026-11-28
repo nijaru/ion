@@ -326,7 +326,21 @@ fn anthropic_inline_tool_deltas_keep_the_initial_top_level_prefix() {
         }],
     });
 
-    let body = anthropic_body_for_route(&request, true, true).unwrap();
+    let prepared = anthropic_request_for_route(&request, true, true).unwrap();
+    assert_eq!(
+        prepared.beta_header().as_deref(),
+        Some("thinking-binding-controls-2026-08-01,inline-tools-2026-09-15")
+    );
+    let mut disabled = request.clone();
+    disabled.route.effective.model = "claude-haiku-5-5".into();
+    disabled.controls.reasoning = Reasoning::Off;
+    let disabled = anthropic_request_for_route(&disabled, true, true).unwrap();
+    assert_eq!(
+        disabled.beta_header().as_deref(),
+        Some("inline-tools-2026-09-15")
+    );
+    assert_eq!(disabled.body["thinking"], json!({"type":"disabled"}));
+    let body = prepared.body;
     assert_eq!(
         body["tools"],
         json!([{
@@ -2900,6 +2914,106 @@ fn current_claude_enforces_prefix_binding_only_on_native_api() {
             .get("thinking")
             .is_none()
     );
+}
+
+#[test]
+fn anthropic_effort_matrix_follows_exact_models_and_emitted_binding() {
+    use Reasoning::{Max, Off, ProviderDefault, XHigh};
+    let service = HttpModelService::new(
+        "https://api.anthropic.com/v1/messages",
+        HttpWire::AnthropicMessages,
+        Arc::new(|| None),
+    )
+    .unwrap();
+    for (model, off, xhigh, max, binds, default_thinks) in [
+        ("claude-fable-5-2", false, true, true, true, true),
+        ("claude-fable-5-1", false, true, true, true, true),
+        ("claude-opus-5-5", false, true, true, true, true),
+        ("claude-sonnet-5-5", false, true, true, true, true),
+        ("claude-haiku-5-5", true, true, true, true, true),
+        ("claude-opus-5", true, true, true, false, true),
+        ("claude-sonnet-5", true, true, true, false, true),
+        ("claude-opus-4-8", true, true, true, false, false),
+        ("claude-opus-4-6", true, false, true, false, false),
+        ("claude-sonnet-4-6", true, false, true, false, false),
+        (
+            "claude-haiku-4-5-20251001",
+            true,
+            false,
+            false,
+            false,
+            false,
+        ),
+        ("proxy-claude-haiku-5-5", true, false, false, false, false),
+    ] {
+        let mut r = request();
+        r.route.effective.model = model.into();
+        for (effort, supported) in [
+            (ProviderDefault, true),
+            (Off, off),
+            (XHigh, xhigh),
+            (Max, max),
+        ] {
+            r.controls.reasoning = effort;
+            let result = anthropic_request_for_route(&r, true, false);
+            let preflight = service.validate_controls(&r.route.effective, &r.controls);
+            if !supported {
+                assert_eq!(
+                    preflight.unwrap_err().kind,
+                    ProviderErrorKind::Unsupported,
+                    "{model}, {effort}"
+                );
+                assert!(
+                    matches!(result, Err(error) if error.kind == ProviderErrorKind::Unsupported),
+                    "{model}, {effort}"
+                );
+                continue;
+            }
+            preflight.unwrap();
+            let prepared = result.unwrap();
+            let bound = binds && effort != Off;
+            assert_eq!(
+                prepared.beta_header().as_deref(),
+                bound.then_some("thinking-binding-controls-2026-08-01"),
+                "{model}, {effort}"
+            );
+            match effort {
+                ProviderDefault if !bound => assert!(prepared.body.get("thinking").is_none()),
+                Off => assert_eq!(prepared.body["thinking"], json!({"type":"disabled"})),
+                _ => assert_eq!(prepared.body["thinking"]["type"], "adaptive"),
+            }
+            if matches!(effort, XHigh | Max) {
+                assert_eq!(
+                    prepared.body["output_config"],
+                    json!({"effort":effort.to_string()})
+                );
+            } else {
+                assert!(prepared.body.get("output_config").is_none());
+            }
+            let proxy = anthropic_request_for_route(&r, false, false).unwrap();
+            assert!(
+                proxy.beta_header().is_none()
+                    && proxy.body["thinking"].get("block_binding").is_none()
+            );
+        }
+        r.controls.reasoning = ProviderDefault;
+        r.controls.tool_choice = ToolChoice::Named("read".into());
+        assert_eq!(
+            service
+                .validate_controls(&r.route.effective, &r.controls)
+                .is_err(),
+            default_thinks,
+            "{model}"
+        );
+        r.controls.reasoning = Off;
+        assert_eq!(
+            service
+                .validate_controls(&r.route.effective, &r.controls)
+                .is_ok(),
+            off,
+            "{model}"
+        );
+    }
 }
 
 #[test]

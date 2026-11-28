@@ -1,6 +1,6 @@
 //! One pure compiler for control preflight and request encoding.
 use super::*;
-use crate::catalog::ResponsesProfile;
+use crate::catalog::{AdaptiveThinking, AnthropicProfile, ResponsesProfile};
 
 const ANTHROPIC_MIN_THINKING_BUDGET: u32 = 1_024;
 const ANTHROPIC_MIN_ANSWER_ROOM: u32 = 1_024;
@@ -15,109 +15,110 @@ fn anthropic_control_fields(
             "explicit sampling controls are unsupported by Messages",
         ));
     }
-    let mode = anthropic_thinking_mode(&model.model);
+    let profile = AnthropicProfile::for_model(&model.model);
     let mut fields = json!({"max_tokens": controls.max_output_tokens});
     let forced_tool = matches!(
         controls.tool_choice,
         ToolChoice::Required | ToolChoice::Named(_)
     );
-    let adaptive_thinking = |native: bool| {
-        if native && mode == AnthropicThinkingMode::AdaptiveManaged {
-            json!({"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"error"}})
-        } else {
-            json!({"type":"adaptive"})
-        }
-    };
-    match (mode, controls.reasoning) {
-        (_, Reasoning::XHigh | Reasoning::Max) => {
-            return Err(unsupported(
-                "extended reasoning effort is not supported by this adapter",
-            ));
-        }
-        (AnthropicThinkingMode::AdaptiveManaged, Reasoning::ProviderDefault) => {
-            if native_anthropic {
-                if forced_tool {
-                    return Err(unsupported("this Claude model cannot force tool use"));
+    let thinking_conflict = || unsupported("Anthropic thinking cannot force tool use");
+    let effort = controls.reasoning;
+    if let AnthropicProfile::Adaptive(profile) = profile {
+        let binding = native_anthropic && profile.bind_prefix;
+        let adaptive = || {
+            if binding {
+                json!({"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"error"}})
+            } else {
+                json!({"type":"adaptive"})
+            }
+        };
+        match effort {
+            Reasoning::ProviderDefault => {
+                if forced_tool && profile.thinking != AdaptiveThinking::OptIn {
+                    return Err(thinking_conflict());
                 }
-                fields["thinking"] = adaptive_thinking(true);
+                if binding {
+                    fields["thinking"] = adaptive();
+                }
             }
-        }
-        (
-            AnthropicThinkingMode::AdaptiveToggleable | AnthropicThinkingMode::Budget,
-            Reasoning::ProviderDefault,
-        ) => {}
-        (AnthropicThinkingMode::AdaptiveManaged, Reasoning::Off) => {
-            return Err(unsupported("this Claude model cannot disable thinking"));
-        }
-        (
-            AnthropicThinkingMode::AdaptiveToggleable | AnthropicThinkingMode::Budget,
-            Reasoning::Off,
-        ) => {
-            fields["thinking"] = json!({"type":"disabled"});
-        }
-        (
-            AnthropicThinkingMode::AdaptiveManaged | AnthropicThinkingMode::AdaptiveToggleable,
-            Reasoning::Low | Reasoning::Medium | Reasoning::High,
-        ) => {
-            if forced_tool {
-                return Err(unsupported("Anthropic thinking cannot force tool use"));
+            Reasoning::Off => {
+                if profile.thinking == AdaptiveThinking::AlwaysOn {
+                    return Err(unsupported("this Claude model cannot disable thinking"));
+                }
+                // Default-on toggleable models accept disabled at their native
+                // default effort. Do not pair it with an extended effort.
+                fields["thinking"] = json!({"type":"disabled"});
             }
-            let effort = match controls.reasoning {
-                Reasoning::Low => "low",
-                Reasoning::Medium => "medium",
-                Reasoning::High => "high",
-                _ => unreachable!("matched explicit effort levels"),
-            };
-            fields["thinking"] = adaptive_thinking(native_anthropic);
-            fields["output_config"] = json!({"effort": effort});
-        }
-        (
-            AnthropicThinkingMode::AdaptiveManaged | AnthropicThinkingMode::AdaptiveToggleable,
-            Reasoning::BudgetTokens(_),
-        ) => {
-            return Err(unsupported(
-                "adaptive Claude models use effort levels rather than token budgets",
-            ));
-        }
-        (AnthropicThinkingMode::Budget, Reasoning::Low | Reasoning::Medium | Reasoning::High) => {
-            if forced_tool {
-                return Err(unsupported("Anthropic thinking cannot force tool use"));
-            }
-            let target = match controls.reasoning {
-                Reasoning::Low => 2_048,
-                Reasoning::Medium => 8_192,
-                Reasoning::High => 16_384,
-                _ => unreachable!("matched explicit effort levels"),
-            };
-            let max_budget = controls
-                .max_output_tokens
-                .saturating_sub(ANTHROPIC_MIN_ANSWER_ROOM);
-            let budget = target.min(max_budget);
-            if budget < ANTHROPIC_MIN_THINKING_BUDGET {
+            Reasoning::BudgetTokens(_) => {
                 return Err(unsupported(
-                    "max_output_tokens is too small for Anthropic thinking budget",
+                    "adaptive Claude models use effort levels rather than token budgets",
                 ));
             }
-            fields["thinking"] = json!({"type":"enabled","budget_tokens": budget});
+            Reasoning::XHigh if !profile.xhigh => {
+                return Err(unsupported(
+                    "xhigh reasoning is not verified for this Claude model",
+                ));
+            }
+            Reasoning::Low
+            | Reasoning::Medium
+            | Reasoning::High
+            | Reasoning::XHigh
+            | Reasoning::Max => {
+                if forced_tool {
+                    return Err(thinking_conflict());
+                }
+                fields["thinking"] = adaptive();
+                fields["output_config"] = json!({"effort":effort.to_string()});
+            }
         }
-        (AnthropicThinkingMode::Budget, Reasoning::BudgetTokens(budget)) => {
-            if forced_tool {
-                return Err(unsupported("Anthropic thinking cannot force tool use"));
-            }
-            if budget < ANTHROPIC_MIN_THINKING_BUDGET {
+    } else {
+        match effort {
+            Reasoning::ProviderDefault => {}
+            Reasoning::Off => fields["thinking"] = json!({"type":"disabled"}),
+            Reasoning::XHigh | Reasoning::Max => {
                 return Err(unsupported(
-                    "Anthropic thinking budget must be at least 1024 tokens",
+                    "extended reasoning effort is not verified for this Claude model",
                 ));
             }
-            if budget >= controls.max_output_tokens {
-                return Err(unsupported(
-                    "Anthropic thinking budget must be smaller than max_output_tokens",
-                ));
+            Reasoning::Low | Reasoning::Medium | Reasoning::High | Reasoning::BudgetTokens(_) => {
+                if forced_tool {
+                    return Err(thinking_conflict());
+                }
+                let budget = anthropic_budget(effort, controls.max_output_tokens)?;
+                fields["thinking"] = json!({"type":"enabled","budget_tokens":budget});
             }
-            fields["thinking"] = json!({"type":"enabled","budget_tokens": budget});
         }
     }
     Ok(fields)
+}
+
+fn anthropic_budget(effort: Reasoning, max_output: u32) -> Result<u32, ProviderError> {
+    if let Reasoning::BudgetTokens(budget) = effort {
+        if budget < ANTHROPIC_MIN_THINKING_BUDGET {
+            return Err(unsupported(
+                "Anthropic thinking budget must be at least 1024 tokens",
+            ));
+        }
+        if budget >= max_output {
+            return Err(unsupported(
+                "Anthropic thinking budget must be smaller than max_output_tokens",
+            ));
+        }
+        return Ok(budget);
+    }
+    let target = match effort {
+        Reasoning::Low => 2_048,
+        Reasoning::Medium => 8_192,
+        Reasoning::High => 16_384,
+        _ => unreachable!("already selected a legacy thinking budget"),
+    };
+    let budget = target.min(max_output.saturating_sub(ANTHROPIC_MIN_ANSWER_ROOM));
+    if budget < ANTHROPIC_MIN_THINKING_BUDGET {
+        return Err(unsupported(
+            "max_output_tokens is too small for Anthropic thinking budget",
+        ));
+    }
+    Ok(budget)
 }
 
 fn responses_control_fields(

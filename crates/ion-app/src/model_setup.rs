@@ -547,7 +547,7 @@ impl ModelStore {
                     catalog::CatalogWire::DeepSeekChat => HttpWire::DeepSeekChat,
                     catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
                     catalog::CatalogWire::OpenRouterChat => HttpWire::OpenRouterChat,
-                    catalog::CatalogWire::AnthropicMessages => HttpWire::AnthropicMessages,
+                    catalog::CatalogWire::AnthropicMessages(_) => HttpWire::AnthropicMessages,
                 },
                 api_key_env: Some(model.api_key_env.into()),
                 max_output_tokens: model.max_output_tokens,
@@ -848,6 +848,26 @@ mod tests {
                 model: "claude-opus-5-5".into(),
             })
             .unwrap();
+        for id in ["claude-fable-5-2", "claude-haiku-5-5"] {
+            let selected = store
+                .resolve_identity(&ModelRef {
+                    provider: "anthropic".into(),
+                    model: id.into(),
+                })
+                .unwrap();
+            assert_eq!(selected.wire, HttpWire::AnthropicMessages);
+            assert_eq!(selected.endpoint, "https://api.anthropic.com/v1/messages");
+            assert_eq!(selected.api_key_env.as_deref(), Some("ANTHROPIC_API_KEY"));
+            assert!(selected.requires_key && selected.image_input);
+            assert_eq!(selected.context_window_tokens, Some(1_000_000));
+            assert_eq!(selected.max_output_tokens, 128_000);
+            assert!(
+                selected
+                    .capabilities
+                    .context_mutation
+                    .inline_tool_definitions
+            );
+        }
         let openrouter = store
             .resolve_identity(&ModelRef {
                 provider: "openrouter".into(),

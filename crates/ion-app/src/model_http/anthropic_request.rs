@@ -10,7 +10,26 @@ use sha2::{Digest, Sha256};
 pub(super) struct AnthropicRequestBody {
     pub(super) body: Value,
     pub(super) prefix_digest: String,
-    pub(super) inline_tools: bool,
+    inline_tools: bool,
+}
+
+impl AnthropicRequestBody {
+    pub(super) fn beta_header(&self) -> Option<String> {
+        // The binding beta follows the compiled adaptive block. In particular,
+        // a model that can turn thinking off must not send binding under Off.
+        let binding = self.body["thinking"].get("block_binding").is_some();
+        let inline_tools = self.inline_tools;
+        (binding || inline_tools).then(|| {
+            [
+                binding.then_some("thinking-binding-controls-2026-08-01"),
+                inline_tools.then_some("inline-tools-2026-09-15"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(",")
+        })
+    }
 }
 
 struct AnthropicTimelinePlan<'a> {
@@ -479,56 +498,6 @@ pub(super) fn anthropic_body_uses_inline_tools(body: &Value) -> bool {
                 Some("tool_addition" | "tool_removal")
             )
         })
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum AnthropicThinkingMode {
-    /// Adaptive thinking only; Anthropic rejects `thinking: { type: "disabled" }`.
-    /// Uses prefix block binding on the native Anthropic API.
-    AdaptiveManaged,
-    /// Adaptive thinking with optional disable.
-    AdaptiveToggleable,
-    /// Legacy budget-based extended thinking.
-    Budget,
-}
-
-pub(super) fn managed_anthropic_thinking(model: &str) -> bool {
-    matches!(
-        model,
-        "claude-fable-5-1" | "claude-opus-5-5" | "claude-sonnet-5-5"
-    )
-}
-
-pub(super) fn anthropic_thinking_mode(model: &str) -> AnthropicThinkingMode {
-    if managed_anthropic_thinking(model) {
-        return AnthropicThinkingMode::AdaptiveManaged;
-    }
-    let normalized = model.to_ascii_lowercase();
-    if [
-        "opus-4-6",
-        "opus-4.6",
-        "opus-4-7",
-        "opus-4.7",
-        "opus-4-8",
-        "opus-4.8",
-        "opus-5",
-        "opus.5",
-        "sonnet-4-6",
-        "sonnet-4.6",
-        "sonnet-5",
-        "sonnet.5",
-        "haiku-5",
-        "haiku.5",
-        "fable-5",
-        "mythos-5",
-    ]
-    .iter()
-    .any(|fragment| normalized.contains(fragment))
-    {
-        AnthropicThinkingMode::AdaptiveToggleable
-    } else {
-        AnthropicThinkingMode::Budget
-    }
 }
 
 fn transcript_messages(

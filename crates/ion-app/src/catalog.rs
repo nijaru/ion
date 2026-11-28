@@ -9,13 +9,17 @@
 //! their blocks and rebases changed prefixes; native live access still depends
 //! on an Anthropic credential and account entitlement.
 
+mod anthropic;
+pub(crate) use anthropic::AdaptiveThinking;
+pub use anthropic::AnthropicProfile;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogWire {
     OpenAiResponses(ResponsesProfile),
     DeepSeekChat,
     MiMoChat,
     OpenRouterChat,
-    AnthropicMessages,
+    AnthropicMessages(AnthropicProfile),
 }
 
 /// Verified OpenAI Responses effort and default-thinking behavior. An unknown
@@ -162,7 +166,7 @@ const ANTHROPIC_CACHE_ONLY: ModelCapabilities = ModelCapabilities {
     },
 };
 
-const fn anthropic_inline_context(pricing: PromptCachePricing) -> ModelCapabilities {
+const fn anthropic_inline_context(pricing: Option<PromptCachePricing>) -> ModelCapabilities {
     ModelCapabilities {
         prompt_cache: PromptCacheCapabilities {
             usage_details: true,
@@ -172,7 +176,7 @@ const fn anthropic_inline_context(pricing: PromptCachePricing) -> ModelCapabilit
             },
             automatic_request: true,
             refresh: PromptCacheRefresh::ReplayOneToken,
-            pricing: Some(pricing),
+            pricing,
         },
         context_mutation: ContextMutationCapabilities {
             mid_conversation_system: true,
@@ -182,21 +186,29 @@ const fn anthropic_inline_context(pricing: PromptCachePricing) -> ModelCapabilit
     }
 }
 
-const ANTHROPIC_OPUS_5_5: ModelCapabilities = anthropic_inline_context(PromptCachePricing {
+const ANTHROPIC_OPUS_5_5: ModelCapabilities = anthropic_inline_context(Some(PromptCachePricing {
     write_5m_microusd_per_million: 5_000_000,
     read_microusd_per_million: 200_000,
     output_microusd_per_million: 20_000_000,
-});
-const ANTHROPIC_SONNET_5_5: ModelCapabilities = anthropic_inline_context(PromptCachePricing {
-    write_5m_microusd_per_million: 2_500_000,
-    read_microusd_per_million: 200_000,
-    output_microusd_per_million: 10_000_000,
-});
-const ANTHROPIC_FABLE_5_1: ModelCapabilities = anthropic_inline_context(PromptCachePricing {
+}));
+const ANTHROPIC_SONNET_5_5: ModelCapabilities =
+    anthropic_inline_context(Some(PromptCachePricing {
+        write_5m_microusd_per_million: 2_500_000,
+        read_microusd_per_million: 200_000,
+        output_microusd_per_million: 10_000_000,
+    }));
+const ANTHROPIC_FABLE_5_1: ModelCapabilities = anthropic_inline_context(Some(PromptCachePricing {
     write_5m_microusd_per_million: 12_500_000,
     read_microusd_per_million: 250_000,
     output_microusd_per_million: 50_000_000,
-});
+}));
+const ANTHROPIC_FABLE_5_2: ModelCapabilities = anthropic_inline_context(Some(PromptCachePricing {
+    write_5m_microusd_per_million: 10_000_000,
+    read_microusd_per_million: 200_000,
+    output_microusd_per_million: 40_000_000,
+}));
+// Haiku 5.5 pricing changes with prompt size; don't infer an economic quote.
+const ANTHROPIC_HAIKU_5_5: ModelCapabilities = anthropic_inline_context(None);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CatalogModel {
@@ -218,10 +230,10 @@ pub struct CatalogModel {
 }
 
 const CHECKED_ON: &str = "2026-09-26";
-const ANTHROPIC_CHECKED_ON: &str = "2026-09-29";
-const OPENAI_CHECKED_ON: &str = "2026-11-28";
+const DIRECT_CHECKED_ON: &str = "2026-11-28";
 const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/responses";
 const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
+const CLAUDE_1M: (u32, u32) = (1_000_000, 128_000);
 const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
 const MIMO_ENDPOINT: &str = "https://api.xiaomimimo.com/v1/chat/completions";
@@ -245,7 +257,31 @@ const fn openai_model(
         image_input: true,
         capabilities: OPENAI_MANAGED_CACHE,
         source_url,
-        checked_on: OPENAI_CHECKED_ON,
+        checked_on: DIRECT_CHECKED_ON,
+    }
+}
+
+const fn anthropic_model(
+    id: &'static str,
+    label: &'static str,
+    profile: AnthropicProfile,
+    (context_window, max_output_tokens): (u32, u32),
+    capabilities: ModelCapabilities,
+    source_url: &'static str,
+) -> CatalogModel {
+    CatalogModel {
+        provider: "anthropic",
+        id,
+        label,
+        wire: CatalogWire::AnthropicMessages(profile),
+        endpoint: ANTHROPIC_ENDPOINT,
+        api_key_env: "ANTHROPIC_API_KEY",
+        context_window,
+        max_output_tokens,
+        image_input: true,
+        capabilities,
+        source_url,
+        checked_on: DIRECT_CHECKED_ON,
     }
 }
 
@@ -362,90 +398,70 @@ const MODELS: &[CatalogModel] = &[
         source_url: "https://openrouter.ai/openai/gpt-5.4",
         checked_on: CHECKED_ON,
     },
-    CatalogModel {
-        provider: "anthropic",
-        id: "claude-opus-5-5",
-        label: "Claude Opus 5.5",
-        wire: CatalogWire::AnthropicMessages,
-        endpoint: ANTHROPIC_ENDPOINT,
-        api_key_env: "ANTHROPIC_API_KEY",
-        context_window: 1_000_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: ANTHROPIC_OPUS_5_5,
-        source_url: "https://platform.claude.com/docs/en/models/opus-5-5/overview",
-        checked_on: ANTHROPIC_CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "anthropic",
-        id: "claude-sonnet-5-5",
-        label: "Claude Sonnet 5.5",
-        wire: CatalogWire::AnthropicMessages,
-        endpoint: ANTHROPIC_ENDPOINT,
-        api_key_env: "ANTHROPIC_API_KEY",
-        context_window: 1_000_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: ANTHROPIC_SONNET_5_5,
-        source_url: "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
-        checked_on: ANTHROPIC_CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "anthropic",
-        id: "claude-fable-5-1",
-        label: "Claude Fable 5.1",
-        wire: CatalogWire::AnthropicMessages,
-        endpoint: ANTHROPIC_ENDPOINT,
-        api_key_env: "ANTHROPIC_API_KEY",
-        context_window: 1_000_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: ANTHROPIC_FABLE_5_1,
-        source_url: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
-        checked_on: ANTHROPIC_CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "anthropic",
-        id: "claude-opus-4-6",
-        label: "Claude Opus 4.6 (legacy)",
-        wire: CatalogWire::AnthropicMessages,
-        endpoint: ANTHROPIC_ENDPOINT,
-        api_key_env: "ANTHROPIC_API_KEY",
-        context_window: 1_000_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: ANTHROPIC_CACHE_ONLY,
-        source_url: "https://platform.claude.com/docs/en/models/opus-4-6/overview",
-        checked_on: CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "anthropic",
-        id: "claude-sonnet-4-6",
-        label: "Claude Sonnet 4.6 (legacy)",
-        wire: CatalogWire::AnthropicMessages,
-        endpoint: ANTHROPIC_ENDPOINT,
-        api_key_env: "ANTHROPIC_API_KEY",
-        context_window: 1_000_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: ANTHROPIC_CACHE_ONLY,
-        source_url: "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
-        checked_on: CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "anthropic",
-        id: "claude-haiku-4-5-20251001",
-        label: "Claude Haiku 4.5",
-        wire: CatalogWire::AnthropicMessages,
-        endpoint: ANTHROPIC_ENDPOINT,
-        api_key_env: "ANTHROPIC_API_KEY",
-        context_window: 200_000,
-        max_output_tokens: 64_000,
-        image_input: true,
-        capabilities: ANTHROPIC_CACHE_ONLY,
-        source_url: "https://platform.claude.com/docs/en/models/overview",
-        checked_on: CHECKED_ON,
-    },
+    anthropic_model(
+        "claude-opus-5-5",
+        "Claude Opus 5.5",
+        AnthropicProfile::ALWAYS_ON_BOUND,
+        CLAUDE_1M,
+        ANTHROPIC_OPUS_5_5,
+        "https://platform.claude.com/docs/en/models/opus-5-5/overview",
+    ),
+    anthropic_model(
+        "claude-sonnet-5-5",
+        "Claude Sonnet 5.5",
+        AnthropicProfile::ALWAYS_ON_BOUND,
+        CLAUDE_1M,
+        ANTHROPIC_SONNET_5_5,
+        "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+    ),
+    anthropic_model(
+        "claude-fable-5-1",
+        "Claude Fable 5.1",
+        AnthropicProfile::ALWAYS_ON_BOUND,
+        CLAUDE_1M,
+        ANTHROPIC_FABLE_5_1,
+        "https://platform.claude.com/docs/en/models/fable-5-1/overview",
+    ),
+    anthropic_model(
+        "claude-fable-5-2",
+        "Claude Fable 5.2",
+        AnthropicProfile::ALWAYS_ON_BOUND,
+        CLAUDE_1M,
+        ANTHROPIC_FABLE_5_2,
+        "https://platform.claude.com/docs/en/models/fable-5-2/overview",
+    ),
+    anthropic_model(
+        "claude-haiku-5-5",
+        "Claude Haiku 5.5",
+        AnthropicProfile::DEFAULT_ON_BOUND,
+        CLAUDE_1M,
+        ANTHROPIC_HAIKU_5_5,
+        "https://platform.claude.com/docs/en/models/haiku-5-5/overview",
+    ),
+    anthropic_model(
+        "claude-opus-4-6",
+        "Claude Opus 4.6 (legacy)",
+        AnthropicProfile::OPT_IN_MAX,
+        CLAUDE_1M,
+        ANTHROPIC_CACHE_ONLY,
+        "https://platform.claude.com/docs/en/models/opus-4-6/overview",
+    ),
+    anthropic_model(
+        "claude-sonnet-4-6",
+        "Claude Sonnet 4.6 (legacy)",
+        AnthropicProfile::OPT_IN_MAX,
+        CLAUDE_1M,
+        ANTHROPIC_CACHE_ONLY,
+        "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
+    ),
+    anthropic_model(
+        "claude-haiku-4-5-20251001",
+        "Claude Haiku 4.5",
+        AnthropicProfile::Budget,
+        (200_000, 64_000),
+        ANTHROPIC_CACHE_ONLY,
+        "https://platform.claude.com/docs/en/models/haiku-4-5/overview",
+    ),
 ];
 
 pub fn models() -> &'static [CatalogModel] {
@@ -471,10 +487,7 @@ mod tests {
         for model in models() {
             assert!(identities.insert((model.provider, model.id)));
             assert!(model.context_window > model.max_output_tokens);
-            assert!(matches!(
-                model.checked_on,
-                CHECKED_ON | ANTHROPIC_CHECKED_ON | OPENAI_CHECKED_ON
-            ));
+            assert!(matches!(model.checked_on, CHECKED_ON | DIRECT_CHECKED_ON));
             assert!(model.source_url.starts_with("https://"));
             assert!(model.endpoint.starts_with("https://"));
             assert!(model.api_key_env.ends_with("_API_KEY"));

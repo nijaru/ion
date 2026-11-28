@@ -38,15 +38,12 @@ mod transcript;
 use anthropic::AnthropicState;
 #[cfg(test)]
 use anthropic::anthropic_replay_notices;
-use anthropic_request::{
-    AnthropicThinkingMode, anthropic_context_encoding_overhead, anthropic_request_for_route,
-    anthropic_thinking_mode, managed_anthropic_thinking,
-};
 #[cfg(test)]
 use anthropic_request::{
     anthropic_body, anthropic_body_for_route, anthropic_body_prefix_digest,
     anthropic_body_uses_inline_tools,
 };
+use anthropic_request::{anthropic_context_encoding_overhead, anthropic_request_for_route};
 use chat::ChatState;
 use chat_request::chat_body;
 use controls::control_fields;
@@ -69,8 +66,6 @@ const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
 // prefix when Core reconstructs model-visible tool messages after reopen.
 const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details_observed_tool_status";
 const ANTHROPIC_CONTENT_REPLAY: &str = "anthropic_content_blocks";
-const ANTHROPIC_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
-const ANTHROPIC_INLINE_TOOLS_BETA: &str = "inline-tools-2026-09-15";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpWire {
@@ -307,7 +302,7 @@ impl ModelService for HttpModelService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let native_anthropic = self.native_anthropic();
-            let mut inline_tools = false;
+            let mut anthropic_betas = None;
             let mut anthropic_prefix = None;
             let mut body = match self.wire {
                 HttpWire::OpenAiResponses => responses_body(request, &self.endpoint)?,
@@ -317,7 +312,7 @@ impl ModelService for HttpModelService {
                         native_anthropic,
                         self.capabilities.context_mutation.inline_tool_definitions,
                     )?;
-                    inline_tools = prepared.inline_tools;
+                    anthropic_betas = prepared.beta_header();
                     anthropic_prefix = Some(prepared.prefix_digest);
                     prepared.body
                 }
@@ -353,15 +348,8 @@ impl ModelService for HttpModelService {
             }
             if self.wire == HttpWire::AnthropicMessages {
                 post = post.header("anthropic-version", "2023-06-01");
-                let mut betas = Vec::new();
-                if native_anthropic && managed_anthropic_thinking(&request.route.effective.model) {
-                    betas.push(ANTHROPIC_BINDING_BETA);
-                }
-                if native_anthropic && inline_tools {
-                    betas.push(ANTHROPIC_INLINE_TOOLS_BETA);
-                }
-                if !betas.is_empty() {
-                    post = post.header("anthropic-beta", betas.join(","));
+                if let Some(betas) = anthropic_betas {
+                    post = post.header("anthropic-beta", betas);
                 }
             }
             let mut response = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, post.send())

@@ -162,8 +162,13 @@ class Handler(BaseHTTPRequestHandler):
             migration_requests.append(body)
             payload = response(len(migration_requests))
         elif self.path == "/reasoning/v1/messages":
+            assert self.headers.get("anthropic-beta") is None, "native betas leaked to a compatible endpoint"
             reasoning_requests.append(body)
-            payload = response(5)
+            if body["model"] == "claude-fable-5-2":
+                count = sum(row["model"] == body["model"] for row in reasoning_requests)
+                payload = response(count + 1)  # signed thinking and text, no tool call
+            else:
+                payload = response(5)
         elif self.path == "/truncated/v1/messages":
             truncated_requests.append(body)
             truncated_paths_before_request.append(((workspace / "sibling.txt").exists(), (workspace / "fixed.txt").exists()))
@@ -376,6 +381,42 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
         )
         assert refused.returncode != 0, refused.stdout
         assert len(reasoning_requests) == before_refusal, reasoning_requests
+
+        run(binary, env, "use", "smoke", "claude-fable-5-2", "--endpoint", reasoning_endpoint, "--wire", "anthropic-messages")
+        fable = work / "fable-effort.sqlite"
+        for effort in ("xhigh", "max", None):
+            args = ("--reasoning", effort) if effort else ()
+            result = run(binary, env, "--json", "--cwd", workspace, "--session", fable,
+                         *args, "run", "Continue with the selected effort")
+            assert result[-1] == {"type": "run_end", "status": "completed"}, result
+        initial, changed, reopened = reasoning_requests[-3:]
+        assert [body["output_config"]["effort"] for body in (initial, changed, reopened)] == ["xhigh", "max", "max"]
+        assert all(body["thinking"] == {"type": "adaptive"} for body in (initial, changed, reopened))
+        for body in (changed, reopened):
+            assert body["system"] == initial["system"] and body["tools"] == initial["tools"]
+            assert body["messages"][:len(initial["messages"])] == initial["messages"]
+            assert body["messages"][len(initial["messages"])]["content"][0] == {
+                "type": "thinking", "thinking": "", "signature": "signed-2",
+            }, body
+
+        run(binary, env, "use", "smoke", "claude-haiku-5-5", "--endpoint", reasoning_endpoint, "--wire", "anthropic-messages")
+        run(binary, env, "--cwd", workspace, "--session", work / "haiku-off.sqlite",
+            "--reasoning", "off", "run", "Disable thinking on a toggleable model")
+        assert reasoning_requests[-1]["thinking"] == {"type": "disabled"}
+        assert "output_config" not in reasoning_requests[-1]
+
+        run(binary, env, "use", "smoke", "claude-opus-4-6", "--endpoint", reasoning_endpoint, "--wire", "anthropic-messages")
+        before_refusal = len(reasoning_requests)
+        refused = subprocess.run(
+            [binary, "--cwd", workspace, "--session", work / "no-xhigh.sqlite", "--reasoning", "xhigh", "run", "Must refuse"],
+            env=env, check=False, capture_output=True, text=True, timeout=20,
+        )
+        assert refused.returncode != 0 and "xhigh reasoning is not verified" in refused.stderr, refused
+        assert len(reasoning_requests) == before_refusal
+        run(binary, env, "--cwd", workspace, "--session", work / "opus-max.sqlite",
+            "--reasoning", "max", "run", "Use the supported high effort")
+        assert reasoning_requests[-1]["output_config"] == {"effort": "max"}
+
         run(binary, env, "use", "smoke", "claude-haiku-4-5-20251001", "--endpoint", reasoning_endpoint, "--wire", "anthropic-messages")
         budget = run(
             binary, env, "--json", "--cwd", workspace, "--session", work / "budget.sqlite",
@@ -383,6 +424,7 @@ with tempfile.TemporaryDirectory(prefix="ion-anthropic-") as temporary:
         )
         assert budget[-1] == {"type": "run_end", "status": "completed"}, budget
         assert reasoning_requests[-1]["thinking"] == {"type": "enabled", "budget_tokens": 2048}, reasoning_requests[-1]
+        print("Anthropic effort: xhigh/max, exact signed continuation across effort and reopen, Off and legacy budget behavior: OK", flush=True)
     finally:
         server.shutdown()
         server.server_close()
