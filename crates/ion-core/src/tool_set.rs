@@ -1,7 +1,7 @@
 //! Model-visible tool definitions, semantic presentation, and request-bound routing.
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use ion_ai::{BoxFuture, ToolCall, ToolSpec};
@@ -184,6 +184,76 @@ pub trait ToolSource: Send + Sync {
     }
 }
 
+struct CachedSchema {
+    source: Value,
+    compiled: Arc<Result<crate::json_schema::CompiledSchema, String>>,
+}
+
+/// Bounded per-`ToolSet` compiled schema cache. Entries are keyed by tool name
+/// and verified by exact JSON Schema equality; replaced on every catalog build
+/// so removed tools never accumulate.
+#[derive(Default)]
+struct SchemaCache(Mutex<HashMap<String, CachedSchema>>);
+
+impl SchemaCache {
+    fn compile(
+        &self,
+        name: &str,
+        source: &Value,
+    ) -> (
+        Arc<Result<crate::json_schema::CompiledSchema, String>>,
+        bool,
+    ) {
+        if let Some(compiled) = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(name)
+            .filter(|entry| entry.source == *source)
+            .map(|entry| Arc::clone(&entry.compiled))
+        {
+            return (compiled, true);
+        }
+        (
+            Arc::new(crate::json_schema::CompiledSchema::compile(source)),
+            false,
+        )
+    }
+
+    fn sync_if_changed(&self, entries: &[RoutedTool], any_miss: bool) {
+        let mut cache = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !any_miss && cache.len() == entries.len() {
+            return;
+        }
+        *cache = entries
+            .iter()
+            .map(|entry| {
+                (
+                    entry.definition.spec.name.clone(),
+                    CachedSchema {
+                        source: entry.definition.spec.input_schema.clone(),
+                        compiled: Arc::clone(&entry.input_schema),
+                    },
+                )
+            })
+            .collect();
+    }
+}
+
+fn tool_search_schema() -> Arc<Result<crate::json_schema::CompiledSchema, String>> {
+    static SCHEMA: OnceLock<Arc<Result<crate::json_schema::CompiledSchema, String>>> =
+        OnceLock::new();
+    Arc::clone(SCHEMA.get_or_init(|| {
+        let definition = tool_search_definition();
+        Arc::new(crate::json_schema::CompiledSchema::compile(
+            &definition.spec.input_schema,
+        ))
+    }))
+}
+
 /// Composition owner for independent sources. Later registrations replace
 /// earlier ones with the same model-visible name.
 pub struct ToolSet {
@@ -192,6 +262,7 @@ pub struct ToolSet {
     policy: Option<Arc<dyn crate::ToolPolicy>>,
     history: bool,
     selection: ToolSelection,
+    schemas: Arc<SchemaCache>,
 }
 
 impl ToolSet {
@@ -202,6 +273,7 @@ impl ToolSet {
             policy: None,
             history: false,
             selection: ToolSelection::all(),
+            schemas: Arc::new(SchemaCache::default()),
         }
     }
 
@@ -276,15 +348,23 @@ impl ToolSet {
             .map(|pending| PendingDiscovery {
                 pending,
                 sources: self.sources.clone(),
+                schemas: Arc::clone(&self.schemas),
             });
         let (registrations, mut positions) =
             Self::source_registrations(&self.sources, &self.selection);
+        let mut any_miss = false;
         let mut entries = registrations
             .into_iter()
             .map(|registration| {
-                RoutedTool::new(
+                let (compiled, hit) = self.schemas.compile(
+                    &registration.definition.spec.name,
+                    &registration.definition.spec.input_schema,
+                );
+                any_miss |= !hit;
+                RoutedTool::with_schema(
                     registration.definition,
                     ToolRoute::Executor(registration.executor),
+                    compiled,
                 )
             })
             .collect::<Vec<_>>();
@@ -292,8 +372,13 @@ impl ToolSet {
             let definition = crate::composition::definition(*limits);
             let name = definition.spec.name.clone();
             if self.selection.allows(&name) {
-                let routed =
-                    RoutedTool::new(definition, ToolRoute::Composition(runtime.clone(), *limits));
+                let (compiled, hit) = self.schemas.compile(&name, &definition.spec.input_schema);
+                any_miss |= !hit;
+                let routed = RoutedTool::with_schema(
+                    definition,
+                    ToolRoute::Composition(runtime.clone(), *limits),
+                    compiled,
+                );
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
                     None => {
@@ -307,7 +392,9 @@ impl ToolSet {
             let definition = crate::session::history::definition();
             let name = definition.spec.name.clone();
             if self.selection.allows(&name) {
-                let routed = RoutedTool::new(definition, ToolRoute::History);
+                let (compiled, hit) = self.schemas.compile(&name, &definition.spec.input_schema);
+                any_miss |= !hit;
+                let routed = RoutedTool::with_schema(definition, ToolRoute::History, compiled);
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
                     None => {
@@ -317,6 +404,7 @@ impl ToolSet {
                 }
             }
         }
+        self.schemas.sync_if_changed(&entries, any_miss);
         ToolCatalog::from_entries(
             entries,
             previous,
@@ -354,6 +442,7 @@ impl ToolSet {
 struct PendingDiscovery {
     pending: Vec<Arc<dyn ToolSource>>,
     sources: Vec<Arc<dyn ToolSource>>,
+    schemas: Arc<SchemaCache>,
 }
 
 #[derive(Clone)]
@@ -374,10 +463,11 @@ struct RoutedTool {
 }
 
 impl RoutedTool {
-    fn new(definition: ToolDefinition, route: ToolRoute) -> Self {
-        let input_schema = Arc::new(crate::json_schema::CompiledSchema::compile(
-            &definition.spec.input_schema,
-        ));
+    fn with_schema(
+        definition: ToolDefinition,
+        route: ToolRoute,
+        input_schema: Arc<Result<crate::json_schema::CompiledSchema, String>>,
+    ) -> Self {
         Self {
             definition,
             route,
@@ -436,7 +526,8 @@ impl ToolCatalog {
         {
             let definition = tool_search_definition();
             let name = definition.spec.name.clone();
-            let routed = RoutedTool::new(definition, ToolRoute::Search);
+            let routed =
+                RoutedTool::with_schema(definition, ToolRoute::Search, tool_search_schema());
             match positions.get(&name).copied() {
                 Some(index) => entries[index] = routed,
                 None => {
@@ -797,10 +888,11 @@ impl ToolCatalog {
                 &query,
                 fresh.iter().filter(|definition| {
                     not_loaded(definition)
-                        && crate::json_schema::CompiledSchema::compile(
-                            &definition.spec.input_schema,
-                        )
-                        .is_ok()
+                        && discovery
+                            .schemas
+                            .compile(&definition.spec.name, &definition.spec.input_schema)
+                            .0
+                            .is_ok()
                 }),
                 limit,
             )
@@ -1360,5 +1452,37 @@ mod tests {
         });
         assert_eq!(activity.kind, ToolActivityKind::Read);
         assert_eq!(activity.subject.as_deref(), Some("src/main.rs"));
+    }
+
+    #[test]
+    fn compiled_schema_cache_reuses_unchanged_recompiles_changes_and_prunes_removed() {
+        let source = Arc::new(ChangingSchema(AtomicBool::new(false)));
+        let host = Arc::new(ChangingHost(AtomicBool::new(false)));
+        let tools = ToolSet::new([
+            source.clone() as Arc<dyn ToolSource>,
+            host.clone() as Arc<dyn ToolSource>,
+        ]);
+        let first = tools.snapshot();
+        let second = tools.snapshot();
+        assert!(Arc::ptr_eq(
+            &first.entry("versioned").unwrap().input_schema,
+            &second.entry("versioned").unwrap().input_schema,
+        ));
+        assert!(Arc::ptr_eq(
+            &first.entry(TOOL_SEARCH_NAME).unwrap().input_schema,
+            &second.entry(TOOL_SEARCH_NAME).unwrap().input_schema,
+        ));
+
+        source.0.store(true, Ordering::Release);
+        host.0.store(true, Ordering::Release);
+        let third = tools.snapshot();
+        assert!(!Arc::ptr_eq(
+            &first.entry("versioned").unwrap().input_schema,
+            &third.entry("versioned").unwrap().input_schema,
+        ));
+        let cached = tools.schemas.0.lock().unwrap();
+        assert!(cached.contains_key("versioned"));
+        assert!(cached.contains_key("new"));
+        assert!(!cached.contains_key("read"));
     }
 }

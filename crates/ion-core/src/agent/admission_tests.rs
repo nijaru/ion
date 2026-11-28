@@ -54,8 +54,11 @@ impl ModelService for PreflightService {
         self.scripts.validate_access()
     }
 
-    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
-        self.scripts.context_encoding_overhead(request)
+    fn context_encoding_overhead(
+        &self,
+        context: ion_ai::ModelContextEncoding<'_>,
+    ) -> Result<usize, ProviderError> {
+        self.scripts.context_encoding_overhead(context)
     }
 
     fn validate_controls(

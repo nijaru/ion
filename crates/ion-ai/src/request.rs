@@ -1,6 +1,56 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{GenerationControls, Message, ModelRoute, ToolSpec};
+use crate::{GenerationControls, Message, ModelRoute, Role, ToolSpec};
+
+/// Borrowed transcript role sequence for context-encoding planning without
+/// cloning message payloads.
+#[derive(Clone, Copy)]
+pub enum MessageRoles<'a> {
+    Messages(&'a [Message]),
+    Roles(&'a [Role]),
+}
+
+impl MessageRoles<'_> {
+    pub fn get(&self, index: usize) -> Option<Role> {
+        match self {
+            Self::Messages(messages) => messages.get(index).map(|message| message.role),
+            Self::Roles(roles) => roles.get(index).copied(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Messages(messages) => messages.len(),
+            Self::Roles(roles) => roles.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Borrowed planning view of model context evolution for adapter overhead checks.
+#[derive(Clone, Copy)]
+pub struct ModelContextEncoding<'a> {
+    pub instructions: Option<&'a str>,
+    pub tools: &'a [ToolSpec],
+    pub context_timeline: Option<&'a ModelContextTimeline>,
+    pub controls: &'a GenerationControls,
+    pub message_roles: MessageRoles<'a>,
+}
+
+impl<'a> ModelContextEncoding<'a> {
+    pub fn from_request(request: &'a ModelRequest) -> Self {
+        Self {
+            instructions: request.instructions.as_deref(),
+            tools: &request.tools,
+            context_timeline: request.context_timeline.as_ref(),
+            controls: &request.controls,
+            message_roles: MessageRoles::Messages(&request.messages),
+        }
+    }
+}
 
 /// Provider-neutral model-visible state associated with one request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

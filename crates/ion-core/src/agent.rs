@@ -168,7 +168,11 @@ impl Agent {
         session: &Session,
         instructions: &str,
     ) -> Result<crate::ContextReport, AgentError> {
-        self.report_context(session, instructions, session.request_basis(&self.model)?)
+        self.report_context(
+            session,
+            instructions,
+            session.context_report_basis(&self.model)?,
+        )
     }
 
     /// Inspect committed Session accounting and the retained model context at
@@ -185,7 +189,7 @@ impl Agent {
         ),
         SessionError,
     > {
-        let (usage, basis) = session.usage_and_request_basis(&self.model)?;
+        let (usage, basis) = session.usage_and_context_report_basis(&self.model)?;
         let context = basis
             .map_err(AgentError::from)
             .and_then(|basis| self.report_context(session, instructions, basis));
@@ -196,20 +200,16 @@ impl Agent {
         &self,
         session: &Session,
         instructions: &str,
-        basis: crate::session::RequestBasis,
+        basis: crate::session::ContextReportBasis,
     ) -> Result<crate::ContextReport, AgentError> {
-        let revision = basis.revision;
-        let turn = basis.turn;
-        let prepared = crate::request::PreparedRequest::new(
+        crate::request::PreparedRequest::context_report(
             session,
             basis,
             &self.service,
             &self.tools,
             ion_ai::ModelRouteReason::UserRequest,
             self.request_settings(instructions),
-            None,
-        )?;
-        Ok(prepared.report(revision, turn))
+        )
     }
 
     /// Validate a restored or prospective preference for both coding and summary

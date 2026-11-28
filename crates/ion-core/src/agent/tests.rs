@@ -635,9 +635,9 @@ async fn unfinished_cache_refresh_retains_usage_when_tool_finishes_or_stop_joins
 
         fn context_encoding_overhead(
             &self,
-            request: &ModelRequest,
+            context: ion_ai::ModelContextEncoding<'_>,
         ) -> Result<usize, ProviderError> {
-            self.inner.context_encoding_overhead(request)
+            self.inner.context_encoding_overhead(context)
         }
 
         fn stream<'a>(
@@ -750,8 +750,11 @@ impl ModelService for DelayedInitialResponse {
         self.inner.validate_access()
     }
 
-    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
-        self.inner.context_encoding_overhead(request)
+    fn context_encoding_overhead(
+        &self,
+        context: ion_ai::ModelContextEncoding<'_>,
+    ) -> Result<usize, ProviderError> {
+        self.inner.context_encoding_overhead(context)
     }
 
     fn stream<'a>(
@@ -3644,8 +3647,11 @@ impl ModelService for ReasoningScripts {
         self.0.validate_access()
     }
 
-    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
-        self.0.context_encoding_overhead(request)
+    fn context_encoding_overhead(
+        &self,
+        context: ion_ai::ModelContextEncoding<'_>,
+    ) -> Result<usize, ProviderError> {
+        self.0.context_encoding_overhead(context)
     }
 
     fn validate_controls(
@@ -4844,9 +4850,9 @@ async fn output_room_planning_is_one_shot_and_discards_a_growing_summary() {
 
         fn context_encoding_overhead(
             &self,
-            request: &ModelRequest,
+            context: ion_ai::ModelContextEncoding<'_>,
         ) -> Result<usize, ProviderError> {
-            self.service.context_encoding_overhead(request)
+            self.service.context_encoding_overhead(context)
         }
 
         fn stream<'a>(

@@ -107,7 +107,9 @@ fn native_context_overhead_matches_wire_delta_and_dispatch_eligibility() {
                 )
                 .unwrap();
                 assert_eq!(
-                    service.context_encoding_overhead(&request).unwrap(),
+                    service
+                        .context_encoding_overhead(ModelContextEncoding::from_request(&request))
+                        .unwrap(),
                     if enabled { expected } else { 0 }
                 );
             }
@@ -130,7 +132,15 @@ fn context_measurement_leaves_signed_replay_validation_at_issuance() {
         Message::user_input("continue".into(), []),
     ]);
     request.context_timeline.as_mut().unwrap().changes[0].after_message = 3;
-    assert!(anthropic_context_encoding_overhead(&request, true, true).unwrap() > 0);
+    assert!(
+        anthropic_context_encoding_overhead(
+            ModelContextEncoding::from_request(&request),
+            true,
+            true
+        )
+        .unwrap()
+            > 0
+    );
     assert_eq!(
         anthropic_body_for_route(&request, true, true)
             .unwrap_err()
@@ -144,8 +154,11 @@ struct NativeBoundary {
 }
 
 impl ModelService for NativeBoundary {
-    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
-        anthropic_context_encoding_overhead(request, true, true)
+    fn context_encoding_overhead(
+        &self,
+        context: ModelContextEncoding<'_>,
+    ) -> Result<usize, ProviderError> {
+        anthropic_context_encoding_overhead(context, true, true)
     }
 
     fn stream<'a>(

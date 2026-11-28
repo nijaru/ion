@@ -965,3 +965,82 @@ fn output_budget_saturates_extreme_inputs() {
     assert_eq!(limits.output_budget(0, u64::MAX, 100), None);
     assert_eq!(limits.output_budget(0, u64::MAX - 100, 100), None);
 }
+
+#[tokio::test]
+async fn passive_context_report_matches_request_plan_with_images_and_replay() {
+    let root = root("passive-image-parity");
+    let session = Arc::new(Session::create(root.join("session.db"), None).unwrap());
+    let service = Arc::new(ScriptedModelService::new([
+        replay_response("seen image", Usage::known(2_000, 100)),
+        text_response("follow up", Usage::unknown()),
+    ]));
+    let limits = AgentLimits {
+        context_window_tokens: Some(50_000),
+        max_output_tokens: 4_000,
+        image_input: true,
+        ..limits()
+    };
+    let agent = configured(service.clone(), Arc::new(Echo), model(), limits);
+    agent
+        .submit_message(
+            session.clone(),
+            Message {
+                role: Role::User,
+                content: vec![
+                    Content::Text("inspect".into()),
+                    Content::Image(tiny_image()),
+                ],
+                provider_replay: None,
+            },
+            "base".into(),
+            CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    session.begin_turn("follow up".into(), model()).unwrap();
+
+    let report = agent.context_report(&session, "base").unwrap();
+    let model = model();
+    let tools = ToolSet::new([Arc::new(Echo) as Arc<dyn ToolSource>]);
+    let model_service: Arc<dyn ion_ai::ModelService> = service.clone();
+    let plan = RequestPlan::new(
+        &session,
+        session.request_basis(&model).unwrap(),
+        &model_service,
+        &tools,
+        ModelRouteReason::UserRequest,
+        RequestSettings {
+            model: &model,
+            instructions: "base",
+            limits,
+            authority: None,
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(report.basis, ContextEstimateBasis::Calibrated);
+    assert_eq!(report.capacity.output_tokens(), plan.output_budget());
+    assert_eq!(
+        report.retained_request_bytes,
+        RequestMeasurement::measure(plan.request(), None, 0)
+            .unwrap()
+            .retained_bytes()
+    );
+
+    let no_images = configured(
+        service,
+        Arc::new(Echo),
+        model,
+        AgentLimits {
+            image_input: false,
+            ..limits
+        },
+    );
+    assert!(matches!(
+        no_images.context_report(&session, "base"),
+        Err(AgentError::ImagesUnsupported)
+    ));
+    drop(session);
+    std::fs::remove_dir_all(root).unwrap();
+}

@@ -4,8 +4,9 @@
 //! signatures or contain provider-only material. It is not additional neutral
 //! prompt text. These views estimate that prompt; they are not wire-size or
 //! provider-token counters and never alter the retained request or history.
-use ion_ai::{Content, Message, Role};
+use ion_ai::{Content, ImageContent, Message, Role};
 use serde::{Serialize, Serializer};
+use sha2::{Digest, Sha256};
 
 #[derive(Serialize)]
 pub(crate) struct NeutralMessage<'a> {
@@ -30,12 +31,62 @@ impl<'a> From<&'a Message> for NeutralMessage<'a> {
     }
 }
 
-/// Reusable byte counts, not payload copies. Replay may be omitted at a
-/// route/epoch boundary without remeasuring the visible content.
+/// Cached image accounting for one immutable projected message.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct MessageImages {
+    pub(crate) count: u64,
+    pub(crate) encoded_bytes: usize,
+    pub(crate) digest: Option<[u8; 32]>,
+}
+
+impl MessageImages {
+    pub(crate) fn measure(message: &Message) -> Self {
+        let mut encoded_bytes = 0usize;
+        let mut count = 0u64;
+        let mut identity: Option<Sha256> = None;
+        for part in &message.content {
+            match part {
+                Content::Image(image) => {
+                    hash_image(identity.get_or_insert_with(Sha256::new), b'u', image);
+                    encoded_bytes = encoded_bytes.saturating_add(image.data().len());
+                    count = count.saturating_add(1);
+                }
+                Content::ToolResult(result) => {
+                    for image in &result.images {
+                        hash_image(identity.get_or_insert_with(Sha256::new), b't', image);
+                        encoded_bytes = encoded_bytes.saturating_add(image.data().len());
+                        count = count.saturating_add(1);
+                    }
+                }
+                Content::Text(_) | Content::Thinking(_) | Content::ToolCall(_) => {}
+            }
+        }
+        Self {
+            count,
+            encoded_bytes,
+            digest: identity.map(|hasher| hasher.finalize().into()),
+        }
+    }
+}
+
+fn hash_image(identity: &mut Sha256, source: u8, image: &ImageContent) {
+    identity.update([source]);
+    hash_field(identity, image.mime_type().as_str().as_bytes());
+    hash_field(identity, image.data().as_bytes());
+}
+
+fn hash_field(identity: &mut Sha256, value: &[u8]) {
+    identity.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
+    identity.update(value);
+}
+
+/// Reusable byte counts and image accounting, not payload copies. Replay may be
+/// omitted at a route/epoch boundary without remeasuring the visible content.
 #[derive(Clone, Copy)]
 pub(crate) struct MessageBytes {
     pub(crate) neutral: usize,
     pub(crate) replay: Option<usize>,
+    pub(crate) images: MessageImages,
 }
 
 impl MessageBytes {
@@ -47,6 +98,7 @@ impl MessageBytes {
                 .as_ref()
                 .map(crate::json_size::encoded_len)
                 .transpose()?,
+            images: MessageImages::measure(message),
         })
     }
 

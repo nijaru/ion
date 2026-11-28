@@ -136,7 +136,6 @@ pub(crate) struct CommittedInputEntries {
 /// A single committed projection; catalogue and service preparation must happen
 /// after releasing the store lock.
 pub(crate) struct RequestBasis {
-    pub revision: u64,
     pub turn: Option<u64>,
     pub messages: Vec<Message>,
     pub message_bytes: Vec<crate::prompt_size::MessageBytes>,
@@ -148,41 +147,71 @@ pub(crate) struct RequestBasis {
     context_changes: Option<Vec<ModelContextChange>>,
 }
 
+/// Passive capacity-planning projection that avoids cloning message payloads.
+pub(crate) struct ContextReportBasis {
+    pub revision: u64,
+    pub turn: Option<u64>,
+    pub roles: Vec<Role>,
+    pub message_bytes: Vec<crate::prompt_size::MessageBytes>,
+    pub previous: Option<ModelContextSnapshot>,
+    pub reasoning: Reasoning,
+    pub calibration: Option<RequestCalibration>,
+    context_changes: Option<Vec<ModelContextChange>>,
+}
+
+fn timeline_from_roles(
+    context_changes: Option<&[ModelContextChange]>,
+    roles: ion_ai::MessageRoles<'_>,
+    current: &ModelContextSnapshot,
+) -> Option<ModelContextTimeline> {
+    let changes = context_changes?;
+    let current = model_context_state(current);
+    let Some((first, rest)) = changes.split_first() else {
+        return Some(ModelContextTimeline {
+            initial: current,
+            changes: Vec::new(),
+        });
+    };
+    let mut changes = rest.to_vec();
+    // Per-result activation is durable immediately, but future exposure
+    // must not split sibling results or rewrite their signed prefix.
+    let mut boundary = 0;
+    for change in &mut changes {
+        boundary = boundary.max(change.after_message);
+        while roles.get(boundary) == Some(Role::Tool) {
+            boundary += 1;
+        }
+        change.after_message = boundary;
+    }
+    if changes.last().unwrap_or(first).context != current {
+        changes.push(ModelContextChange {
+            after_message: roles.len(),
+            context: current,
+        });
+    }
+    Some(ModelContextTimeline {
+        initial: first.context.clone(),
+        changes,
+    })
+}
+
 impl RequestBasis {
     pub fn timeline(&self, current: &ModelContextSnapshot) -> Option<ModelContextTimeline> {
-        let changes = self.context_changes.as_ref()?;
-        let current = model_context_state(current);
-        let Some((first, rest)) = changes.split_first() else {
-            return Some(ModelContextTimeline {
-                initial: current,
-                changes: Vec::new(),
-            });
-        };
-        let mut changes = rest.to_vec();
-        // Per-result activation is durable immediately, but future exposure
-        // must not split sibling results or rewrite their signed prefix.
-        let mut boundary = 0;
-        for change in &mut changes {
-            boundary = boundary.max(change.after_message);
-            while self
-                .messages
-                .get(boundary)
-                .is_some_and(|message| message.role == Role::Tool)
-            {
-                boundary += 1;
-            }
-            change.after_message = boundary;
-        }
-        if changes.last().unwrap_or(first).context != current {
-            changes.push(ModelContextChange {
-                after_message: self.messages.len(),
-                context: current,
-            });
-        }
-        Some(ModelContextTimeline {
-            initial: first.context.clone(),
-            changes,
-        })
+        timeline_from_roles(
+            self.context_changes.as_deref(),
+            ion_ai::MessageRoles::Messages(&self.messages),
+            current,
+        )
+    }
+}
+
+impl ContextReportBasis {
+    pub fn timeline(&self, current: &ModelContextSnapshot) -> Option<ModelContextTimeline> {
+        timeline_from_roles(
+            self.context_changes.as_deref(),
+            ion_ai::MessageRoles::Roles(&self.roles),
+            current,
+        )
     }
 }
 
@@ -1205,13 +1234,21 @@ impl Session {
         Self::request_basis_at(&store.working, model)
     }
 
-    pub(crate) fn usage_and_request_basis(
+    pub(crate) fn context_report_basis(
+        &self,
+        model: &ModelRef,
+    ) -> Result<ContextReportBasis, SessionError> {
+        let store = self.lock_store()?;
+        Self::context_report_basis_at(&store.working, model)
+    }
+
+    pub(crate) fn usage_and_context_report_basis(
         &self,
         model: &ModelRef,
     ) -> Result<
         (
             crate::SessionUsageSnapshot,
-            Result<RequestBasis, SessionError>,
+            Result<ContextReportBasis, SessionError>,
         ),
         SessionError,
     > {
@@ -1230,7 +1267,7 @@ impl Session {
             compacted_through: state.compaction.as_ref().map(|(through, _)| *through),
             usage: working.context_index.usage.report(),
         };
-        Ok((usage, Self::request_basis_at(working, model)))
+        Ok((usage, Self::context_report_basis_at(working, model)))
     }
 
     fn request_basis_at(
@@ -1240,7 +1277,6 @@ impl Session {
         let state = &working.state;
         let (messages, message_bytes) = context::request_projection(working, model)?;
         Ok(RequestBasis {
-            revision: state.sequence,
             turn: state.active,
             messages,
             message_bytes,
@@ -1248,6 +1284,27 @@ impl Session {
             reasoning: state.reasoning,
             assistant_seen: state.assistant_seen_in_turn,
             prefix_bound: state.prefix_bound_in_turn,
+            calibration: working.calibration.clone(),
+            context_changes: (state.compaction.is_none()
+                && state.replay_epoch_start == 0
+                && state.last_effective_model.as_ref() == Some(model))
+            .then(|| working.context_changes.clone()),
+        })
+    }
+
+    fn context_report_basis_at(
+        working: &WorkingJournal,
+        model: &ModelRef,
+    ) -> Result<ContextReportBasis, SessionError> {
+        let state = &working.state;
+        let (roles, message_bytes) = context::report_projection(working, model)?;
+        Ok(ContextReportBasis {
+            revision: state.sequence,
+            turn: state.active,
+            roles,
+            message_bytes,
+            previous: state.last_context.clone(),
+            reasoning: state.reasoning,
             calibration: working.calibration.clone(),
             context_changes: (state.compaction.is_none()
                 && state.replay_epoch_start == 0

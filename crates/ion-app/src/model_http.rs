@@ -8,8 +8,8 @@ use std::{
 use async_stream::try_stream;
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRequest, ModelResponse,
-    ModelService, ModelStream, ModelStreamEvent, PromptCacheIntent, ProviderError,
+    BoxFuture, Content, IncompleteReason, Message, ModelContextEncoding, ModelRequest,
+    ModelResponse, ModelService, ModelStream, ModelStreamEvent, PromptCacheIntent, ProviderError,
     ProviderErrorKind, ProviderReplay, Reasoning, ResponseTermination, Role, ToolCall, ToolChoice,
     ToolSpec, Usage,
 };
@@ -39,10 +39,12 @@ use anthropic::AnthropicState;
 #[cfg(test)]
 use anthropic::anthropic_replay_notices;
 #[cfg(test)]
-use anthropic_request::anthropic_body;
 use anthropic_request::{
-    anthropic_body_for_route, anthropic_body_prefix_digest, anthropic_body_uses_inline_tools,
-    anthropic_context_encoding_overhead, managed_anthropic_thinking,
+    anthropic_body, anthropic_body_for_route, anthropic_body_prefix_digest,
+    anthropic_body_uses_inline_tools,
+};
+use anthropic_request::{
+    anthropic_context_encoding_overhead, anthropic_request_for_route, managed_anthropic_thinking,
 };
 use chat::ChatState;
 use chat_request::chat_body;
@@ -287,9 +289,12 @@ impl ModelService for HttpModelService {
         control_fields(model, controls, self.wire, native).map(|_| ())
     }
 
-    fn context_encoding_overhead(&self, request: &ModelRequest) -> Result<usize, ProviderError> {
+    fn context_encoding_overhead(
+        &self,
+        context: ModelContextEncoding<'_>,
+    ) -> Result<usize, ProviderError> {
         anthropic_context_encoding_overhead(
-            request,
+            context,
             self.native_anthropic(),
             self.capabilities.context_mutation.inline_tool_definitions,
         )
@@ -301,13 +306,20 @@ impl ModelService for HttpModelService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let native_anthropic = self.native_anthropic();
+            let mut inline_tools = false;
+            let mut anthropic_prefix = None;
             let mut body = match self.wire {
                 HttpWire::OpenAiResponses => responses_body(request, &self.endpoint)?,
-                HttpWire::AnthropicMessages => anthropic_body_for_route(
-                    request,
-                    native_anthropic,
-                    self.capabilities.context_mutation.inline_tool_definitions,
-                )?,
+                HttpWire::AnthropicMessages => {
+                    let prepared = anthropic_request_for_route(
+                        request,
+                        native_anthropic,
+                        self.capabilities.context_mutation.inline_tool_definitions,
+                    )?;
+                    inline_tools = prepared.inline_tools;
+                    anthropic_prefix = Some(prepared.prefix_digest);
+                    prepared.body
+                }
                 _ => chat_body(request, self.wire)?,
             };
             if native_anthropic
@@ -316,12 +328,11 @@ impl ModelService for HttpModelService {
             {
                 body["cache_control"] = json!({"type":"ephemeral"});
             }
-            let inline_tools = anthropic_body_uses_inline_tools(&body);
             let mut decoder = match self.wire {
                 HttpWire::OpenAiResponses => Decoder::Responses(ResponsesState::default()),
-                HttpWire::AnthropicMessages => {
-                    Decoder::Anthropic(AnthropicState::new(anthropic_body_prefix_digest(&body)?))
-                }
+                HttpWire::AnthropicMessages => Decoder::Anthropic(AnthropicState::new(
+                    anthropic_prefix.expect("Anthropic request supplies prefix digest"),
+                )),
                 _ => Decoder::Chat(ChatState::new(self.wire)),
             };
             let credential = self.credential_header().await?;

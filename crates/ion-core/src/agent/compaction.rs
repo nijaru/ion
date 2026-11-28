@@ -156,7 +156,9 @@ impl Agent {
                 prompt_cache: ion_ai::PromptCacheIntent::Default,
                 controls: self.limits.controls(reasoning, false),
             };
-            let context_overhead = self.service.context_encoding_overhead(&request)?;
+            let context_overhead = self
+                .service
+                .context_encoding_overhead(ion_ai::ModelContextEncoding::from_request(&request))?;
             let Some(available) =
                 self.limits
                     .request_output_budget(&request, output_tokens, context_overhead)?

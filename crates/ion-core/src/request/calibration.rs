@@ -5,10 +5,15 @@
 //! by that representation. Instead retain the last known input + assistant output
 //! baseline and estimate only messages appended after that assistant, as Pi does.
 //! Byte limits and the replay-free fallback remain independent.
-use std::sync::{Arc, Weak};
+use std::{
+    io::{self, Write},
+    sync::{Arc, Weak},
+};
 
+#[cfg(test)]
+use ion_ai::Content;
 use ion_ai::{
-    Content, GenerationControls, Message, ModelRef, ModelRequest, ModelRoute, ModelService,
+    GenerationControls, Message, ModelRef, ModelRequest, ModelRoute, ModelService,
     PromptCacheIntent, Reasoning, ToolSpec, Usage,
 };
 use serde::Serialize;
@@ -19,6 +24,30 @@ use crate::prompt_size::NeutralMessages;
 use crate::{json_size::encoded_len, prompt_size::MessageBytes};
 
 const IMAGE_INPUT_ALLOWANCE_TOKENS: u64 = 16_384;
+
+/// Borrowed non-message fields of one candidate request for capacity measurement.
+#[derive(Clone, Copy)]
+pub(crate) struct RequestHead<'a> {
+    pub route: &'a ModelRoute,
+    pub provider_session_id: Option<&'a str>,
+    pub instructions: Option<&'a str>,
+    pub tools: &'a [ToolSpec],
+    pub prompt_cache: PromptCacheIntent,
+    pub controls: &'a GenerationControls,
+}
+
+impl<'a> RequestHead<'a> {
+    pub(crate) fn from_request(request: &'a ModelRequest) -> Self {
+        Self {
+            route: &request.route,
+            provider_session_id: request.provider_session_id.as_deref(),
+            instructions: request.instructions.as_deref(),
+            tools: &request.tools,
+            prompt_cache: request.prompt_cache,
+            controls: &request.controls,
+        }
+    }
+}
 
 /// Byte-bound surrogate and input-token estimates for one frozen request.
 #[derive(Clone)]
@@ -42,27 +71,27 @@ impl RequestMeasurement {
             .iter()
             .map(MessageBytes::measure)
             .collect::<Result<Vec<_>, _>>()?;
-        Self::from_message_bytes(request, &messages, calibration, context_overhead)
+        Self::from_parts(
+            RequestHead::from_request(request),
+            &messages,
+            calibration,
+            context_overhead,
+        )
     }
 
-    pub(crate) fn from_message_bytes(
-        request: &ModelRequest,
+    pub(crate) fn from_parts(
+        head: RequestHead<'_>,
         messages: &[MessageBytes],
         calibration: Option<&RequestCalibration>,
         context_overhead: usize,
     ) -> Result<Self, serde_json::Error> {
-        assert_eq!(
-            request.messages.len(),
-            messages.len(),
-            "byte counts belong to the frozen request"
-        );
-        let fixed_bytes = encoded_len(&LatestRequest::new(request, &[] as &[Message]))?;
+        let fixed_bytes = encoded_len(&LatestRequest::from_head(head, &[] as &[Message]))?;
         let retained_bytes =
             fixed_bytes.saturating_add(array_payload_bytes(messages, MessageBytes::retained));
         let neutral_bytes =
             fixed_bytes.saturating_add(array_payload_bytes(messages, |bytes| bytes.neutral));
         let fixed_input_tokens = bytes_to_tokens(fixed_bytes);
-        let images = measure_images(&request.messages);
+        let images = measure_images_from_bytes(messages);
         let fallback_input_tokens = bytes_to_tokens(
             neutral_bytes
                 .saturating_sub(images.encoded_bytes)
@@ -87,7 +116,7 @@ impl RequestMeasurement {
             retained_bytes: retained_bytes.saturating_add(context_overhead),
             fallback_input_tokens,
             fixed_input_tokens,
-            message_count: request.messages.len(),
+            message_count: messages.len(),
             image_identity: images.identity,
             trailing_input_tokens,
         })
@@ -125,25 +154,47 @@ pub(crate) struct RequestScope {
 }
 
 impl RequestScope {
+    #[cfg(test)]
     pub(crate) fn new(
         service: &Arc<dyn ModelService>,
         request: &ModelRequest,
     ) -> Result<Self, serde_json::Error> {
+        Self::from_head(service, RequestHead::from_request(request))
+    }
+
+    pub(crate) fn from_head(
+        service: &Arc<dyn ModelService>,
+        head: RequestHead<'_>,
+    ) -> Result<Self, serde_json::Error> {
         #[derive(Serialize)]
         struct Context<'a> {
-            instructions: &'a Option<String>,
+            instructions: Option<&'a str>,
             tools: &'a [ToolSpec],
             reasoning: Reasoning,
         }
-        let bytes = serde_json::to_vec(&Context {
-            instructions: &request.instructions,
-            tools: &request.tools,
-            reasoning: request.controls.reasoning,
-        })?;
+        struct Sha256Writer(Sha256);
+        impl Write for Sha256Writer {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.update(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = Sha256Writer(Sha256::new());
+        serde_json::to_writer(
+            &mut writer,
+            &Context {
+                instructions: head.instructions,
+                tools: head.tools,
+                reasoning: head.controls.reasoning,
+            },
+        )?;
         Ok(Self {
             service: Arc::downgrade(service),
-            model: request.route.effective.clone(),
-            context: Sha256::digest(bytes).into(),
+            model: head.route.effective.clone(),
+            context: writer.0.finalize().into(),
         })
     }
 
@@ -213,37 +264,32 @@ impl RequestCalibration {
 #[derive(Serialize)]
 struct LatestRequest<'a, M> {
     route: &'a ModelRoute,
-    provider_session_id: &'a Option<String>,
-    instructions: &'a Option<String>,
+    provider_session_id: Option<&'a str>,
+    instructions: Option<&'a str>,
     messages: M,
     tools: &'a [ToolSpec],
     context_timeline: Option<()>,
-    prompt_cache: &'a PromptCacheIntent,
+    prompt_cache: PromptCacheIntent,
     controls: &'a GenerationControls,
 }
 
 impl<'a, M> LatestRequest<'a, M> {
-    fn new(request: &'a ModelRequest, messages: M) -> Self {
-        let ModelRequest {
-            route,
-            provider_session_id,
-            instructions,
-            messages: _,
-            tools,
-            context_timeline: _,
-            prompt_cache,
-            controls,
-        } = request;
+    fn from_head(head: RequestHead<'a>, messages: M) -> Self {
         Self {
-            route,
-            provider_session_id,
-            instructions,
+            route: head.route,
+            provider_session_id: head.provider_session_id,
+            instructions: head.instructions,
             messages,
-            tools,
+            tools: head.tools,
             context_timeline: None,
-            prompt_cache,
-            controls,
+            prompt_cache: head.prompt_cache,
+            controls: head.controls,
         }
+    }
+
+    #[cfg(test)]
+    fn new(request: &'a ModelRequest, messages: M) -> Self {
+        Self::from_head(RequestHead::from_request(request), messages)
     }
 }
 
@@ -253,45 +299,35 @@ struct ImageMeasurement {
     identity: Option<[u8; 32]>,
 }
 
-fn measure_images(messages: &[Message]) -> ImageMeasurement {
+fn measure_images_from_bytes(messages: &[MessageBytes]) -> ImageMeasurement {
     let mut encoded_bytes = 0usize;
     let mut count = 0u64;
-    let mut identity = Sha256::new();
+    let mut identity: Option<Sha256> = None;
     for message in messages {
-        for part in &message.content {
-            match part {
-                Content::Image(image) => {
-                    hash_image(&mut identity, b'u', image);
-                    encoded_bytes = encoded_bytes.saturating_add(image.data().len());
-                    count = count.saturating_add(1);
-                }
-                Content::ToolResult(result) => {
-                    for image in &result.images {
-                        hash_image(&mut identity, b't', image);
-                        encoded_bytes = encoded_bytes.saturating_add(image.data().len());
-                        count = count.saturating_add(1);
-                    }
-                }
-                Content::Text(_) | Content::Thinking(_) | Content::ToolCall(_) => {}
-            }
+        if let Some(digest) = message.images.digest {
+            identity.get_or_insert_with(Sha256::new).update(digest);
+            encoded_bytes = encoded_bytes.saturating_add(message.images.encoded_bytes);
+            count = count.saturating_add(message.images.count);
         }
     }
     ImageMeasurement {
         encoded_bytes,
         count,
-        identity: (count != 0).then(|| identity.finalize().into()),
+        identity: identity.map(|hasher| hasher.finalize().into()),
     }
 }
 
-fn hash_image(identity: &mut Sha256, source: u8, image: &ion_ai::ImageContent) {
-    identity.update([source]);
-    hash_field(identity, image.mime_type().as_str().as_bytes());
-    hash_field(identity, image.data().as_bytes());
-}
-
-fn hash_field(identity: &mut Sha256, value: &[u8]) {
-    identity.update(u64::try_from(value.len()).unwrap_or(u64::MAX).to_le_bytes());
-    identity.update(value);
+#[cfg(test)]
+fn measure_images(messages: &[Message]) -> ImageMeasurement {
+    let bytes = messages
+        .iter()
+        .map(|message| MessageBytes {
+            neutral: 0,
+            replay: None,
+            images: crate::prompt_size::MessageImages::measure(message),
+        })
+        .collect::<Vec<_>>();
+    measure_images_from_bytes(&bytes)
 }
 
 fn bytes_to_tokens(bytes: usize) -> u64 {

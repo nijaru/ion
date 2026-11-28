@@ -1,12 +1,123 @@
 //! Native Anthropic requests, signed prefixes and inline context changes.
+use std::io::{self, Write};
+
 use super::tool_ids::ToolIds;
 use super::transcript::{Part, Transcript, incompatible_replay, provider_replay};
 use super::*;
+use ion_ai::{ModelContextEncoding, ModelContextState};
 use sha2::{Digest, Sha256};
+
+pub(super) struct AnthropicRequestBody {
+    pub(super) body: Value,
+    pub(super) prefix_digest: String,
+    pub(super) inline_tools: bool,
+}
 
 struct AnthropicTimelinePlan<'a> {
     initial: &'a ModelContextState,
     changes: BTreeMap<usize, Vec<Value>>,
+}
+
+struct Sha256Writer<'a>(&'a mut Sha256);
+
+impl Write for Sha256Writer<'_> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn json_encoded_len(value: &impl serde::Serialize) -> Result<usize, ProviderError> {
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self
+                .0
+                .checked_add(bytes.len())
+                .ok_or_else(|| io::Error::other("encoded JSON size overflow"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counter(0);
+    serde_json::to_writer(&mut counter, value)
+        .map_err(|_| invalid("Anthropic context measurement failed"))?;
+    Ok(counter.0)
+}
+
+/// Incremental SHA-256 of canonical compact `{"messages":[...],"system":...,"tools":...}`.
+///
+/// Only messages guaranteed not to merge with a later same-role message are
+/// committed into `hasher`; the final trailing message (at most one) is fed
+/// into a cloned hasher on each digest check.
+struct AnthropicPrefixHasher {
+    hasher: Sha256,
+    hashed_messages: usize,
+    suffix: Vec<u8>,
+}
+
+impl AnthropicPrefixHasher {
+    fn new(system: Option<&Value>, tools: Option<&Value>) -> Result<Self, ProviderError> {
+        #[derive(serde::Serialize)]
+        struct Suffix<'a> {
+            system: Option<&'a Value>,
+            tools: Option<&'a Value>,
+        }
+        let encoded_suffix = serde_json::to_vec(&Suffix { system, tools })
+            .map_err(|_| invalid("cannot encode Anthropic replay prefix"))?;
+        debug_assert_eq!(encoded_suffix.first(), Some(&b'{'));
+        let mut suffix = Vec::with_capacity(encoded_suffix.len() + 1);
+        suffix.extend_from_slice(b"],");
+        suffix.extend_from_slice(&encoded_suffix[1..]);
+
+        let mut hasher = Sha256::new();
+        hasher.update(b"{\"messages\":[");
+        Ok(Self {
+            hasher,
+            hashed_messages: 0,
+            suffix,
+        })
+    }
+
+    fn feed_message(
+        hasher: &mut Sha256,
+        index: usize,
+        message: &Value,
+    ) -> Result<(), ProviderError> {
+        if index > 0 {
+            hasher.update(b",");
+        }
+        serde_json::to_writer(Sha256Writer(hasher), message)
+            .map_err(|_| invalid("cannot encode Anthropic replay prefix"))
+    }
+
+    fn commit(&mut self, messages: &[Value], up_to: usize) -> Result<(), ProviderError> {
+        while self.hashed_messages < up_to {
+            Self::feed_message(
+                &mut self.hasher,
+                self.hashed_messages,
+                &messages[self.hashed_messages],
+            )?;
+            self.hashed_messages += 1;
+        }
+        Ok(())
+    }
+
+    fn digest(&self, messages: &[Value]) -> Result<String, ProviderError> {
+        let mut hasher = self.hasher.clone();
+        for (offset, message) in messages[self.hashed_messages..].iter().enumerate() {
+            Self::feed_message(&mut hasher, self.hashed_messages + offset, message)?;
+        }
+        hasher.update(&self.suffix);
+        Ok(format!("{:x}", hasher.finalize()))
+    }
 }
 
 /// Replay the original assistant block array only when it still projects to
@@ -15,9 +126,8 @@ struct AnthropicTimelinePlan<'a> {
 fn validated_anthropic_replay(
     data: &Value,
     content: &[Content],
-    request: &ModelRequest,
     preceding: &[Value],
-    digest_context: Option<&ModelContextState>,
+    prefix_hasher: &AnthropicPrefixHasher,
 ) -> Result<Vec<Value>, ProviderError> {
     let blocks = data["blocks"]
         .as_array()
@@ -74,17 +184,12 @@ fn validated_anthropic_replay(
             block["type"].as_str(),
             Some("thinking" | "redacted_thinking")
         )
-    }) {
-        let (instructions, tools) = digest_context.map_or(
-            (request.instructions.as_deref(), request.tools.as_slice()),
-            |context| (context.instructions.as_deref(), context.tools.as_slice()),
-        );
-        if anthropic_prefix_digest(instructions, tools, preceding)? != digest {
-            return Err(error(
-                ProviderErrorKind::ReplayContextChanged,
-                "Anthropic signed thinking prefix changed",
-            ));
-        }
+    }) && prefix_hasher.digest(preceding)? != digest
+    {
+        return Err(error(
+            ProviderErrorKind::ReplayContextChanged,
+            "Anthropic signed thinking prefix changed",
+        ));
     }
     Ok(blocks.clone())
 }
@@ -109,8 +214,27 @@ fn anthropic_context_fields(
     (system, tools)
 }
 
+fn anthropic_tool_choice_field(
+    controls: &ion_ai::GenerationControls,
+    has_tools: bool,
+) -> Option<Value> {
+    if !has_tools {
+        return None;
+    }
+    let mut choice = match &controls.tool_choice {
+        ToolChoice::None => json!({"type":"none"}),
+        ToolChoice::Auto => json!({"type":"auto"}),
+        ToolChoice::Required => json!({"type":"any"}),
+        ToolChoice::Named(name) => json!({"type":"tool","name":name}),
+    };
+    if controls.tool_choice != ToolChoice::None {
+        choice["disable_parallel_tool_use"] = json!(!controls.parallel_tool_calls);
+    }
+    Some(choice)
+}
+
 fn anthropic_request_context_fields(
-    request: &ModelRequest,
+    context: ModelContextEncoding<'_>,
     instructions: Option<&str>,
     tools: &[ToolSpec],
 ) -> serde_json::Map<String, Value> {
@@ -123,16 +247,10 @@ fn anthropic_request_context_fields(
         fields.insert("tools".into(), definitions);
     }
     // Historical leading tools still need restrictions after their removal.
-    if !request.tools.is_empty() || !tools.is_empty() {
-        let mut choice = match &request.controls.tool_choice {
-            ToolChoice::None => json!({"type":"none"}),
-            ToolChoice::Auto => json!({"type":"auto"}),
-            ToolChoice::Required => json!({"type":"any"}),
-            ToolChoice::Named(name) => json!({"type":"tool","name":name}),
-        };
-        if request.controls.tool_choice != ToolChoice::None {
-            choice["disable_parallel_tool_use"] = json!(!request.controls.parallel_tool_calls);
-        }
+    if let Some(choice) = anthropic_tool_choice_field(
+        context.controls,
+        !context.tools.is_empty() || !tools.is_empty(),
+    ) {
         fields.insert("tool_choice".into(), choice);
     }
     fields
@@ -140,15 +258,6 @@ fn anthropic_request_context_fields(
 
 fn anthropic_context_change(blocks: &[Value]) -> Value {
     json!({"role":"system","content":blocks})
-}
-
-fn anthropic_prefix_digest(
-    instructions: Option<&str>,
-    tools: &[ToolSpec],
-    preceding: &[Value],
-) -> Result<String, ProviderError> {
-    let (system, tools) = anthropic_context_fields(instructions, tools);
-    digest_anthropic_prefix(system.as_ref(), tools.as_ref(), preceding)
 }
 
 fn anthropic_tool_delta(previous: &[ToolSpec], next: &[ToolSpec]) -> Vec<Value> {
@@ -187,17 +296,17 @@ fn anthropic_tool_delta(previous: &[ToolSpec], next: &[ToolSpec]) -> Vec<Value> 
     blocks
 }
 
-fn anthropic_context_plan(
-    request: &ModelRequest,
+fn anthropic_context_plan<'a>(
+    context: ModelContextEncoding<'a>,
     inline_tools_supported: bool,
-) -> Result<Option<AnthropicTimelinePlan<'_>>, ProviderError> {
+) -> Result<Option<AnthropicTimelinePlan<'a>>, ProviderError> {
     if !inline_tools_supported {
         return Ok(None);
     }
-    let Some(timeline) = &request.context_timeline else {
+    let Some(timeline) = context.context_timeline else {
         return Ok(None);
     };
-    if timeline.initial.instructions != request.instructions
+    if timeline.initial.instructions.as_deref() != context.instructions
         || timeline
             .changes
             .iter()
@@ -214,14 +323,10 @@ fn anthropic_context_plan(
         if blocks.is_empty() {
             continue;
         }
-        let previous_message = request
-            .messages
-            .get(change.after_message.saturating_sub(1))
-            .map(|message| message.role);
-        let next_message = request
-            .messages
-            .get(change.after_message)
-            .map(|message| message.role);
+        let previous_message = context
+            .message_roles
+            .get(change.after_message.saturating_sub(1));
+        let next_message = context.message_roles.get(change.after_message);
         if !matches!(previous_message, Some(Role::User | Role::Tool))
             || next_message.is_some_and(|role| role != Role::Assistant)
         {
@@ -248,70 +353,46 @@ fn anthropic_context_fields_bytes(
         return Ok(0);
     }
     // Drop the braces, but include the separator from the other body fields.
-    serde_json::to_vec(&fields)
-        .map(|encoded| encoded.len() - 1)
-        .map_err(|_| invalid("Anthropic context measurement failed"))
+    Ok(json_encoded_len(&fields)? - 1)
 }
 
 pub(super) fn anthropic_context_encoding_overhead(
-    request: &ModelRequest,
+    context: ModelContextEncoding<'_>,
     native_api: bool,
     inline_tools_supported: bool,
 ) -> Result<usize, ProviderError> {
-    let Some(plan) = anthropic_context_plan(request, native_api && inline_tools_supported)? else {
+    let Some(plan) = anthropic_context_plan(context, native_api && inline_tools_supported)? else {
         return Ok(0);
     };
     // Only compile context fields: validating signed transcript replay here
     // would move ReplayContextChanged outside Core's issuance recovery path.
     let initial = anthropic_context_fields_bytes(anthropic_request_context_fields(
-        request,
+        context,
         plan.initial.instructions.as_deref(),
         &plan.initial.tools,
     ))?;
     let latest = anthropic_context_fields_bytes(anthropic_request_context_fields(
-        request,
-        request.instructions.as_deref(),
-        &request.tools,
+        context,
+        context.instructions,
+        context.tools,
     ))?;
     let mut bytes = initial;
     for blocks in plan.changes.values() {
         let message = anthropic_context_change(blocks);
-        let length = serde_json::to_vec(&message)
-            .map_err(|_| invalid("Anthropic context measurement failed"))?
-            .len();
+        let length = json_encoded_len(&message)?;
         // Each emitted message also adds a separator to the nonempty transcript.
         bytes = bytes.saturating_add(length).saturating_add(1);
     }
     Ok(bytes.saturating_sub(latest))
 }
 
+#[cfg(test)]
 pub(super) fn anthropic_body_prefix_digest(body: &Value) -> Result<String, ProviderError> {
     let messages = body["messages"]
         .as_array()
         .ok_or_else(|| invalid("invalid Anthropic request messages"))?;
-    digest_anthropic_prefix(body.get("system"), body.get("tools"), messages)
-}
-
-fn digest_anthropic_prefix(
-    system: Option<&Value>,
-    tools: Option<&Value>,
-    preceding: &[Value],
-) -> Result<String, ProviderError> {
-    // Match the previous sorted-key JSON encoding so persisted replay digests
-    // stay valid, without deep-cloning the preceding wire transcript into a Value.
-    #[derive(serde::Serialize)]
-    struct Prefix<'a> {
-        messages: &'a [Value],
-        system: Option<&'a Value>,
-        tools: Option<&'a Value>,
-    }
-    let encoded = serde_json::to_vec(&Prefix {
-        messages: preceding,
-        system,
-        tools,
-    })
-    .map_err(|_| invalid("cannot encode Anthropic replay prefix"))?;
-    Ok(format!("{:x}", Sha256::digest(encoded)))
+    let hasher = AnthropicPrefixHasher::new(body.get("system"), body.get("tools"))?;
+    hasher.digest(messages)
 }
 
 #[cfg(test)]
@@ -322,11 +403,21 @@ pub(super) fn anthropic_body(
     anthropic_body_for_route(request, native_api, false)
 }
 
+#[cfg(test)]
 pub(super) fn anthropic_body_for_route(
     request: &ModelRequest,
     native_api: bool,
     inline_tools_supported: bool,
 ) -> Result<Value, ProviderError> {
+    anthropic_request_for_route(request, native_api, inline_tools_supported)
+        .map(|prepared| prepared.body)
+}
+
+pub(super) fn anthropic_request_for_route(
+    request: &ModelRequest,
+    native_api: bool,
+    inline_tools_supported: bool,
+) -> Result<AnthropicRequestBody, ProviderError> {
     validate_request(request)?;
     let mut body = control_fields(
         &request.route.effective,
@@ -334,12 +425,11 @@ pub(super) fn anthropic_body_for_route(
         HttpWire::AnthropicMessages,
         native_api,
     )?;
-    let context_plan = anthropic_context_plan(request, native_api && inline_tools_supported)?;
-    let messages = transcript_messages(request, context_plan.as_ref())?;
-    body["model"] = json!(request.route.effective.model);
-    body["messages"] = Value::Array(messages);
-    body["stream"] = json!(true);
-
+    let context_plan = anthropic_context_plan(
+        ModelContextEncoding::from_request(request),
+        native_api && inline_tools_supported,
+    )?;
+    let inline_tools = context_plan.is_some();
     let (instructions, top_level_tools) = context_plan.as_ref().map_or(
         (request.instructions.as_deref(), request.tools.as_slice()),
         |plan| {
@@ -349,12 +439,33 @@ pub(super) fn anthropic_body_for_route(
             )
         },
     );
-    for (name, value) in anthropic_request_context_fields(request, instructions, top_level_tools) {
-        body[&name] = value;
+    let (system, definitions) = anthropic_context_fields(instructions, top_level_tools);
+    let mut prefix_hasher = AnthropicPrefixHasher::new(system.as_ref(), definitions.as_ref())?;
+    let messages = transcript_messages(request, context_plan.as_ref(), &mut prefix_hasher)?;
+    let prefix_digest = prefix_hasher.digest(&messages)?;
+    body["model"] = json!(request.route.effective.model);
+    body["messages"] = Value::Array(messages);
+    body["stream"] = json!(true);
+    if let Some(system) = system {
+        body["system"] = system;
     }
-    Ok(body)
+    if let Some(definitions) = definitions {
+        body["tools"] = definitions;
+    }
+    if let Some(choice) = anthropic_tool_choice_field(
+        &request.controls,
+        !request.tools.is_empty() || !top_level_tools.is_empty(),
+    ) {
+        body["tool_choice"] = choice;
+    }
+    Ok(AnthropicRequestBody {
+        body,
+        prefix_digest,
+        inline_tools,
+    })
 }
 
+#[cfg(test)]
 pub(super) fn anthropic_body_uses_inline_tools(body: &Value) -> bool {
     body["messages"]
         .as_array()
@@ -380,6 +491,7 @@ pub(super) fn managed_anthropic_thinking(model: &str) -> bool {
 fn transcript_messages(
     request: &ModelRequest,
     context_plan: Option<&AnthropicTimelinePlan<'_>>,
+    prefix_hasher: &mut AnthropicPrefixHasher,
 ) -> Result<Vec<Value>, ProviderError> {
     let mut messages = Vec::new();
     let mut transcript = Transcript::default();
@@ -395,29 +507,36 @@ fn transcript_messages(
             match transcript.part(message.role, item)? {
                 Part::Thinking => {}
                 Part::Text(part) => {
-                    if !part.is_empty() {
+                    if replay.is_none() && !part.is_empty() {
                         blocks.push(json!({"type":"text","text":part}));
                     }
                 }
                 Part::Image(image) => {
-                    blocks.push(json!({"type":"image","source":{
-                        "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
-                    }}));
-                }
-                Part::ToolCall { call, id } => {
-                    *id = ids.for_call(&call.id, replay.is_some(), "Anthropic")?;
-                    blocks.push(
-                        json!({"type":"tool_use","id":id,"name":call.name,"input":call.arguments}),
-                    );
-                }
-                Part::ToolResult { result, id } => {
-                    let mut content = vec![json!({"type":"text","text":result.result.to_string()})];
-                    for image in &result.images {
-                        content.push(json!({"type":"image","source":{
+                    if replay.is_none() {
+                        blocks.push(json!({"type":"image","source":{
                             "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
                         }}));
                     }
-                    blocks.push(json!({"type":"tool_result","tool_use_id":id,"content":content,"is_error":result.is_error}));
+                }
+                Part::ToolCall { call, id } => {
+                    *id = ids.for_call(&call.id, replay.is_some(), "Anthropic")?;
+                    if replay.is_none() {
+                        blocks.push(
+                            json!({"type":"tool_use","id":id,"name":call.name,"input":call.arguments}),
+                        );
+                    }
+                }
+                Part::ToolResult { result, id } => {
+                    if replay.is_none() {
+                        let mut content =
+                            vec![json!({"type":"text","text":result.result.to_string()})];
+                        for image in &result.images {
+                            content.push(json!({"type":"image","source":{
+                                "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
+                            }}));
+                        }
+                        blocks.push(json!({"type":"tool_result","tool_use_id":id,"content":content,"is_error":result.is_error}));
+                    }
                 }
             }
         }
@@ -425,9 +544,8 @@ fn transcript_messages(
             blocks = validated_anthropic_replay(
                 &replay.data,
                 &message.content,
-                request,
                 &messages,
-                context_plan.map(|plan| plan.initial),
+                prefix_hasher,
             )?;
         }
         if blocks.is_empty() {
@@ -447,12 +565,14 @@ fn transcript_messages(
                 .expect("constructed content array")
                 .extend(blocks);
         } else {
+            prefix_hasher.commit(&messages, messages.len())?;
             messages.push(json!({"role":role,"content":blocks}));
         }
         if let Some(change_blocks) = context_plan
             .and_then(|plan| plan.changes.get(&(message_index + 1)))
             .filter(|blocks| !blocks.is_empty())
         {
+            prefix_hasher.commit(&messages, messages.len())?;
             messages.push(anthropic_context_change(change_blocks));
         }
     }
@@ -490,5 +610,107 @@ mod tests {
         ] {
             assert_eq!(anthropic_body_prefix_digest(&body).unwrap(), expected);
         }
+    }
+
+    #[test]
+    fn incremental_prefix_hasher_matches_merged_roles_and_rejects_tampered_prefix() {
+        let model = ion_ai::ModelRef {
+            provider: "anthropic".into(),
+            model: "claude-opus-5-5".into(),
+        };
+        let tool = ToolSpec {
+            name: "read".into(),
+            description: "read a file".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let mut request = ModelRequest {
+            route: ModelRoute::direct(model, ModelRouteReason::UserRequest),
+            provider_session_id: None,
+            instructions: Some("rules".into()),
+            messages: vec![
+                Message::user_input("first".into(), []),
+                Message::user_input("merged user".into(), []),
+            ],
+            tools: vec![tool],
+            context_timeline: None,
+            prompt_cache: PromptCacheIntent::Reusable,
+            controls: ion_ai::GenerationControls {
+                max_output_tokens: 1024,
+                temperature: None,
+                top_p: None,
+                reasoning: Reasoning::ProviderDefault,
+                tool_choice: ToolChoice::Auto,
+                parallel_tool_calls: false,
+            },
+        };
+        let first_prepared = anthropic_request_for_route(&request, true, true).unwrap();
+        assert_eq!(
+            first_prepared.prefix_digest,
+            anthropic_body_prefix_digest(&first_prepared.body).unwrap()
+        );
+        assert!(!first_prepared.inline_tools);
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("step 1".into())],
+            provider_replay: Some(
+                ProviderReplay::new(
+                    "anthropic",
+                    ANTHROPIC_CONTENT_REPLAY,
+                    json!({
+                        "blocks": [
+                            {"type":"thinking","thinking":"t1","signature":"sig1"},
+                            {"type":"text","text":"step 1"}
+                        ],
+                        "prefix_sha256": first_prepared.prefix_digest,
+                    }),
+                )
+                .with_prefix_binding(true),
+            ),
+        });
+        request
+            .messages
+            .push(Message::user_input("second".into(), []));
+        let second_prepared = anthropic_request_for_route(&request, true, true).unwrap();
+        assert_eq!(
+            second_prepared.prefix_digest,
+            anthropic_body_prefix_digest(&second_prepared.body).unwrap()
+        );
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("step 2".into())],
+            provider_replay: Some(
+                ProviderReplay::new(
+                    "anthropic",
+                    ANTHROPIC_CONTENT_REPLAY,
+                    json!({
+                        "blocks": [
+                            {"type":"thinking","thinking":"t2","signature":"sig2"},
+                            {"type":"text","text":"step 2"}
+                        ],
+                        "prefix_sha256": second_prepared.prefix_digest,
+                    }),
+                )
+                .with_prefix_binding(true),
+            ),
+        });
+        request
+            .messages
+            .push(Message::user_input("third".into(), []));
+        let third_prepared = anthropic_request_for_route(&request, true, true).unwrap();
+        assert_eq!(
+            third_prepared.prefix_digest,
+            anthropic_body_prefix_digest(&third_prepared.body).unwrap()
+        );
+        assert_eq!(third_prepared.body["messages"].as_array().unwrap().len(), 5);
+
+        // Mutating an earlier merged user message must invalidate the signed prefix.
+        request.messages[1] = Message::user_input("tampered".into(), []);
+        assert_eq!(
+            anthropic_request_for_route(&request, true, true)
+                .err()
+                .expect("tampered prefix must fail")
+                .kind,
+            ProviderErrorKind::ReplayContextChanged
+        );
     }
 }

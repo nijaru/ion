@@ -20,9 +20,9 @@ impl ion_ai::ModelService for HeldContinuation {
 
     fn context_encoding_overhead(
         &self,
-        request: &ion_ai::ModelRequest,
+        context: ion_ai::ModelContextEncoding<'_>,
     ) -> Result<usize, ion_ai::ProviderError> {
-        self.model.context_encoding_overhead(request)
+        self.model.context_encoding_overhead(context)
     }
 
     fn stream<'a>(

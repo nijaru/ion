@@ -4,8 +4,8 @@ use std::pin::Pin;
 use futures_core::Stream;
 
 use crate::{
-    GenerationControls, ModelRef, ModelRequest, ModelStreamEvent, ProviderError, ProviderErrorKind,
-    Reasoning,
+    GenerationControls, ModelContextEncoding, ModelRef, ModelRequest, ModelStreamEvent,
+    ProviderError, ProviderErrorKind, Reasoning,
 };
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -45,7 +45,10 @@ pub trait ModelService: Send + Sync {
     /// This is a pure planning query: no credentials, transport or generation.
     /// Forwarding services must delegate it. It is not a whole-wire size or token
     /// count; known provider usage already covers a stable historical prefix.
-    fn context_encoding_overhead(&self, _request: &ModelRequest) -> Result<usize, ProviderError> {
+    fn context_encoding_overhead(
+        &self,
+        _context: ModelContextEncoding<'_>,
+    ) -> Result<usize, ProviderError> {
         Ok(0)
     }
 

@@ -2,8 +2,8 @@
 use std::sync::Arc;
 
 use ion_ai::{
-    Content, GenerationControls, ModelExecution, ModelRef, ModelRequest, ModelRoute,
-    ModelRouteReason, ModelService, Reasoning, ToolChoice, ToolSpec, Usage,
+    GenerationControls, MessageRoles, ModelContextEncoding, ModelExecution, ModelRef, ModelRequest,
+    ModelRoute, ModelRouteReason, ModelService, Reasoning, ToolChoice, ToolSpec, Usage,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -11,7 +11,8 @@ use crate::{
     agent::{AgentError, AgentEvent, AgentLimits},
     generation::{GeneratedResponse, GenerationAttempt, generate_with_retry},
     session::{
-        AuthorityScope, ModelContextSnapshot, RecoveryBinding, RequestBasis, Session, SessionError,
+        AuthorityScope, ContextReportBasis, ModelContextSnapshot, RecoveryBinding, RequestBasis,
+        Session, SessionError,
     },
     tool_set::{ToolCatalog, ToolSet},
 };
@@ -19,7 +20,7 @@ use crate::{
 pub(crate) mod calibration;
 #[cfg(test)]
 mod calibration_tests;
-pub(crate) use calibration::{RequestCalibration, RequestMeasurement, RequestScope};
+pub(crate) use calibration::{RequestCalibration, RequestHead, RequestMeasurement, RequestScope};
 
 /// Local planning snapshot, not an admission or an in-flight request budget.
 /// Excludes drafts and uncommitted inputs; a Turn may retain a private frozen
@@ -75,8 +76,6 @@ pub(crate) struct PreparedRequest {
     scope: RequestScope,
     limits: AgentLimits,
     output_budget: Option<u32>,
-    estimated_input_tokens: u64,
-    basis: ContextEstimateBasis,
 }
 
 pub(crate) struct IssuedRequest {
@@ -123,6 +122,65 @@ impl RequestSettings<'_> {
     }
 }
 
+struct PlannedMetrics {
+    measurement: RequestMeasurement,
+    scope: RequestScope,
+    output_budget: Option<u32>,
+    estimated_input_tokens: u64,
+    basis: ContextEstimateBasis,
+}
+
+fn plan_metrics(
+    head: RequestHead<'_>,
+    context_timeline: Option<&ion_ai::ModelContextTimeline>,
+    message_roles: MessageRoles<'_>,
+    message_bytes: &[crate::prompt_size::MessageBytes],
+    calibration: Option<RequestCalibration>,
+    service: &Arc<dyn ModelService>,
+    limits: AgentLimits,
+) -> Result<PlannedMetrics, AgentError> {
+    if !limits.image_input && message_bytes.iter().any(|bytes| bytes.images.count > 0) {
+        return Err(AgentError::ImagesUnsupported);
+    }
+    let scope = RequestScope::from_head(service, head)?;
+    let calibration = calibration.filter(|sample| sample.matches_scope(&scope));
+    let context_overhead = service.context_encoding_overhead(ModelContextEncoding {
+        instructions: head.instructions,
+        tools: head.tools,
+        context_timeline,
+        controls: head.controls,
+        message_roles,
+    })?;
+    let measurement = RequestMeasurement::from_parts(
+        head,
+        message_bytes,
+        calibration.as_ref(),
+        context_overhead,
+    )?;
+    let calibration = calibration.filter(|sample| sample.applies(&measurement, &scope));
+    let estimated_input_tokens = calibration.as_ref().map_or_else(
+        || measurement.fallback_input_tokens(),
+        |calibration| calibration.estimate(&measurement),
+    );
+    let basis = if calibration.is_some() {
+        ContextEstimateBasis::Calibrated
+    } else {
+        ContextEstimateBasis::BytesFallback
+    };
+    let output_budget = limits.output_budget(
+        measurement.retained_bytes(),
+        estimated_input_tokens,
+        limits.max_output_tokens,
+    );
+    Ok(PlannedMetrics {
+        measurement,
+        scope,
+        output_budget,
+        estimated_input_tokens,
+        basis,
+    })
+}
+
 impl PreparedRequest {
     pub(crate) fn new(
         session: &Session,
@@ -163,72 +221,93 @@ impl PreparedRequest {
             prompt_cache: ion_ai::PromptCacheIntent::Reusable,
             controls: limits.controls(basis.reasoning, true),
         };
-        if !limits.image_input
-            && request
-                .messages
-                .iter()
-                .flat_map(|message| &message.content)
-                .any(|part| {
-                    matches!(part, Content::Image(_))
-                        || matches!(part, Content::ToolResult(result) if !result.images.is_empty())
-                })
-        {
-            return Err(AgentError::ImagesUnsupported);
-        }
-        let scope = RequestScope::new(service, &request)?;
-        let calibration = basis
-            .calibration
-            .filter(|sample| sample.matches_scope(&scope));
-        let context_overhead = service.context_encoding_overhead(&request)?;
-        let measurement = RequestMeasurement::from_message_bytes(
-            &request,
+        assert_eq!(
+            request.messages.len(),
+            basis.message_bytes.len(),
+            "byte counts belong to the frozen request"
+        );
+        let metrics = plan_metrics(
+            RequestHead::from_request(&request),
+            request.context_timeline.as_ref(),
+            MessageRoles::Messages(&request.messages),
             &basis.message_bytes,
-            calibration.as_ref(),
-            context_overhead,
+            basis.calibration,
+            service,
+            limits,
         )?;
-        let calibration = calibration.filter(|sample| sample.applies(&measurement, &scope));
-        let estimated_input = calibration.as_ref().map_or_else(
-            || measurement.fallback_input_tokens(),
-            |calibration| calibration.estimate(&measurement),
-        );
-        let basis = if calibration.is_some() {
-            ContextEstimateBasis::Calibrated
-        } else {
-            ContextEstimateBasis::BytesFallback
-        };
-        let output_budget = limits.output_budget(
-            measurement.retained_bytes(),
-            estimated_input,
-            limits.max_output_tokens,
-        );
         Ok(Self {
             request,
             catalog,
-            measurement,
-            scope,
+            measurement: metrics.measurement,
+            scope: metrics.scope,
             limits,
-            output_budget,
-            estimated_input_tokens: estimated_input,
-            basis,
+            output_budget: metrics.output_budget,
         })
     }
 
-    pub(crate) fn report(&self, revision: u64, turn: Option<u64>) -> ContextReport {
-        ContextReport {
-            model: self.request.route.effective.clone(),
-            revision,
-            turn,
-            context_window_tokens: self.limits.context_window_tokens,
-            estimated_input_tokens: self.estimated_input_tokens,
-            basis: self.basis,
-            retained_request_bytes: self.measurement.retained_bytes(),
-            max_request_bytes: self.limits.max_request_bytes,
-            capacity: self.limits.context_capacity(
-                self.measurement.retained_bytes(),
-                self.estimated_input_tokens,
-                self.limits.max_output_tokens,
+    pub(crate) fn context_report(
+        session: &Session,
+        basis: ContextReportBasis,
+        service: &Arc<dyn ModelService>,
+        tools: &ToolSet,
+        reason: ModelRouteReason,
+        settings: RequestSettings<'_>,
+    ) -> Result<ContextReport, AgentError> {
+        let RequestSettings {
+            model,
+            instructions,
+            limits,
+            ..
+        } = settings;
+        let previous: &[ToolSpec] = basis
+            .previous
+            .as_ref()
+            .map_or(&[], |context| context.tools.as_slice());
+        let catalog = tools.request_catalog(previous);
+        let context = ModelContextSnapshot {
+            instructions: instructions.into(),
+            tools: catalog.declared_specs(),
+        };
+        let route = ModelRoute::direct(model.clone(), reason);
+        let controls = limits.controls(basis.reasoning, true);
+        let context_timeline = basis.timeline(&context);
+        let provider_session_id = session.provider_session_id().to_string();
+        assert_eq!(
+            basis.roles.len(),
+            basis.message_bytes.len(),
+            "byte counts belong to the projected roles"
+        );
+        let metrics = plan_metrics(
+            RequestHead {
+                route: &route,
+                provider_session_id: Some(&provider_session_id),
+                instructions: Some(&context.instructions),
+                tools: &context.tools,
+                prompt_cache: ion_ai::PromptCacheIntent::Reusable,
+                controls: &controls,
+            },
+            context_timeline.as_ref(),
+            MessageRoles::Roles(&basis.roles),
+            &basis.message_bytes,
+            basis.calibration,
+            service,
+            limits,
+        )?;
+        Ok(ContextReport {
+            model: route.effective,
+            revision: basis.revision,
+            turn: basis.turn,
+            context_window_tokens: limits.context_window_tokens,
+            estimated_input_tokens: metrics.estimated_input_tokens,
+            basis: metrics.basis,
+            retained_request_bytes: metrics.measurement.retained_bytes(),
+            max_request_bytes: limits.max_request_bytes,
+            capacity: limits.context_capacity(
+                metrics.measurement.retained_bytes(),
+                metrics.estimated_input_tokens,
+                limits.max_output_tokens,
             ),
-        }
+        })
     }
 }
 

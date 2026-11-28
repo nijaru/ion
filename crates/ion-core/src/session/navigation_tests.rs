@@ -222,7 +222,9 @@ fn session_usage_snapshot_keeps_inactive_accounting_without_reading_its_payloads
         .record_uncommitted_usage(ModelUsagePurpose::Assistant, execution, Usage::known(12, 1))
         .unwrap();
 
-    let (compacted, basis) = session.usage_and_request_basis(&model("one")).unwrap();
+    let (compacted, basis) = session
+        .usage_and_context_report_basis(&model("one"))
+        .unwrap();
     assert_eq!(compacted.compacted_through, Some(through));
     assert_eq!(compacted.revision, basis.unwrap().revision);
     select(&session, 0);
@@ -233,7 +235,9 @@ fn session_usage_snapshot_keeps_inactive_accounting_without_reading_its_payloads
     assert_eq!(expected.models[1].returned_model.as_deref(), Some("served"));
     let revision = session.entry_count().unwrap();
     let check = |session: &Session| {
-        let (usage, context) = session.usage_and_request_basis(&model("one")).unwrap();
+        let (usage, context) = session
+            .usage_and_context_report_basis(&model("one"))
+            .unwrap();
         assert_eq!(context.unwrap().revision, revision);
         assert_eq!(usage.revision, revision);
         assert_eq!(usage.name.as_deref(), Some("accounting"));

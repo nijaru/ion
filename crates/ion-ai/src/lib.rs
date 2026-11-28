@@ -20,7 +20,8 @@ pub use image_input::{
 pub use message::{Message, ProviderReplay, Role};
 pub use model::{ModelExecution, ModelRef, ModelRoute, ModelRouteReason};
 pub use request::{
-    ModelContextChange, ModelContextState, ModelContextTimeline, ModelRequest, PromptCacheIntent,
+    MessageRoles, ModelContextChange, ModelContextEncoding, ModelContextState,
+    ModelContextTimeline, ModelRequest, PromptCacheIntent,
 };
 pub use response::{IncompleteReason, ModelResponse, ModelStreamEvent, ResponseTermination};
 pub use scripted::{Script, ScriptedModelService};

@@ -112,6 +112,25 @@ pub(super) fn request_projection(
     Ok((messages, sizes))
 }
 
+/// Passive capacity planning needs roles and cached byte/image measurements,
+/// never cloned message payloads or opaque provider replay.
+pub(super) fn report_projection(
+    working: &WorkingJournal,
+    model: &ModelRef,
+) -> Result<(Vec<Role>, Vec<MessageBytes>), serde_json::Error> {
+    let mut roles = Vec::new();
+    let mut sizes = Vec::new();
+    if let Some(summary) = projected_summary(working) {
+        roles.push(summary.role);
+        sizes.push(MessageBytes::measure(&summary)?);
+    }
+    for (record, replay) in routed_records(working, Some(model)) {
+        roles.push(record.message.role);
+        sizes.push(record.size(replay)?);
+    }
+    Ok((roles, sizes))
+}
+
 fn projected_summary(working: &WorkingJournal) -> Option<Message> {
     working
         .state
@@ -226,9 +245,7 @@ impl Session {
         let mut suffix_bytes = 2usize;
         for record in inputs_at(&store.working, &store.working.state.active_inputs) {
             suffix_bytes = suffix_bytes
-                .saturating_add(crate::json_size::encoded_len(
-                    &crate::prompt_size::NeutralMessage::from(&record.message),
-                )?)
+                .saturating_add(record.size(false)?.neutral)
                 .saturating_add(1);
         }
         let mut through = None;
@@ -245,9 +262,7 @@ impl Session {
                     continue;
                 }
                 suffix_bytes = suffix_bytes
-                    .saturating_add(crate::json_size::encoded_len(
-                        &crate::prompt_size::NeutralMessage::from(&record.message),
-                    )?)
+                    .saturating_add(record.size(false)?.neutral)
                     .saturating_add(1);
             }
             if suffix_bytes <= suffix_budget {
@@ -308,9 +323,7 @@ impl Session {
             .take_while(|record| record.entry <= through_entry)
         {
             retained_input_bytes = retained_input_bytes
-                .saturating_add(crate::json_size::encoded_len(
-                    &crate::prompt_size::NeutralMessage::from(&record.message),
-                )?)
+                .saturating_add(record.size(false)?.neutral)
                 .saturating_add(1);
         }
         messages.extend(
