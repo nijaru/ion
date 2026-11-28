@@ -1344,6 +1344,110 @@ def exercise_orientation(work, env, endpoint):
         print(f"Orientation {mode}: canonical model patterns, failed-selection custody, name/new, help, passive Core context estimate and exact draft (tiny resize in fullscreen): OK", flush=True)
 
 
+def exercise_scoped_models(work, base_env, endpoint):
+    for mode in ("inline", "fullscreen"):
+        cwd = work / f"{mode}-scoped-models"
+        cwd.mkdir()
+        home = cwd / "ion"
+        env = dict(base_env, ION_HOME=str(home))
+        for provider, model in (("side", "delta"), ("side", "epsilon"), ("spin", "beta"),
+                                ("spin", "gamma"), ("spin", "alpha")):
+            subprocess.run([binary, "use", provider, model, "--endpoint", endpoint,
+                            "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        config = home / "models.json"
+        original = json.loads(config.read_bytes())
+        original["scope"] = ["spin/alpha", "spin/beta", "spin/retired", "spin/gamma"]
+        config.write_text(json.dumps(original))
+        original_bytes = config.read_bytes()
+        before = len(requests)
+
+        def rotation():
+            return [f"{entry['provider']}/{entry['model']}" for entry in json.loads(config.read_bytes())["scope"]]
+
+        def open_scope(terminal):
+            terminal.send("/scoped-models\r")
+            terminal.wait_ready(lambda: "Scoped models ·" in terminal.text())
+
+        terminal = Terminal(cwd, env, mode)
+        try:
+            terminal.wait_ready(lambda: "spin/alpha · reasoning" in terminal.text())
+            open_scope(terminal)
+            terminal.wait_ready(lambda: "spin/retired  [unavailable]" in terminal.text())
+            terminal.send("sbta")  # fuzzy identity search
+            terminal.paint()
+            terminal.send("\r")
+            terminal.wait_ready(lambda: "unsaved" in terminal.text())
+            terminal.send("\x1b")
+            terminal.paint()
+            assert config.read_bytes() == original_bytes, "closing the draft wrote preferences"
+
+            terminal.output.clear()
+            open_scope(terminal)
+            terminal.send("sgma")
+            terminal.paint()
+            for _ in range(2):
+                terminal.send(b"\x1b[1;3A")  # Alt-Up in the full rotation, even while filtered.
+                terminal.paint()
+            terminal.send("\x15side/delta")
+            terminal.paint()
+            terminal.send("\x1bp")  # Alt-P enables both side routes, including the hidden one
+            terminal.paint()
+            terminal.send("\x18\x01")  # clear, then re-enable just delta at the end
+            terminal.paint()
+            assert config.read_bytes() == original_bytes
+
+            lock = home / "models.lock"
+            backup = lock.with_suffix(".held")
+            lock.rename(backup)
+            lock.mkdir()  # definite refusal before any replacement
+            try:
+                terminal.send("\x13")
+                terminal.wait_ready(lambda: "Model scope save failed" in terminal.text())
+                assert config.read_bytes() == original_bytes
+            finally:
+                lock.rmdir()
+                backup.rename(lock)
+            terminal.output.clear()
+            terminal.send("\x13")
+            terminal.wait_ready(lambda: "Saved model scope" in terminal.text())
+            assert rotation() == ["spin/alpha", "spin/gamma", "spin/beta", "spin/retired", "side/epsilon", "side/delta"]
+            saved = json.loads(config.read_bytes())
+            assert saved["custom"] == original["custom"] and saved["default"] == original["default"]
+            assert len(requests) == before, "editing dispatched a model request"
+            terminal.send("\x1b")
+            terminal.paint()
+            terminal.send("\x10")
+            terminal.wait_ready(lambda: "Selected spin/gamma" in terminal.text())
+            terminal.send("SAVED_SCOPE_ROUTE\r")
+            terminal.wait(lambda: len(requests) == before + 1)
+            assert requests[-1]["model"] == "gamma" and user_text(requests[-1]) == "SAVED_SCOPE_ROUTE"
+            terminal.wait_ready(lambda: "DONE_SAVED_SCOPE_ROUTE" in terminal.text())
+            terminal.finish()
+        finally:
+            terminal.close()
+
+        args = ["--tui-mode", mode, "--models", "spin/alpha,spin/beta", "chat"]
+        terminal = Terminal(cwd, env, mode, args=args)
+        try:
+            terminal.wait_ready(lambda: "spin/alpha · reasoning" in terminal.text())
+            open_scope(terminal)
+            terminal.wait_ready(lambda: "--models overrides" in terminal.text())
+            terminal.send("spin/beta")
+            terminal.paint()
+            terminal.send("\x18\x13")
+            terminal.wait_ready(lambda: "Saved model scope" in terminal.text())
+            assert rotation() == ["spin/alpha", "spin/gamma", "spin/retired", "side/epsilon", "side/delta"]
+            terminal.send("\x1b")
+            terminal.paint()
+            terminal.send("\x10")
+            terminal.wait_ready(lambda: "Selected spin/beta" in terminal.text())
+            assert len(requests) == before + 1, "cycling dispatched a model request"
+            terminal.finish()
+        finally:
+            terminal.close()
+        print(f"Scoped models {mode}: fuzzy checklist, cancel, provider/filter edits, reorder, failed save and retry, retained missing ID, saved routing and --models override: OK", flush=True)
+
+
 def exercise_configuration(work, base_env, endpoint):
     home = work / "configuration-ion"
     env = dict(base_env, ION_HOME=str(home), HTTP_PROXY=endpoint, HTTPS_PROXY=endpoint, ALL_PROXY=endpoint,
@@ -2061,6 +2165,7 @@ with tempfile.TemporaryDirectory(prefix="ion-input-") as temporary:
         exercise_recovery_sources(work, env)
         exercise_resume(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_orientation(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
+        exercise_scoped_models(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_configuration(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_keybindings(work, env, f"http://127.0.0.1:{server.server_port}/v1/chat/completions")
         exercise_tasks(work, env)

@@ -339,6 +339,7 @@ pub(super) async fn dispatch_command(
                             | Builtin::Resume
                             | Builtin::Name
                             | Builtin::Model
+                            | Builtin::ScopedModels
                             | Builtin::Login
                             | Builtin::Logout
                     ) {
@@ -564,6 +565,16 @@ pub(super) fn handle_builtin(
                     .run(move |_| Ok(services.models().selection_choices(services.credentials())))
                     .await??;
                 Ok(super::session_io::ReadOutput::Models { choices, current })
+            })?;
+        }
+        Builtin::ScopedModels if args.is_empty() => {
+            let services = services.clone();
+            let io = runtime.session().io()?;
+            ui.session_io.start(runtime.session(), async move {
+                let choices = io
+                    .run(move |_| Ok(services.models().scope_choices(services.credentials())))
+                    .await??;
+                Ok(super::session_io::ReadOutput::ModelScope(choices))
             })?;
         }
         Builtin::Login if args.is_empty() => {

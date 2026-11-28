@@ -159,7 +159,7 @@ def exercise_model_scope(root, base_env, endpoint):
     # Persisting an explicit default includes it in the saved rotation, never
     # persists the invocation override or drops the operator's existing patterns.
     call("use", "outside", "scope/shadow")
-    assert json.loads(store.read_bytes())["scope"] == ["scope/a", "outside/scope/shadow"]
+    assert json.loads(store.read_bytes())["scope"] == ["scope/a", {"provider": "outside", "model": "scope/shadow"}]
 
     marker = sandbox / "UNEXPECTED_MCP_START"
     (home / "mcp.json").write_text(json.dumps({"servers": {"sentinel": {

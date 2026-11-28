@@ -16,6 +16,7 @@ mod scope;
 mod scope_tests;
 
 pub use cycling::ModelCycleDirection;
+pub use scope::ModelScopeEntry;
 
 use crate::{
     HttpModelService, HttpWire,
@@ -79,7 +80,7 @@ struct ModelConfiguration {
     custom: Vec<SavedSelection>,
     default: Option<ModelRef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    scope: Option<Vec<String>>,
+    scope: Option<Vec<ModelScopeEntry>>,
 }
 
 #[derive(Clone)]
@@ -151,6 +152,14 @@ pub struct ModelChoices {
     pub preferred: Option<Vec<ModelRef>>,
 }
 
+/// The saved checklist and local catalogue captured from the same document.
+/// `None` follows the whole catalogue; `Some([])` selects no models.
+pub struct ModelScopeChoices {
+    pub all: Vec<ModelChoice>,
+    pub saved: Option<Vec<ModelScopeEntry>>,
+    pub invocation_override: bool,
+}
+
 pub struct ModelChoice {
     pub selected: Selection,
     pub label: &'static str,
@@ -216,27 +225,38 @@ impl ModelStore {
             configuration.custom.push(effective);
         }
         configuration.default = Some(selected.identity());
-        if let Some(scope) = configuration
-            .scope
-            .as_mut()
-            .filter(|scope| !scope.is_empty())
-        {
-            // An explicitly saved default must remain in the saved rotation even
-            // when aliases/catalogues change. Overlaps deduplicate on resolution.
-            let canonical = format!("{}/{}", selected.provider, selected.model);
-            if !scope
-                .iter()
-                .any(|pattern| pattern.to_lowercase() == canonical.to_lowercase())
-            {
-                scope.push(canonical);
+        if let Some(scope) = &mut configuration.scope {
+            // `ion use` explicitly saves a default; keep it in the rotation.
+            let entry = ModelScopeEntry::Identity(selected.identity());
+            if !scope.iter().any(|saved| saved.configured() == entry) {
+                scope.push(entry);
             }
         }
+        self.write_configuration(&configuration)?;
+        Ok(selected)
+    }
+
+    /// Replace only the saved rotation, not the default, routes, or invocation override.
+    pub fn save_scope(&self, entries: Option<Vec<ModelScopeEntry>>) -> Result<()> {
+        for entry in entries.iter().flatten() {
+            if let ModelScopeEntry::Identity(identity) = entry {
+                validate_provider_id(&identity.provider)?;
+                ensure!(!identity.model.is_empty(), "model ID is empty");
+            }
+        }
+        let _lock = config_file::lock(&self.root.join("models.lock"), Visibility::Private)?;
+        let mut configuration = self.configuration()?;
+        configuration.scope = entries;
+        self.write_configuration(&configuration)
+            .context("save model scope")
+    }
+
+    fn write_configuration(&self, configuration: &ModelConfiguration) -> Result<()> {
         write_json(
             &self.root.join("models.json"),
-            &configuration,
+            configuration,
             Visibility::Private,
-        )?;
-        Ok(selected)
+        )
     }
 
     pub fn choose(
@@ -257,8 +277,9 @@ impl ModelStore {
             });
         }
         let configuration = self.configuration()?;
-        if self.scope(&configuration).is_some() {
-            let choices = self.cycle_choices_with(&configuration, credentials)?;
+        if let Some(entries) = self.effective_scope(&configuration) {
+            let choices =
+                scope::resolve(&entries, self.choices_with(&configuration, credentials)?)?;
             let mut ready = choices.into_iter().filter(ModelChoice::is_ready);
             let first = ready.next();
             let preferred = configuration
@@ -417,9 +438,9 @@ impl ModelStore {
         let configuration = self.configuration()?;
         let all = self.choices_with(&configuration, credentials)?;
         let preferred = self
-            .scope(&configuration)
-            .map(|patterns| {
-                scope::indices(patterns, &all).map(|indices| {
+            .effective_scope(&configuration)
+            .map(|entries| {
+                scope::indices(&entries, &all).map(|indices| {
                     indices
                         .into_iter()
                         .map(|index| all[index].selected.identity())
@@ -430,29 +451,45 @@ impl ModelStore {
         Ok(ModelChoices { all, preferred })
     }
 
+    /// Edit the saved defaults even when --models owns this invocation's rotation.
+    pub fn scope_choices(&self, credentials: &CredentialStore) -> Result<ModelScopeChoices> {
+        let configuration = self.configuration()?;
+        let all = self.choices_with(&configuration, credentials)?;
+        let saved = configuration
+            .scope
+            .map(|entries| scope::checklist(&entries, &all));
+        Ok(ModelScopeChoices {
+            all,
+            saved,
+            invocation_override: self.scope_override.is_some(),
+        })
+    }
+
     /// Ordered scope choices for cycling. Missing keys are retained as metadata;
     /// the cycling policy excludes them, without widening an unavailable scope.
     pub fn cycle_choices(&self, credentials: &CredentialStore) -> Result<Vec<ModelChoice>> {
-        self.cycle_choices_with(&self.configuration()?, credentials)
-    }
-
-    fn scope<'a>(&'a self, configuration: &'a ModelConfiguration) -> Option<&'a [String]> {
-        self.scope_override
-            .as_ref()
-            .or(configuration.scope.as_ref())
-            .filter(|patterns| !patterns.is_empty())
-            .map(Vec::as_slice)
-    }
-
-    fn cycle_choices_with(
-        &self,
-        configuration: &ModelConfiguration,
-        credentials: &CredentialStore,
-    ) -> Result<Vec<ModelChoice>> {
-        let choices = self.choices_with(configuration, credentials)?;
-        match self.scope(configuration) {
-            Some(patterns) => scope::resolve(patterns, choices),
+        let configuration = self.configuration()?;
+        let choices = self.choices_with(&configuration, credentials)?;
+        match self.effective_scope(&configuration) {
+            Some(entries) => scope::resolve(&entries, choices),
             None => Ok(choices),
+        }
+    }
+
+    fn effective_scope(&self, configuration: &ModelConfiguration) -> Option<Vec<ModelScopeEntry>> {
+        match &self.scope_override {
+            Some(patterns) if patterns.is_empty() => None,
+            Some(patterns) => Some(
+                patterns
+                    .iter()
+                    .cloned()
+                    .map(ModelScopeEntry::Pattern)
+                    .collect(),
+            ),
+            None => configuration
+                .scope
+                .as_ref()
+                .map(|entries| entries.iter().map(ModelScopeEntry::configured).collect()),
         }
     }
 

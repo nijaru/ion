@@ -47,6 +47,7 @@ mod gestures;
 mod history_view;
 mod interaction;
 mod mcp;
+mod model_scope;
 mod navigation;
 mod orientation;
 mod output;

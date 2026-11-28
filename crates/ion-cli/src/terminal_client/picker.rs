@@ -1,6 +1,7 @@
 //! Modal choices and cooperative discovery shared with non-modal completion.
 //! One retained scan joins before its replacement can start.
 use super::editing::{self, Edit};
+use super::model_scope::{ScopeEditor, ScopeSave, model_match_rank};
 use super::paint::{Prepared, Visibility};
 use crate::presentation_style::{Role, Theme};
 use ratatui::text::Line;
@@ -31,6 +32,8 @@ pub(super) enum PickerValue {
         search: SessionSearch,
     },
     Model(ModelRef),
+    ScopeRow,
+    SaveModelScope(ScopeSave),
     Reasoning(ion_ai::Reasoning),
     Login(String),
     RemoveAttachment {
@@ -68,52 +71,6 @@ pub(super) struct Picker {
     pub query: String,
     pub selected: usize,
     pub items: Vec<PickerItem>,
-}
-
-// Model identities are short names, not prose. Verbatim hits outrank
-// abbreviations; ties keep catalog or shortlist order.
-fn model_match_rank(query: &str, model: &ModelRef, label: &str) -> Option<u8> {
-    if query.is_empty() {
-        return Some(0);
-    }
-    let id = model.model.to_ascii_lowercase();
-    let qualified = format!("{}/{}", model.provider.to_ascii_lowercase(), id);
-    let name = id.rsplit('/').next().expect("split always yields a field");
-    let fields = [qualified.as_str(), id.as_str(), name];
-    if fields.contains(&query) {
-        Some(0)
-    } else if fields.iter().any(|field| field.starts_with(query)) {
-        Some(1)
-    } else if label.to_ascii_lowercase().contains(query)
-        || fields.iter().any(|field| field.contains(query))
-    {
-        Some(2)
-    } else if query.chars().take(65).count() <= 64 {
-        let mut words = query
-            .split(|ch: char| ch.is_whitespace() || ch == '/')
-            .filter(|word| !word.is_empty())
-            .peekable();
-        words.peek()?;
-        let mut rank = 3;
-        for word in words {
-            if !qualified.contains(word) {
-                let mut letters = word.chars().peekable();
-                for ch in qualified.chars() {
-                    if letters.peek() == Some(&ch) {
-                        letters.next();
-                        if letters.peek().is_none() {
-                            break;
-                        }
-                    }
-                }
-                letters.peek().is_none().then_some(())?;
-                rank = 4;
-            }
-        }
-        Some(rank)
-    } else {
-        None
-    }
 }
 
 impl Picker {
@@ -242,11 +199,15 @@ pub(super) struct Pickers {
     // Presentation-only state; never captured by discovery jobs or persisted.
     named_only: bool,
     pub(super) models: Option<ModelScope>,
+    pub(super) scope_editor: Option<ScopeEditor>,
 }
 
 impl Pickers {
     fn matching(&self) -> Vec<usize> {
         self.active.as_ref().map_or_else(Vec::new, |picker| {
+            if let Some(editor) = &self.scope_editor {
+                return editor.matches(picker);
+            }
             picker.matches(
                 self.named_only,
                 self.models
@@ -284,6 +245,9 @@ impl Pickers {
         let Some(picker) = self.active.as_ref() else {
             return Vec::new();
         };
+        if let Some(editor) = &self.scope_editor {
+            return editor.controls(keys, width);
+        }
         let mut controls = format!(
             "{} {} · {} closes · {}/{} page",
             keys.hint(KeyAction::Confirm),
@@ -360,7 +324,9 @@ impl Pickers {
             };
         };
         let matching = self.matching();
-        let title = if let Some(models) = &self.models {
+        let title = if let Some(editor) = &self.scope_editor {
+            editor.title()
+        } else if let Some(models) = &self.models {
             format!(
                 "{} · {}",
                 picker.title,
@@ -452,12 +418,17 @@ impl Pickers {
         for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
             let selected = index == picker.selected;
             let marker = if selected { '›' } else { ' ' };
-            let (row, candidate_visible) = if width > 2 {
-                let (label, omitted) = fit_line_with_status(&picker.items[*item].label, width - 2);
-                // An omission marker is not candidate text. A literal ellipsis
-                // filename, unlike a wholly clipped label, is still selectable.
+            let check = self
+                .scope_editor
+                .as_ref()
+                .map_or("", |editor| if editor.enabled(*item) { "✓ " } else { "  " });
+            let prefix_width = 2 + usize::from(!check.is_empty()) * 2;
+            let (row, candidate_visible) = if width > prefix_width {
+                let (label, omitted) =
+                    fit_line_with_status(&picker.items[*item].label, width - prefix_width);
+                // An omission marker or check mark is not candidate text.
                 let visible = !label.is_empty() && !(omitted && label == "…");
-                (format!("{marker} {label}"), visible)
+                (format!("{marker} {check}{label}"), visible)
             } else {
                 (marker.to_string(), false)
             };
@@ -513,6 +484,7 @@ impl Pickers {
         self.sessions = None;
         self.named_only = false;
         self.models = None;
+        self.scope_editor = None;
         if let Some(job) = &self.job {
             job.stop.cancel();
         }
@@ -752,6 +724,30 @@ impl Pickers {
         self.invalidate_visibility();
     }
 
+    pub(super) fn set_scope_notice(&mut self, notice: String) {
+        if self.scope_editor.is_some() {
+            self.notice = Some(notice);
+            self.invalidate_visibility();
+        }
+    }
+
+    fn edit_model_scope(&mut self, action: crate::keybindings::KeyAction) {
+        let matching = self.matching();
+        let picker = self.active.as_mut().expect("scope picker is active");
+        let selected = matching.get(picker.selected).copied();
+        let painted = selected.filter(|&index| {
+            self.visibility.painted() == Some(&PickerCandidate::of(&picker.items[index]))
+        });
+        let editor = self.scope_editor.as_mut().expect("scope editor is active");
+        editor.edit(action, painted, &matching);
+        let updated = editor.matches(picker);
+        picker.selected = selected
+            .and_then(|index| updated.iter().position(|&item| item == index))
+            .unwrap_or_else(|| picker.selected.min(updated.len().saturating_sub(1)));
+        self.notice = None;
+        self.invalidate_visibility();
+    }
+
     pub fn move_selection(&mut self, down: bool, steps: usize) {
         let matching = self.matching();
         if let Some(picker) = &mut self.active {
@@ -772,10 +768,50 @@ impl Pickers {
         key: KeyEvent,
         keys: &crate::keybindings::KeyBindings,
     ) -> Option<PickerValue> {
-        use crate::keybindings::{self, KeyAction, PICKER, TEXT};
-        let action = keys.action(PICKER, key);
+        use crate::keybindings::{self, KeyAction, MODEL_SCOPE, PICKER, TEXT};
+        let context = if self.scope_editor.is_some() {
+            MODEL_SCOPE
+        } else {
+            PICKER
+        };
+        let action = keys.action(context, key);
         if key.repeat && action.is_some_and(KeyAction::requires_fresh_press) {
             return None;
+        }
+        if self.scope_editor.is_some()
+            && let Some(action) = action
+        {
+            if action == KeyAction::ScopeSave {
+                if key.repeat {
+                    return None;
+                }
+                return self
+                    .scope_editor
+                    .as_ref()?
+                    .save()
+                    .map(PickerValue::SaveModelScope);
+            }
+            if matches!(
+                action,
+                KeyAction::Confirm
+                    | KeyAction::ScopeEnable
+                    | KeyAction::ScopeClear
+                    | KeyAction::ScopeMoveUp
+                    | KeyAction::ScopeMoveDown
+                    | KeyAction::ScopeProvider
+                    | KeyAction::ScopeReset
+            ) || (action == KeyAction::Toggle
+                && (keybindings::printable(key) != Some(' ')
+                    || self
+                        .active
+                        .as_ref()
+                        .is_some_and(|picker| picker.query.is_empty())))
+            {
+                if !key.repeat {
+                    self.edit_model_scope(action);
+                }
+                return None;
+            }
         }
         if action == Some(KeyAction::Scope) {
             let selected = self.selected_value().and_then(|value| match value {

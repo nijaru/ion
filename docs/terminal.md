@@ -22,6 +22,16 @@ Chat shows the bound model and selected reasoning preference. This is not the ef
 
 Up and Down at the edges of the composer recall recent submitted prompts from the current Session, including prompts on other branches. Recall keeps up to 96 recent editable prompts within a 256 KiB text budget. It recalls the prompt text, not its attachments. Alt-T can still show the older transcript.
 
+## Model rotation
+
+Use `/model` or Ctrl-L to change the current Session model. Ctrl-P and Ctrl-Shift-P cycle through locally ready models. To choose what they cycle through, open `/scoped-models`. Checked models appear first, in cycle order. Missing routes stay in the list but cycling skips them, as it does routes that need an API key.
+
+- Type to search. Enter toggles the selected row; Space does the same when search is empty. Alt-Up and Alt-Down move checked rows in the full rotation, even when search hides other rows.
+- Alt-P toggles the selected provider's known models. Ctrl-A enables matching known models and Ctrl-X clears matching rows; with no search, those two keys act on the whole list.
+- Ctrl-S saves the rotation to `models.json` without switching the current model or changing the saved default. Esc discards edits made since the last save. An empty rotation disables cycling and automatic model selection for new Sessions. Ctrl-R resets the rotation to include all current and future models.
+
+`--models` overrides saved preferences for the invocation (`--models=` bypasses the saved rotation). The checklist always edits the saved preferences, so saving there does not replace an active override. Saving a changed checklist pins matched patterns to exact model identities; unmatched patterns stay visible so you can remove them.
+
 ## Steering and queued input
 
 Enter submits normally while idle and steers the current model Turn while it is running. During a shell command or compaction it queues a follow-up instead. Alt-Enter queues a follow-up while work is pending, but behaves like Enter while idle, including after a stopped or failed Turn and for local commands.

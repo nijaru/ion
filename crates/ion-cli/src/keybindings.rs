@@ -16,9 +16,11 @@ pub(crate) const CHOICE: u8 = 8;
 pub(crate) const TEXT: u8 = 16;
 pub(crate) const DETAILS: u8 = 32;
 pub(crate) const HISTORY: u8 = 64;
-const GLOBAL: u8 = COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS | HISTORY;
+pub(crate) const MODEL_SCOPE: u8 = 128;
+const GLOBAL: u8 = COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS | HISTORY | MODEL_SCOPE;
 const EDIT: u8 = COMPOSER | TEXT;
-const SELECT: u8 = COMPLETION | PICKER | CHOICE | TEXT;
+const PICK_LIST: u8 = PICKER | MODEL_SCOPE;
+const SELECT: u8 = COMPLETION | PICK_LIST | CHOICE | TEXT;
 
 macro_rules! actions {
     ($($action:ident, $id:literal, $contexts:expr, [$($key:literal),*], $description:literal;)*) => {
@@ -39,6 +41,13 @@ actions! {
     Model, "app.model.select", COMPOSER, ["ctrl+l"], "Choose Session model";
     ModelForward, "app.model.cycleForward", COMPOSER, ["ctrl+p"], "Cycle to next locally ready model";
     ModelBackward, "app.model.cycleBackward", COMPOSER, ["ctrl+shift+p"], "Cycle to previous locally ready model";
+    ScopeSave, "app.models.save", MODEL_SCOPE, ["ctrl+s"], "Save the ordered model scope";
+    ScopeEnable, "app.models.enableAll", MODEL_SCOPE, ["ctrl+a"], "Enable all models matching the search";
+    ScopeClear, "app.models.clearAll", MODEL_SCOPE, ["ctrl+x"], "Clear all models matching the search";
+    ScopeProvider, "app.models.toggleProvider", MODEL_SCOPE, ["alt+p"], "Toggle all known models for the selected provider";
+    ScopeMoveUp, "app.models.reorderUp", MODEL_SCOPE, ["alt+up"], "Move an enabled model up in the full cycle order";
+    ScopeMoveDown, "app.models.reorderDown", MODEL_SCOPE, ["alt+down"], "Move an enabled model down in the full cycle order";
+    ScopeReset, "app.models.reset", MODEL_SCOPE, ["ctrl+r"], "Reset scope to all current and future models";
     External, "app.editor.external", EDIT, ["ctrl+g"], "Open external editor";
     Paste, "app.clipboard.pasteImage", COMPOSER, ["ctrl+v"], "Paste clipboard text or image";
     Attachments, "app.attachments.manage", COMPOSER, ["alt+i"], "Inspect or remove a draft attachment";
@@ -52,13 +61,13 @@ actions! {
     Submit, "tui.input.submit", EDIT, ["enter"], "Submit composer or custom answer";
     NewLine, "tui.input.newLine", EDIT, ["shift+enter", "ctrl+enter", "ctrl+j"], "Insert newline";
     Tab, "tui.input.tab", EDIT | COMPLETION, ["tab"], "Complete a path/command; otherwise insert tab";
-    Confirm, "tui.select.confirm", COMPLETION | PICKER | CHOICE, ["enter"], "Accept the visible selected item";
-    Cancel, "tui.select.cancel", COMPOSER | COMPLETION | PICKER | CHOICE | TEXT | DETAILS | HISTORY, ["escape"], "Dismiss local UI or stop work; press twice on an empty composer to open the Session tree";
+    Confirm, "tui.select.confirm", COMPLETION | PICK_LIST | CHOICE, ["enter"], "Accept the visible selected item";
+    Cancel, "tui.select.cancel", GLOBAL, ["escape"], "Dismiss local UI or stop work; press twice on an empty composer to open the Session tree";
     SelectUp, "tui.select.up", SELECT, ["up"], "Move up in completion or modal input";
     SelectDown, "tui.select.down", SELECT, ["down"], "Move down in completion or modal input";
-    SelectPageUp, "tui.select.pageUp", PICKER, ["pageup"], "Move up one visible picker page";
-    SelectPageDown, "tui.select.pageDown", PICKER, ["pagedown"], "Move down one visible picker page";
-    Toggle, "tui.select.toggle", PICKER | CHOICE, ["space"], "Toggle a setting or multi-select option";
+    SelectPageUp, "tui.select.pageUp", PICK_LIST, ["pageup"], "Move up one visible picker page";
+    SelectPageDown, "tui.select.pageDown", PICK_LIST, ["pagedown"], "Move down one visible picker page";
+    Toggle, "tui.select.toggle", PICK_LIST | CHOICE, ["space"], "Toggle a setting or multi-select option";
     QuestionCollapse, "tui.question.toggleCollapsed", CHOICE | TEXT, ["ctrl+]"], "Hide/reopen the pending question without releasing input";
     QuestionNext, "tui.question.next", CHOICE, ["tab", "right"], "Next question or batch review";
     QuestionPrevious, "tui.question.previous", CHOICE, ["shift+tab", "left"], "Previous question or batch review";
@@ -70,7 +79,7 @@ actions! {
     WordRight, "tui.editor.cursorWordRight", EDIT, ["ctrl+right", "alt+right", "alt+f"], "Move right by word";
     LineStart, "tui.editor.cursorLineStart", EDIT, ["home", "ctrl+a"], "Move to line start";
     LineEnd, "tui.editor.cursorLineEnd", EDIT, ["end", "ctrl+e"], "Move to line end";
-    Backspace, "tui.editor.deleteCharBackward", EDIT | PICKER, ["backspace"], "Delete previous grapheme";
+    Backspace, "tui.editor.deleteCharBackward", EDIT | PICK_LIST, ["backspace"], "Delete previous grapheme";
     Delete, "tui.editor.deleteCharForward", EDIT, ["delete"], "Delete next grapheme";
     KillWordBackward, "tui.editor.deleteWordBackward", EDIT, ["ctrl+w", "alt+backspace"], "Kill previous word";
     KillWordForward, "tui.editor.deleteWordForward", EDIT, ["alt+d", "alt+delete"], "Kill next word";

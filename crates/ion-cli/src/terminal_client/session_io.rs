@@ -28,6 +28,11 @@ pub(super) enum ReadOutput {
         choices: ion_app::ModelChoices,
         current: ion_ai::ModelRef,
     },
+    ModelScope(ion_app::ModelScopeChoices),
+    ModelScopeSave {
+        submitted: super::model_scope::ScopeSave,
+        result: Result<()>,
+    },
     ModelAccess {
         selection: ion_app::Selection,
         missing: bool,
@@ -596,6 +601,14 @@ pub(super) fn apply(
             ui.pickers
                 .apply_models(choices, Some(&current), "Choose model")
         }
+        Ok(ReadOutput::ModelScope(choices)) => ui.pickers.open_model_scope(choices),
+        Ok(ReadOutput::ModelScopeSave { submitted, result }) => {
+            ui.pickers.finish_model_scope_save(submitted, &result);
+            ui.status = match result {
+                Ok(()) => "Saved model scope".into(),
+                Err(error) => format!("Model scope save failed: {error:#}"),
+            };
+        }
         Ok(ReadOutput::ModelAccess { selection, missing }) => {
             return Ok(Some(UiEffect::ModelAccess {
                 selection,
@@ -737,6 +750,12 @@ pub(super) fn cleanup(ui: &mut Frontend, finished: ReadFinished, outcome: &mut R
                     path.display()
                 )),
             );
+            return;
+        }
+        Ok(ReadOutput::ModelScopeSave { result, .. }) => {
+            if let Err(error) = result.context("save model scope during shutdown") {
+                super::activity::combine_error(outcome, error);
+            }
             return;
         }
         result => result,

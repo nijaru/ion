@@ -360,6 +360,13 @@ pub(super) async fn apply_picker(
             services.clone(),
             super::configuration::ModelRequest::Identity(model),
         ),
+        PickerValue::SaveModelScope(submitted) => {
+            if let Err(error) = super::model_scope::save(runtime, ui, services.clone(), submitted) {
+                ui.pickers
+                    .set_scope_notice(format!("Model scope save not started: {error:#}"));
+            }
+            return Ok(());
+        }
         PickerValue::Reasoning(reasoning) => {
             if let Err(error) = super::session_io::start_binding(
                 runtime,
@@ -392,6 +399,7 @@ pub(super) async fn apply_picker(
             return Ok(());
         }
         PickerValue::Setting(_)
+        | PickerValue::ScopeRow
         | PickerValue::KeepContext
         | PickerValue::Task(_)
         | PickerValue::Mcp(_)
