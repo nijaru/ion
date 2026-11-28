@@ -80,6 +80,10 @@ pub enum Reasoning {
     Low,
     Medium,
     High,
+    /// Extended effort, when the selected route supports it.
+    XHigh,
+    /// The highest explicit effort, when the selected route supports it.
+    Max,
     /// A concrete token budget, when the target profile supports one.
     BudgetTokens(u32),
 }
@@ -107,6 +111,8 @@ impl std::fmt::Display for Reasoning {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
+            Self::XHigh => "xhigh",
+            Self::Max => "max",
             Self::BudgetTokens(tokens) => return write!(f, "budget:{tokens}"),
         })
     }
@@ -121,13 +127,18 @@ impl std::str::FromStr for Reasoning {
             "low" => Ok(Self::Low),
             "medium" => Ok(Self::Medium),
             "high" => Ok(Self::High),
+            "xhigh" => Ok(Self::XHigh),
+            "max" => Ok(Self::Max),
             _ if value.starts_with("budget:") => value[7..]
                 .parse::<u32>()
                 .ok()
                 .filter(|tokens| *tokens > 0)
                 .map(Self::BudgetTokens)
                 .ok_or_else(|| "reasoning budget must be a positive u32".into()),
-            _ => Err("reasoning must be default, off, low, medium, high or budget:TOKENS".into()),
+            _ => Err(
+                "reasoning must be default, off, low, medium, high, xhigh, max or budget:TOKENS"
+                    .into(),
+            ),
         }
     }
 }

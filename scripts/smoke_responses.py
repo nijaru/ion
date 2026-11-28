@@ -40,8 +40,8 @@ def message(identity, text, *, phase="final_answer", refusal=False):
     return dict(type="message", id=identity, role="assistant", status="completed", phase=phase, content=[part])
 
 
-def finish(output, *, incomplete=False, output_tokens=8):
-    response = dict(id="resp_1", model="mock", status="incomplete" if incomplete else "completed", output=output,
+def finish(output, *, incomplete=False, output_tokens=8, model="mock"):
+    response = dict(id="resp_1", model=model, status="incomplete" if incomplete else "completed", output=output,
                     usage=dict(input_tokens=10, output_tokens=output_tokens, total_tokens=10 + output_tokens,
                                input_tokens_details=dict(cached_tokens=6), output_tokens_details=dict(reasoning_tokens=3)))
     if incomplete:
@@ -92,6 +92,16 @@ class Handler(BaseHTTPRequestHandler):
                     assert step == 2
                     assert [item for item in body["input"] if item.get("id") in ("msg_a", "msg_b")] == items
                     payload = finish([message("msg_blocks_reopen", "BLOCKS_REOPENED")])
+            elif self.path == "/effort/v1/responses":
+                assert body["model"] == "gpt-6.2-sol"
+                assert body["reasoning"] == dict(effort="xhigh" if step == 1 else "max", summary="auto")
+                opaque = dict(type="reasoning", id="rs_effort", summary=[], encrypted_content="EFFORT_CIPHER")
+                if step == 1:
+                    payload = finish([opaque, message("msg_effort_1", "EFFORT_ACCEPTED")], model=body["model"])
+                else:
+                    assert step in (2, 3), step
+                    assert [item for item in body["input"] if item.get("id") == "rs_effort"] == [opaque]
+                    payload = finish([message(f"msg_effort_{step}", "EFFORT_ACCEPTED")], model=body["model"])
             elif self.path == "/stop/v1/responses":
                 if step == 1:
                     self.provisional_until_stop()
@@ -380,8 +390,8 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
     thread.start()
     base = f"http://127.0.0.1:{server.server_port}"
 
-    def select(prefix="", *args):
-        run(env, "use", "responses-fixture", "mock", "--endpoint", base + prefix + "/v1", "--wire", "openai-responses", "--images", "--api-key-env", "RESPONSES_FIXTURE_KEY", *args)
+    def select(prefix="", *args, model="mock"):
+        run(env, "use", "responses-fixture", model, "--endpoint", base + prefix + "/v1", "--wire", "openai-responses", "--images", "--api-key-env", "RESPONSES_FIXTURE_KEY", *args)
 
     def submit(name, prompt, *args, success=True):
         return run(env, "--json", "--cwd", workspace, "--session", work / f"{name}.sqlite", *args, "run", prompt, success=success)
@@ -418,6 +428,22 @@ with tempfile.TemporaryDirectory(prefix="ion-responses-") as temporary:
         reopened_blocks = submit("blocks", "Continue with the original native messages")
         assert [item for item in reopened_blocks if item["type"] == "text_delta"] == [dict(type="text_delta", block=0, text="BLOCKS_REOPENED")]
         assert len(requests["/blocks/v1/responses"]) == 2
+
+        select("/effort", model="gpt-6.2-sol")
+        effort_endpoint = "/effort/v1/responses"
+        refused = subprocess.run(
+            [binary, "--cwd", workspace, "--session", work / "invalid-effort.sqlite",
+             "--reasoning", "off", "run", "Do not admit this input"],
+            env=env, capture_output=True, text=True, timeout=20,
+        )
+        assert refused.returncode != 0 and "cannot disable reasoning" in refused.stderr, refused
+        assert effort_endpoint not in requests and inspect("invalid-effort") == []
+        for args in (("--reasoning", "xhigh"), ("--reasoning", "max"), ()):
+            records = submit("effort", "Use the selected effort", *args)
+            assert records[-1] == dict(type="run_end", status="completed"), records
+        assert len(requests[effort_endpoint]) == 3
+        assert all("EFFORT_CIPHER" not in item.get("text", "") for item in records)
+        print("Responses effort: local Off refusal, xhigh/max wire values, saved max and exact encrypted replay across reopen: OK", flush=True)
 
         select("/stop")
         child = subprocess.Popen([binary, "--json", "--cwd", workspace, "--session", work / "stop.sqlite",

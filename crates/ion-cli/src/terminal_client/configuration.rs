@@ -94,6 +94,8 @@ fn reasoning_levels(agent: &ion_core::Agent) -> Result<Vec<Reasoning>> {
         Reasoning::Low,
         Reasoning::Medium,
         Reasoning::High,
+        Reasoning::XHigh,
+        Reasoning::Max,
     ] {
         match agent.validate_reasoning(reasoning) {
             Ok(()) => levels.push(reasoning),

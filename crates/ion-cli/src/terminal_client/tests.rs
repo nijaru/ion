@@ -2093,6 +2093,30 @@ async fn reasoning_choices_use_adapter_support_and_preselect_current() {
             vec![ion_ai::Reasoning::ProviderDefault, ion_ai::Reasoning::Off],
         ),
         (
+            Wire::OpenAiResponses,
+            "gpt-6.2-sol",
+            vec![
+                ion_ai::Reasoning::ProviderDefault,
+                ion_ai::Reasoning::Low,
+                ion_ai::Reasoning::Medium,
+                ion_ai::Reasoning::High,
+                ion_ai::Reasoning::XHigh,
+                ion_ai::Reasoning::Max,
+            ],
+        ),
+        (
+            Wire::OpenAiResponses,
+            "gpt-5.4-mini",
+            vec![
+                ion_ai::Reasoning::ProviderDefault,
+                ion_ai::Reasoning::Off,
+                ion_ai::Reasoning::Low,
+                ion_ai::Reasoning::Medium,
+                ion_ai::Reasoning::High,
+                ion_ai::Reasoning::XHigh,
+            ],
+        ),
+        (
             Wire::AnthropicMessages,
             "model",
             vec![

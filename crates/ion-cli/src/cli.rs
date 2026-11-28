@@ -288,7 +288,7 @@ fn options() -> Vec<Arg> {
         Arg::new("models").long("models").value_name("PATTERNS")
             .help("Ordered comma-separated model patterns for fresh selection and cycling; overrides saved scope; empty clears it for this invocation"),
         Arg::new("reasoning").long("reasoning").value_parser(clap::value_parser!(Reasoning))
-            .value_name("EFFORT").help("Generation effort: default, off, low, medium, high or budget:TOKENS; route support varies"),
+            .value_name("EFFORT").help("Generation effort: default, off, low, medium, high, xhigh, max or budget:TOKENS; route support varies"),
         Arg::new("image").long("image").action(ArgAction::Append)
             .value_parser(clap::value_parser!(PathBuf)).value_name("PATH")
             .help("Attach an image to the first prompt (repeatable)"),

@@ -4,6 +4,7 @@ use super::transcript::{
     Part, Transcript, incompatible_replay, provider_replay, tool_result_content,
 };
 use super::*;
+use crate::catalog::ResponsesProfile;
 
 pub(super) const RESPONSES_REPLAY: &str = "openai_responses_output";
 
@@ -175,10 +176,8 @@ pub(super) fn responses_body(
     if let Some(instructions) = &request.instructions {
         if endpoint.scheme() == "https"
             && endpoint.host_str() == Some("api.openai.com")
-            && matches!(
-                request.route.effective.model.as_str(),
-                "gpt-6.2-sol" | "gpt-6.2-astra"
-            )
+            && ResponsesProfile::for_model(&request.route.effective.model)
+                == Some(ResponsesProfile::Gpt62)
         {
             // GPT-6.2 places top-level instructions after input in the cache
             // prefix. A leading developer item stays ahead of the growing history.

@@ -543,7 +543,7 @@ impl ModelStore {
                 model: saved.model.clone(),
                 endpoint: model.endpoint.into(),
                 wire: match model.wire {
-                    catalog::CatalogWire::OpenAiResponses => HttpWire::OpenAiResponses,
+                    catalog::CatalogWire::OpenAiResponses(_) => HttpWire::OpenAiResponses,
                     catalog::CatalogWire::DeepSeekChat => HttpWire::DeepSeekChat,
                     catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
                     catalog::CatalogWire::OpenRouterChat => HttpWire::OpenRouterChat,
@@ -706,6 +706,11 @@ mod tests {
         let store = ModelStore::new(root.clone());
         let credentials = CredentialStore::new(root.join("credentials"));
         for (model, context_window) in [
+            ("gpt-6.2-sol", 1_050_000),
+            ("gpt-6.2-astra", 1_050_000),
+            ("gpt-6.1-terra", 1_050_000),
+            ("gpt-6-luna", 1_050_000),
+            ("gpt-5.6-sol", 1_050_000),
             ("gpt-5.5", 1_050_000),
             ("gpt-5.4-mini", 400_000),
             ("gpt-5.4", 1_050_000),

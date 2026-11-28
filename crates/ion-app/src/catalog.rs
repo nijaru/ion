@@ -1,7 +1,7 @@
 //! Curated starting points for the model wire APIs Ion currently implements.
 //!
-//! Checked 2026-09-26, with current Claude and OpenAI models refreshed 2026-09-29,
-//! against the linked provider model pages. A context window
+//! Each entry records when it was checked against its provider model page.
+//! A context window
 //! includes input and output tokens; it is not an independent input allowance.
 //! Catalog membership says the wire route exists, not that an account has access
 //! to the model or that a live request has been qualified.
@@ -11,11 +11,32 @@
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CatalogWire {
-    OpenAiResponses,
+    OpenAiResponses(ResponsesProfile),
     DeepSeekChat,
     MiMoChat,
     OpenRouterChat,
     AnthropicMessages,
+}
+
+/// Verified OpenAI Responses effort and default-thinking behavior. An unknown
+/// compatible endpoint model does not inherit capabilities from a name prefix.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResponsesProfile {
+    XhighDefaultOff,
+    Xhigh,
+    Max,
+    /// Reasoning cannot be disabled. Native OpenAI also places top-level
+    /// instructions after the input, so use a leading developer message.
+    Gpt62,
+}
+
+impl ResponsesProfile {
+    pub(crate) fn for_model(id: &str) -> Option<Self> {
+        match find("openai", id)?.wire {
+            CatalogWire::OpenAiResponses(profile) => Some(profile),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,12 +218,36 @@ pub struct CatalogModel {
 }
 
 const CHECKED_ON: &str = "2026-09-26";
-const CURRENT_CHECKED_ON: &str = "2026-09-29";
+const ANTHROPIC_CHECKED_ON: &str = "2026-09-29";
+const OPENAI_CHECKED_ON: &str = "2026-11-28";
 const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/responses";
 const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
 const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com/chat/completions";
 const MIMO_ENDPOINT: &str = "https://api.xiaomimimo.com/v1/chat/completions";
+
+const fn openai_model(
+    id: &'static str,
+    label: &'static str,
+    context_window: u32,
+    profile: ResponsesProfile,
+    source_url: &'static str,
+) -> CatalogModel {
+    CatalogModel {
+        provider: "openai",
+        id,
+        label,
+        wire: CatalogWire::OpenAiResponses(profile),
+        endpoint: OPENAI_ENDPOINT,
+        api_key_env: "OPENAI_API_KEY",
+        context_window,
+        max_output_tokens: 128_000,
+        image_input: true,
+        capabilities: OPENAI_MANAGED_CACHE,
+        source_url,
+        checked_on: OPENAI_CHECKED_ON,
+    }
+}
 
 const MODELS: &[CatalogModel] = &[
     CatalogModel {
@@ -247,48 +292,62 @@ const MODELS: &[CatalogModel] = &[
         source_url: "https://openrouter.ai/deepseek/deepseek-v4.1-flash/providers",
         checked_on: CHECKED_ON,
     },
-    CatalogModel {
-        provider: "openai",
-        id: "gpt-5.5",
-        label: "GPT-5.5",
-        wire: CatalogWire::OpenAiResponses,
-        endpoint: OPENAI_ENDPOINT,
-        api_key_env: "OPENAI_API_KEY",
-        context_window: 1_050_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: OPENAI_MANAGED_CACHE,
-        source_url: "https://developers.openai.com/api/docs/models/gpt-5.5",
-        checked_on: CURRENT_CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "openai",
-        id: "gpt-5.4-mini",
-        label: "GPT-5.4 Mini",
-        wire: CatalogWire::OpenAiResponses,
-        endpoint: OPENAI_ENDPOINT,
-        api_key_env: "OPENAI_API_KEY",
-        context_window: 400_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: OPENAI_MANAGED_CACHE,
-        source_url: "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
-        checked_on: CHECKED_ON,
-    },
-    CatalogModel {
-        provider: "openai",
-        id: "gpt-5.4",
-        label: "GPT-5.4",
-        wire: CatalogWire::OpenAiResponses,
-        endpoint: OPENAI_ENDPOINT,
-        api_key_env: "OPENAI_API_KEY",
-        context_window: 1_050_000,
-        max_output_tokens: 128_000,
-        image_input: true,
-        capabilities: OPENAI_MANAGED_CACHE,
-        source_url: "https://developers.openai.com/api/docs/models/gpt-5.4",
-        checked_on: CHECKED_ON,
-    },
+    openai_model(
+        "gpt-5.5",
+        "GPT-5.5",
+        1_050_000,
+        ResponsesProfile::Xhigh,
+        "https://developers.openai.com/api/docs/models/gpt-5.5",
+    ),
+    openai_model(
+        "gpt-5.4-mini",
+        "GPT-5.4 Mini",
+        400_000,
+        ResponsesProfile::XhighDefaultOff,
+        "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
+    ),
+    openai_model(
+        "gpt-5.4",
+        "GPT-5.4",
+        1_050_000,
+        ResponsesProfile::XhighDefaultOff,
+        "https://developers.openai.com/api/docs/models/gpt-5.4",
+    ),
+    openai_model(
+        "gpt-6.2-sol",
+        "GPT-6.2 Sol",
+        1_050_000,
+        ResponsesProfile::Gpt62,
+        "https://developers.openai.com/api/docs/models/gpt-6.2-sol",
+    ),
+    openai_model(
+        "gpt-6.2-astra",
+        "GPT-6.2 Astra",
+        1_050_000,
+        ResponsesProfile::Gpt62,
+        "https://developers.openai.com/api/docs/models/gpt-6.2-astra",
+    ),
+    openai_model(
+        "gpt-6.1-terra",
+        "GPT-6.1 Terra",
+        1_050_000,
+        ResponsesProfile::Max,
+        "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+    ),
+    openai_model(
+        "gpt-6-luna",
+        "GPT-6 Luna",
+        1_050_000,
+        ResponsesProfile::Max,
+        "https://developers.openai.com/api/docs/models/gpt-6-luna",
+    ),
+    openai_model(
+        "gpt-5.6-sol",
+        "GPT-5.6 Sol",
+        1_050_000,
+        ResponsesProfile::Max,
+        "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    ),
     CatalogModel {
         provider: "openrouter",
         id: "openai/gpt-5.4",
@@ -315,7 +374,7 @@ const MODELS: &[CatalogModel] = &[
         image_input: true,
         capabilities: ANTHROPIC_OPUS_5_5,
         source_url: "https://platform.claude.com/docs/en/models/opus-5-5/overview",
-        checked_on: CURRENT_CHECKED_ON,
+        checked_on: ANTHROPIC_CHECKED_ON,
     },
     CatalogModel {
         provider: "anthropic",
@@ -329,7 +388,7 @@ const MODELS: &[CatalogModel] = &[
         image_input: true,
         capabilities: ANTHROPIC_SONNET_5_5,
         source_url: "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
-        checked_on: CURRENT_CHECKED_ON,
+        checked_on: ANTHROPIC_CHECKED_ON,
     },
     CatalogModel {
         provider: "anthropic",
@@ -343,7 +402,7 @@ const MODELS: &[CatalogModel] = &[
         image_input: true,
         capabilities: ANTHROPIC_FABLE_5_1,
         source_url: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
-        checked_on: CURRENT_CHECKED_ON,
+        checked_on: ANTHROPIC_CHECKED_ON,
     },
     CatalogModel {
         provider: "anthropic",
@@ -412,7 +471,10 @@ mod tests {
         for model in models() {
             assert!(identities.insert((model.provider, model.id)));
             assert!(model.context_window > model.max_output_tokens);
-            assert!(matches!(model.checked_on, CHECKED_ON | CURRENT_CHECKED_ON));
+            assert!(matches!(
+                model.checked_on,
+                CHECKED_ON | ANTHROPIC_CHECKED_ON | OPENAI_CHECKED_ON
+            ));
             assert!(model.source_url.starts_with("https://"));
             assert!(model.endpoint.starts_with("https://"));
             assert!(model.api_key_env.ends_with("_API_KEY"));

@@ -49,7 +49,7 @@ commands! {
     Name => (Sessions, "name", "[NAME]", "Show or change the Session name"),
     Model => (Models, "model", "[MODEL]", "Choose a known model by identity or ID/name substring"),
     ScopedModels => (Models, "scoped-models", "", "Edit and save the ordered model rotation for Ctrl-P"),
-    Reasoning => (Models, "reasoning", "[default|off|low|medium|high|budget:TOKENS]", "Select generation effort (route support varies)"),
+    Reasoning => (Models, "reasoning", "[default|off|low|medium|high|xhigh|max|budget:TOKENS]", "Select generation effort (route support varies)"),
     Mcp => (Work, "mcp", "[reconnect [SERVER]]", "Inspect admitted MCP servers or explicitly reconnect a shared connection"),
     Compact => (Work, "compact", "[instructions]", "Summarize settled context"),
     Tasks => (Work, "tasks", "[status|result|cancel|acknowledge UUID] | steer UUID TEXT", "Inspect, steer, stop or remove a background task"),

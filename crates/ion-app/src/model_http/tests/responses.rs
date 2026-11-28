@@ -37,6 +37,85 @@ fn native_gpt_62_instructions_stay_at_the_front_of_growing_input() {
     assert_eq!(other_model["input"][0]["role"], "user");
 }
 
+#[test]
+fn native_catalog_efforts_have_the_same_preflight_and_wire_shape() {
+    use Reasoning::{Max, Off, ProviderDefault, XHigh};
+    let endpoint = reqwest::Url::parse("https://api.openai.com/v1/responses").unwrap();
+    let service = HttpModelService::new(
+        endpoint.as_str(),
+        HttpWire::OpenAiResponses,
+        Arc::new(|| None),
+    )
+    .unwrap();
+    for (model, off, xhigh, max) in [
+        ("gpt-6.2-astra", false, true, true),
+        ("gpt-6.2-sol", false, true, true),
+        ("gpt-6.1-terra", true, true, true),
+        ("gpt-6-luna", true, true, true),
+        ("gpt-5.6-sol", true, true, true),
+        ("gpt-5.5", true, true, false),
+        ("gpt-5.4", true, true, false),
+        ("gpt-5.4-mini", true, true, false),
+        ("gpt-6.2-sol-proxy", true, false, false),
+    ] {
+        let mut request = request();
+        request.route.effective.model = model.into();
+        for (effort, supported) in [
+            (ProviderDefault, true),
+            (Off, off),
+            (XHigh, xhigh),
+            (Max, max),
+        ] {
+            request.controls.reasoning = effort;
+            let result = encode(&request, &endpoint);
+            let preflight = service.validate_controls(&request.route.effective, &request.controls);
+            if supported {
+                preflight.unwrap();
+                let body = result.unwrap();
+                match effort {
+                    ProviderDefault => assert!(body.get("reasoning").is_none()),
+                    Off => assert_eq!(body["reasoning"], json!({"effort":"none"})),
+                    _ => assert_eq!(
+                        body["reasoning"],
+                        json!({"effort":effort.to_string(),"summary":"auto"})
+                    ),
+                }
+                assert_eq!(body["store"], false);
+                assert_eq!(body["include"], json!(["reasoning.encrypted_content"]));
+            } else {
+                assert_eq!(preflight.unwrap_err().kind, ProviderErrorKind::Unsupported);
+                assert_eq!(result.unwrap_err().kind, ProviderErrorKind::Unsupported);
+            }
+        }
+    }
+}
+
+#[test]
+fn sampling_uses_the_exact_responses_model_default_and_effort() {
+    let mut request = request();
+    request.controls.temperature = Some(0.5);
+    for (model, reasoning, allowed) in [
+        ("gpt-5.4", Reasoning::ProviderDefault, true),
+        ("gpt-5.5", Reasoning::ProviderDefault, false),
+        ("gpt-5.5", Reasoning::Off, true),
+        ("gpt-5.4", Reasoning::XHigh, false),
+        ("gpt-6.2-sol", Reasoning::ProviderDefault, false),
+        ("gpt-6.2-sol", Reasoning::Max, false),
+        ("compatible", Reasoning::ProviderDefault, true),
+    ] {
+        request.route.effective.model = model.into();
+        request.controls.reasoning = reasoning;
+        if allowed {
+            assert_eq!(responses_body(&request).unwrap()["temperature"], 0.5);
+        } else {
+            assert_eq!(
+                responses_body(&request).unwrap_err().kind,
+                ProviderErrorKind::Unsupported
+            );
+        }
+    }
+}
+
 fn text_item(text: &str) -> Value {
     json!({"id":"msg_1","type":"message","role":"assistant","status":"completed","phase":"final_answer",
         "content":[{"type":"output_text","text":text,"annotations":[]}]})

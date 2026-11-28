@@ -40,6 +40,8 @@ ion doctor
 
 `login` takes an API key at a masked terminal prompt. Skip it if the route already has credentials through its supported environment variable or needs no key. `auth` shows sources without displaying secrets; `doctor` checks configuration offline. These setup commands do not send model requests. For a custom compatible endpoint, see `ion use --help`; supply the endpoint and wire format for your actual service rather than a catalog route.
 
+For example, `ion use openai gpt-6.2-sol` selects the OpenAI Responses API with `OPENAI_API_KEY` or an API key saved with `ion login openai`. It does not use a ChatGPT subscription login.
+
 Configuration, saved credentials, resources and Sessions use `~/.ion` by default, or `ION_HOME` when set. Workspace `.ion` files are separate. Ion does not automatically migrate old XDG storage.
 
 ## Use

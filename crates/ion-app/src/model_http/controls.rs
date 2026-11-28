@@ -1,5 +1,6 @@
 //! One pure compiler for control preflight and request encoding.
 use super::*;
+use crate::catalog::ResponsesProfile;
 
 const ANTHROPIC_MIN_THINKING_BUDGET: u32 = 1_024;
 const ANTHROPIC_MIN_ANSWER_ROOM: u32 = 1_024;
@@ -28,6 +29,11 @@ fn anthropic_control_fields(
         }
     };
     match (mode, controls.reasoning) {
+        (_, Reasoning::XHigh | Reasoning::Max) => {
+            return Err(unsupported(
+                "extended reasoning effort is not supported by this adapter",
+            ));
+        }
         (AnthropicThinkingMode::AdaptiveManaged, Reasoning::ProviderDefault) => {
             if native_anthropic {
                 if forced_tool {
@@ -114,6 +120,69 @@ fn anthropic_control_fields(
     Ok(fields)
 }
 
+fn responses_control_fields(
+    model: &str,
+    controls: &ion_ai::GenerationControls,
+) -> Result<Value, ProviderError> {
+    if controls.max_output_tokens < 16 {
+        return Err(invalid("Responses requires at least 16 output tokens"));
+    }
+    let profile = ResponsesProfile::for_model(model);
+    let mut fields = json!({"max_output_tokens":controls.max_output_tokens});
+    match controls.reasoning {
+        Reasoning::ProviderDefault => {}
+        Reasoning::Off => {
+            if profile == Some(ResponsesProfile::Gpt62) {
+                return Err(unsupported("this Responses model cannot disable reasoning"));
+            }
+            fields["reasoning"] = json!({"effort":"none"});
+        }
+        Reasoning::XHigh if profile.is_none() => {
+            return Err(unsupported(
+                "xhigh reasoning is not verified for this Responses model",
+            ));
+        }
+        Reasoning::Max
+            if !matches!(
+                profile,
+                Some(ResponsesProfile::Max | ResponsesProfile::Gpt62)
+            ) =>
+        {
+            return Err(unsupported(
+                "max reasoning is not verified for this Responses model",
+            ));
+        }
+        Reasoning::Low
+        | Reasoning::Medium
+        | Reasoning::High
+        | Reasoning::XHigh
+        | Reasoning::Max => {
+            fields["reasoning"] = json!({"effort":controls.reasoning.to_string(),"summary":"auto"});
+        }
+        Reasoning::BudgetTokens(_) => {
+            return Err(unsupported(
+                "exact reasoning-token budgets are unsupported by Responses",
+            ));
+        }
+    }
+    let sampling_permitted = profile.is_none()
+        || controls.reasoning == Reasoning::Off
+        || (profile == Some(ResponsesProfile::XhighDefaultOff)
+            && controls.reasoning == Reasoning::ProviderDefault);
+    if !sampling_permitted && (controls.temperature.is_some() || controls.top_p.is_some()) {
+        return Err(unsupported(
+            "explicit sampling requires reasoning to be off on this Responses model",
+        ));
+    }
+    if let Some(value) = controls.temperature {
+        fields["temperature"] = json!(value);
+    }
+    if let Some(value) = controls.top_p {
+        fields["top_p"] = json!(value);
+    }
+    Ok(fields)
+}
+
 pub(super) fn control_fields(
     model: &ion_ai::ModelRef,
     controls: &ion_ai::GenerationControls,
@@ -125,34 +194,20 @@ pub(super) fn control_fields(
         return anthropic_control_fields(model, controls, native_anthropic);
     }
     if wire == HttpWire::OpenAiResponses {
-        if controls.max_output_tokens < 16 {
-            return Err(invalid("Responses requires at least 16 output tokens"));
-        }
-        let mut fields = json!({"max_output_tokens":controls.max_output_tokens});
-        match controls.reasoning {
-            Reasoning::ProviderDefault => {}
-            Reasoning::Off => fields["reasoning"] = json!({"effort":"none"}),
-            Reasoning::Low => fields["reasoning"] = json!({"effort":"low","summary":"auto"}),
-            Reasoning::Medium => fields["reasoning"] = json!({"effort":"medium","summary":"auto"}),
-            Reasoning::High => fields["reasoning"] = json!({"effort":"high","summary":"auto"}),
-            Reasoning::BudgetTokens(_) => {
-                return Err(unsupported(
-                    "exact reasoning-token budgets are unsupported by Responses",
-                ));
-            }
-        }
-        if let Some(value) = controls.temperature {
-            fields["temperature"] = json!(value);
-        }
-        if let Some(value) = controls.top_p {
-            fields["top_p"] = json!(value);
-        }
-        return Ok(fields);
+        return responses_control_fields(&model.model, controls);
     }
-    if matches!(controls.reasoning, Reasoning::BudgetTokens(_)) {
-        return Err(unsupported(
-            "exact reasoning-token budgets are unsupported by Chat Completions",
-        ));
+    match controls.reasoning {
+        Reasoning::BudgetTokens(_) => {
+            return Err(unsupported(
+                "exact reasoning-token budgets are unsupported by Chat Completions",
+            ));
+        }
+        Reasoning::XHigh | Reasoning::Max => {
+            return Err(unsupported(
+                "extended reasoning effort is not supported by this adapter",
+            ));
+        }
+        _ => {}
     }
     let mut fields = if wire == HttpWire::DeepSeekChat {
         json!({"max_tokens":controls.max_output_tokens})
@@ -172,7 +227,9 @@ pub(super) fn control_fields(
             Reasoning::Low => fields["reasoning_effort"] = json!("low"),
             Reasoning::Medium => fields["reasoning_effort"] = json!("medium"),
             Reasoning::High => fields["reasoning_effort"] = json!("high"),
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
+            Reasoning::BudgetTokens(_) | Reasoning::XHigh | Reasoning::Max => {
+                unreachable!("rejected above")
+            }
         },
         HttpWire::LlamaCppNoThinking => {
             if !matches!(
@@ -188,7 +245,9 @@ pub(super) fn control_fields(
             Reasoning::Off => fields["thinking"] = json!({"type":"disabled"}),
             Reasoning::Low => fields["reasoning_effort"] = json!("low"),
             Reasoning::Medium | Reasoning::High => fields["reasoning_effort"] = json!("high"),
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
+            Reasoning::BudgetTokens(_) | Reasoning::XHigh | Reasoning::Max => {
+                unreachable!("rejected above")
+            }
         },
         HttpWire::MiMoChat => match controls.reasoning {
             Reasoning::ProviderDefault => {}
@@ -196,7 +255,9 @@ pub(super) fn control_fields(
             Reasoning::Low | Reasoning::Medium | Reasoning::High => {
                 fields["thinking"] = json!({"type":"enabled"})
             }
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
+            Reasoning::BudgetTokens(_) | Reasoning::XHigh | Reasoning::Max => {
+                unreachable!("rejected above")
+            }
         },
         HttpWire::OpenRouterChat => match controls.reasoning {
             Reasoning::ProviderDefault => {}
@@ -204,7 +265,9 @@ pub(super) fn control_fields(
             Reasoning::Low => fields["reasoning"] = json!({"effort":"low"}),
             Reasoning::Medium => fields["reasoning"] = json!({"effort":"medium"}),
             Reasoning::High => fields["reasoning"] = json!({"effort":"high"}),
-            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
+            Reasoning::BudgetTokens(_) | Reasoning::XHigh | Reasoning::Max => {
+                unreachable!("rejected above")
+            }
         },
         HttpWire::AnthropicMessages | HttpWire::OpenAiResponses => unreachable!("handled above"),
     }
