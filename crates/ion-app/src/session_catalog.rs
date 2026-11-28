@@ -88,8 +88,8 @@ impl SessionCatalog {
     }
 
     /// Scan while retaining cancellation as a distinct outcome. Checks occur
-    /// between directory entries and Session metadata reads; in-flight filesystem
-    /// calls remain uninterruptible.
+    /// between directory entries and journal records; an in-flight filesystem
+    /// call or record decode remains uninterruptible.
     pub fn scan(&self, stop: &CancellationToken) -> Result<Option<Vec<SessionSummary>>> {
         let Some(paths) = self.paths_until(Some(stop))? else {
             return Ok(None);
@@ -151,15 +151,18 @@ impl SessionCatalog {
             if stop.is_cancelled() {
                 return Ok(None);
             }
-            if let Some(summary) = self.summary(path, all_workspaces) {
-                sessions.push(summary);
+            match self.summary(path, all_workspaces, Some(stop)) {
+                Ok(Some(summary)) => sessions.push(summary),
+                Ok(None) => {}
+                Err(ion_core::SessionError::InspectionCancelled) => return Ok(None),
+                Err(_) => {} // Damaged and incomplete databases are not discoverable.
             }
         }
         if stop.is_cancelled() {
             return Ok(None);
         }
         sessions.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| b.id.cmp(&a.id)));
-        Ok(Some(sessions))
+        Ok((!stop.is_cancelled()).then_some(sessions))
     }
 
     fn paths(&self) -> Result<Vec<PathBuf>> {
@@ -171,14 +174,20 @@ impl SessionCatalog {
         paths_in(&self.directory(), stop)
     }
 
-    fn summary(&self, path: PathBuf, all_workspaces: bool) -> Option<SessionSummary> {
-        summary(path).filter(|summary| {
-            if all_workspaces {
-                summary.cwd.is_some()
-            } else {
-                summary.cwd == self.cwd
-            }
-        })
+    fn summary(
+        &self,
+        path: PathBuf,
+        all_workspaces: bool,
+        stop: Option<&CancellationToken>,
+    ) -> Result<Option<SessionSummary>, ion_core::SessionError> {
+        let view = match stop {
+            Some(stop) => Session::inspect_metadata_until(&path, stop)?,
+            None => Session::inspect_metadata(&path)?,
+        };
+        if (all_workspaces && view.cwd.is_none()) || (!all_workspaces && view.cwd != self.cwd) {
+            return Ok(None);
+        }
+        Ok(summary(path, view))
     }
 
     pub fn latest(&self) -> Result<SessionSummary> {
@@ -190,7 +199,7 @@ impl SessionCatalog {
         recent.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
         recent
             .into_iter()
-            .find_map(|(path, _)| self.summary(path, false))
+            .find_map(|(path, _)| self.summary(path, false, None).ok().flatten())
             .context("no saved session for this directory")
     }
 
@@ -204,7 +213,7 @@ impl SessionCatalog {
             .filter(|path| {
                 Session::inspect_id(path).is_ok_and(|identity| identity.to_string().starts_with(id))
             })
-            .filter_map(|path| self.summary(path, false))
+            .filter_map(|path| self.summary(path, false, None).ok().flatten())
             .filter(|summary| summary.id.to_string().starts_with(id));
         let first = matches.next().context("session ID was not found")?;
         if matches.next().is_some() {
@@ -245,10 +254,14 @@ impl SessionCatalog {
             if stop.is_cancelled() {
                 bail!("Session lookup interrupted");
             }
-            if Session::inspect_id(&path).ok() == Some(id)
-                && Session::inspect_metadata(&path)
-                    .is_ok_and(|view| view.id == id && view.cwd.is_some())
-            {
+            if Session::inspect_id(&path).ok() != Some(id) {
+                continue;
+            }
+            let metadata = Session::inspect_metadata_until(&path, stop);
+            if matches!(metadata, Err(ion_core::SessionError::InspectionCancelled)) {
+                bail!("Session lookup interrupted");
+            }
+            if metadata.is_ok_and(|view| view.id == id && view.cwd.is_some()) {
                 ensure!(
                     matched.is_none(),
                     "session ID matches multiple saved databases; use an explicit path"
@@ -256,6 +269,7 @@ impl SessionCatalog {
                 matched = Some(path);
             }
         }
+        ensure!(!stop.is_cancelled(), "Session lookup interrupted");
         matched
             .map(|path| (path, Some(id)))
             .context("session ID was not found")
@@ -300,11 +314,7 @@ fn paths_in(directory: &Path, stop: Option<&CancellationToken>) -> Result<Option
     Ok(Some(paths))
 }
 
-fn summary(path: PathBuf) -> Option<SessionSummary> {
-    // Discovery must remain usable if one file is damaged or only
-    // partially initialized. Opening that path explicitly still reports
-    // its real error.
-    let view = Session::inspect_metadata(&path).ok()?;
+fn summary(path: PathBuf, view: ion_core::SessionMetadata) -> Option<SessionSummary> {
     let updated = modified(&path).ok()?;
     let plain = |text: &str| {
         text.chars()

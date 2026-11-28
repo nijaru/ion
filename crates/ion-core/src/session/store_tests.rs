@@ -214,6 +214,38 @@ fn reopen_checkpoint_pins_header_scan_and_context_point_reads() {
     }
 }
 
+#[test]
+fn cancelled_inspection_skips_the_next_record_but_uncancelled_reads_validate_it() {
+    let fixture = Fixture::new();
+    let session = fixture.session();
+    session.select_model(model("first")).unwrap();
+    session.select_model(model("second")).unwrap();
+    let other = Connection::open(fixture.path()).unwrap();
+    other
+        .execute("UPDATE entries SET body=CAST('{}' AS BLOB) WHERE seq=2", [])
+        .unwrap();
+    let stop = CancellationToken::new();
+    let cut = ReadCheckpoint::pin(&other).unwrap();
+    let mut observed = 0;
+    let interrupted = cut.project_until(
+        ProjectionMode::Metadata,
+        |_| {
+            observed += 1;
+            stop.cancel();
+        },
+        Some(&stop),
+    );
+    assert_eq!(observed, 1);
+    assert!(matches!(
+        interrupted,
+        Err(SessionError::InspectionCancelled)
+    ));
+    assert!(matches!(
+        Session::inspect_metadata_until(fixture.path(), &CancellationToken::new()),
+        Err(SessionError::Json(_))
+    ));
+}
+
 fn model(name: &str) -> ModelRef {
     ModelRef {
         provider: "fixture".into(),

@@ -273,29 +273,57 @@ impl<'a> ReadCheckpoint<'a> {
         mode: ProjectionMode,
         observe: impl FnMut(SessionEntry),
     ) -> Result<HistoryProjection, SessionError> {
+        self.project_until(mode, observe, None)
+    }
+
+    pub fn project_until(
+        &self,
+        mode: ProjectionMode,
+        observe: impl FnMut(SessionEntry),
+        stop: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<HistoryProjection, SessionError> {
+        check_inspection_stop(stop)?;
         let mut statement = self.snapshot.prepare(SCAN_ENTRIES)?;
-        journal::replay(
-            SqliteRows(statement.query([])?),
+        let projection = journal::replay(
+            SqliteRows(statement.query([])?, stop),
             mode,
-            |entry| read_entry(&self.snapshot, entry),
+            |entry| {
+                check_inspection_stop(stop)?;
+                read_entry(&self.snapshot, entry)
+            },
             observe,
-        )
+        )?;
+        check_inspection_stop(stop)?;
+        Ok(projection)
     }
 }
 
 const SCAN_ENTRIES: &str = "SELECT seq, body FROM entries ORDER BY seq";
 
-struct SqliteRows<'a>(rusqlite::Rows<'a>);
+pub(super) fn check_inspection_stop(
+    stop: Option<&tokio_util::sync::CancellationToken>,
+) -> Result<(), SessionError> {
+    if stop.is_some_and(tokio_util::sync::CancellationToken::is_cancelled) {
+        return Err(SessionError::InspectionCancelled);
+    }
+    Ok(())
+}
+
+struct SqliteRows<'a>(
+    rusqlite::Rows<'a>,
+    Option<&'a tokio_util::sync::CancellationToken>,
+);
 
 impl journal::EntryRows for SqliteRows<'_> {
     fn next_record(&mut self) -> Result<Option<journal::EncodedRecord<'_>>, SessionError> {
+        check_inspection_stop(self.1)?;
         self.0.next()?.map(encoded_record).transpose()
     }
 }
 
 pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
     let mut statement = connection.prepare(SCAN_ENTRIES)?;
-    journal::decode_rows(SqliteRows(statement.query([])?)).collect()
+    journal::decode_rows(SqliteRows(statement.query([])?, None)).collect()
 }
 
 pub(super) fn read_entries_through(
@@ -305,8 +333,8 @@ pub(super) fn read_entries_through(
     let end = i64::try_from(through).map_err(|_| SessionError::InvalidHistory)?;
     let mut statement =
         connection.prepare("SELECT seq, body FROM entries WHERE seq <= ?1 ORDER BY seq")?;
-    let entries =
-        journal::decode_rows(SqliteRows(statement.query([end])?)).collect::<Result<Vec<_>, _>>()?;
+    let entries = journal::decode_rows(SqliteRows(statement.query([end])?, None))
+        .collect::<Result<Vec<_>, _>>()?;
     if entries.len() as u64 != through {
         return Err(SessionError::InvalidHistory);
     }

@@ -908,7 +908,16 @@ impl Session {
     /// Validate committed history without accumulating historical payloads. Labels
     /// contain at most 120 characters from the first input's first line.
     pub fn inspect_metadata(path: impl AsRef<Path>) -> Result<SessionMetadata, SessionError> {
-        Self::inspect_report(path.as_ref(), |_| {})
+        Self::inspect_report(path.as_ref(), |_| {}, None)
+    }
+
+    /// Validate metadata until cancellation, checking before each stored record.
+    /// Does not interrupt an in-progress SQLite read or record decode.
+    pub fn inspect_metadata_until(
+        path: impl AsRef<Path>,
+        stop: &CancellationToken,
+    ) -> Result<SessionMetadata, SessionError> {
+        Self::inspect_report(path.as_ref(), |_| {}, Some(stop))
     }
 
     /// Validate one saved cut and account for all recorded routes and purposes
@@ -917,7 +926,7 @@ impl Session {
         path: impl AsRef<Path>,
     ) -> Result<(SessionMetadata, crate::SessionUsage), SessionError> {
         let mut usage = crate::session_usage::UsageIndex::default();
-        let metadata = Self::inspect_report(path.as_ref(), |entry| usage.observe(&entry))?;
+        let metadata = Self::inspect_report(path.as_ref(), |entry| usage.observe(&entry), None)?;
         Ok((metadata, usage.report()))
     }
 
@@ -929,31 +938,37 @@ impl Session {
         mut project_input: impl FnMut(&Message) -> T,
     ) -> Result<(SessionMetadata, Vec<TurnListing<T>>), SessionError> {
         let mut turns = Vec::<TurnListing<T>>::new();
-        let metadata = Self::inspect_report(path.as_ref(), |entry| match entry {
-            SessionEntry::TurnStarted { turn, input, .. } => turns.push(TurnListing {
-                turn,
-                input: project_input(&input),
-                ended: false,
-            }),
-            SessionEntry::TurnEnded { turn, .. } => {
-                let last = turns.last_mut().expect("validated admission");
-                debug_assert_eq!(last.turn, turn);
-                last.ended = true;
-            }
-            _ => {}
-        })?;
+        let metadata = Self::inspect_report(
+            path.as_ref(),
+            |entry| match entry {
+                SessionEntry::TurnStarted { turn, input, .. } => turns.push(TurnListing {
+                    turn,
+                    input: project_input(&input),
+                    ended: false,
+                }),
+                SessionEntry::TurnEnded { turn, .. } => {
+                    let last = turns.last_mut().expect("validated admission");
+                    debug_assert_eq!(last.turn, turn);
+                    last.ended = true;
+                }
+                _ => {}
+            },
+            None,
+        )?;
         Ok((metadata, turns))
     }
 
     fn inspect_report(
         path: &Path,
         observe: impl FnMut(SessionEntry),
+        stop: Option<&CancellationToken>,
     ) -> Result<SessionMetadata, SessionError> {
+        store::check_inspection_stop(stop)?;
         let path = database_path(path)?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
         let checkpoint = ReadCheckpoint::pin(&connection)?;
-        let projection = checkpoint.project(ProjectionMode::Metadata, observe)?;
+        let projection = checkpoint.project_until(ProjectionMode::Metadata, observe, stop)?;
         let header = checkpoint.header;
         Ok(SessionMetadata {
             id: header.id,
@@ -2041,6 +2056,8 @@ pub enum SessionError {
     RetirementClosed,
     #[error("Session shutdown failed: {0}")]
     Shutdown(String),
+    #[error("session inspection interrupted")]
+    InspectionCancelled,
     #[error("invalid or inconsistent session history")]
     InvalidHistory,
     #[error("invalid session database")]
