@@ -1,5 +1,6 @@
 mod access;
 mod context_capacity;
+mod gemini;
 mod responses;
 mod stream_limits;
 mod text_blocks;

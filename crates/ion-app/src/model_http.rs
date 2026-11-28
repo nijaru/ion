@@ -30,6 +30,8 @@ mod chat;
 mod chat_request;
 mod controls;
 mod errors;
+mod gemini;
+mod gemini_request;
 mod limits;
 mod responses;
 mod responses_request;
@@ -51,6 +53,8 @@ use errors::{
     anthropic_sse_error, chat_stream_error, classify_status_error, problem_detail,
     provider_error_detail_value,
 };
+use gemini::GeminiState;
+use gemini_request::{gemini_body, stream_url as gemini_stream_url};
 use limits::{ResponseBudget, StreamBudget};
 use responses::ResponsesState;
 use responses_request::responses_body;
@@ -76,6 +80,7 @@ pub enum HttpWire {
     OpenRouterChat,
     AnthropicMessages,
     OpenAiResponses,
+    GeminiGenerateContent,
 }
 
 impl HttpWire {
@@ -86,7 +91,7 @@ impl HttpWire {
             | Self::DeepSeekChat
             | Self::MiMoChat
             | Self::OpenRouterChat => true,
-            Self::AnthropicMessages | Self::OpenAiResponses => false,
+            Self::AnthropicMessages | Self::OpenAiResponses | Self::GeminiGenerateContent => false,
         }
     }
 
@@ -123,6 +128,9 @@ impl HttpModelService {
         wire: HttpWire,
     ) -> Result<String, ProviderError> {
         let mut url = parse_endpoint(base_or_endpoint)?;
+        if wire == HttpWire::GeminiGenerateContent {
+            return gemini_request::resolve_base(url).map(|base| base.to_string());
+        }
         let path = url.path().trim_end_matches('/');
         let complete = match wire {
             HttpWire::AnthropicMessages => path.ends_with("/v1/messages"),
@@ -179,7 +187,10 @@ impl HttpModelService {
         capabilities: ModelCapabilities,
         context_window_tokens: Option<u32>,
     ) -> Result<Self, ProviderError> {
-        let endpoint = parse_endpoint(endpoint)?;
+        let mut endpoint = parse_endpoint(endpoint)?;
+        if wire == HttpWire::GeminiGenerateContent {
+            endpoint = gemini_request::resolve_base(endpoint)?;
+        }
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -233,7 +244,10 @@ impl HttpModelService {
                 "invalid provider credential",
             ));
         }
-        let text = if self.wire == HttpWire::AnthropicMessages {
+        let text = if matches!(
+            self.wire,
+            HttpWire::AnthropicMessages | HttpWire::GeminiGenerateContent
+        ) {
             key
         } else {
             format!("Bearer {key}")
@@ -302,10 +316,16 @@ impl ModelService for HttpModelService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             let native_anthropic = self.native_anthropic();
+            let endpoint = if self.wire == HttpWire::GeminiGenerateContent {
+                gemini_stream_url(&self.endpoint, &request.route.effective.model)?
+            } else {
+                self.endpoint.clone()
+            };
             let mut anthropic_betas = None;
             let mut anthropic_prefix = None;
             let mut body = match self.wire {
                 HttpWire::OpenAiResponses => responses_body(request, &self.endpoint)?,
+                HttpWire::GeminiGenerateContent => gemini_body(request)?,
                 HttpWire::AnthropicMessages => {
                     let prepared = anthropic_request_for_route(
                         request,
@@ -326,6 +346,7 @@ impl ModelService for HttpModelService {
             }
             let mut decoder = match self.wire {
                 HttpWire::OpenAiResponses => Decoder::Responses(ResponsesState::default()),
+                HttpWire::GeminiGenerateContent => Decoder::Gemini(GeminiState::default()),
                 HttpWire::AnthropicMessages => Decoder::Anthropic(AnthropicState::new(
                     anthropic_prefix.expect("Anthropic request supplies prefix digest"),
                 )),
@@ -334,16 +355,16 @@ impl ModelService for HttpModelService {
             let credential = self.credential_header().await?;
             let mut post = self
                 .client
-                .post(self.endpoint.clone())
+                .post(endpoint)
                 .header("accept", "text/event-stream")
                 .json(&body);
             // RequestBuilder now owns the serialized bytes, not this JSON tree.
             drop(body);
             if let Some(header) = credential {
-                post = if self.wire == HttpWire::AnthropicMessages {
-                    post.header("x-api-key", header)
-                } else {
-                    post.header(AUTHORIZATION, header)
+                post = match self.wire {
+                    HttpWire::AnthropicMessages => post.header("x-api-key", header),
+                    HttpWire::GeminiGenerateContent => post.header("x-goog-api-key", header),
+                    _ => post.header(AUTHORIZATION, header),
                 };
             }
             if self.wire == HttpWire::AnthropicMessages {
@@ -814,6 +835,7 @@ enum Decoder {
     Chat(ChatState),
     Anthropic(AnthropicState),
     Responses(ResponsesState),
+    Gemini(GeminiState),
 }
 impl Decoder {
     fn take_error(&mut self) -> Option<ProviderError> {
@@ -828,6 +850,7 @@ impl Decoder {
             Self::Chat(state) => state.budget.used,
             Self::Anthropic(state) => state.budget.used,
             Self::Responses(state) => state.budget.used,
+            Self::Gemini(state) => state.budget.used,
         }
     }
 
@@ -840,6 +863,7 @@ impl Decoder {
             Self::Chat(state) => state.accept(value),
             Self::Anthropic(state) => state.accept(value, output),
             Self::Responses(state) => state.accept(value, output),
+            Self::Gemini(state) => state.accept(value, output),
         }
     }
     fn complete(&mut self, output: &OutputContract) -> Result<ModelResponse, ProviderError> {
@@ -847,6 +871,7 @@ impl Decoder {
             Self::Chat(state) => std::mem::take(state).complete(output),
             Self::Anthropic(_) => Err(invalid("[DONE] is not an Anthropic completion")),
             Self::Responses(_) => Err(invalid("Responses requires a terminal response event")),
+            Self::Gemini(_) => Err(invalid("Gemini requires a terminal candidate")),
         }
     }
 }

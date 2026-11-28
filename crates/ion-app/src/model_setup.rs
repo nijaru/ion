@@ -35,6 +35,7 @@ pub enum Wire {
     AnthropicMessages,
     #[serde(rename = "openai-responses")]
     OpenAiResponses,
+    GeminiGenerateContent,
 }
 
 impl Wire {
@@ -44,6 +45,7 @@ impl Wire {
         ("llama-cpp-no-thinking", Self::LlamaCppNoThinking),
         ("anthropic-messages", Self::AnthropicMessages),
         ("openai-responses", Self::OpenAiResponses),
+        ("gemini-generate-content", Self::GeminiGenerateContent),
     ];
 }
 
@@ -548,6 +550,7 @@ impl ModelStore {
                     catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
                     catalog::CatalogWire::OpenRouterChat => HttpWire::OpenRouterChat,
                     catalog::CatalogWire::AnthropicMessages(_) => HttpWire::AnthropicMessages,
+                    catalog::CatalogWire::GeminiGenerateContent => HttpWire::GeminiGenerateContent,
                 },
                 api_key_env: Some(model.api_key_env.into()),
                 max_output_tokens: model.max_output_tokens,
@@ -568,6 +571,7 @@ impl ModelStore {
             Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
             Wire::AnthropicMessages => HttpWire::AnthropicMessages,
             Wire::OpenAiResponses => HttpWire::OpenAiResponses,
+            Wire::GeminiGenerateContent => HttpWire::GeminiGenerateContent,
         };
         let endpoint = HttpModelService::resolve_endpoint(endpoint, wire)
             .context("invalid custom endpoint")?;
@@ -875,6 +879,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(openrouter.wire, HttpWire::OpenRouterChat);
+        let gemini = store
+            .resolve_identity(&ModelRef {
+                provider: "google".into(),
+                model: catalog::GEMINI_HYDROGEN.into(),
+            })
+            .unwrap();
+        assert_eq!(gemini.wire, HttpWire::GeminiGenerateContent);
+        assert_eq!(
+            gemini.endpoint,
+            "https://generativelanguage.googleapis.com/v1beta"
+        );
+        assert_eq!(gemini.api_key_env.as_deref(), Some("GEMINI_API_KEY"));
+        assert!(gemini.requires_key && gemini.image_input);
+        assert_eq!(gemini.context_window_tokens, Some(1_048_576));
+        assert_eq!(gemini.max_output_tokens, 65_536);
+        assert_eq!(
+            gemini.capabilities,
+            catalog::ModelCapabilities::conservative()
+        );
         assert!(claude.capabilities.context_mutation.mid_conversation_system);
         assert!(claude.capabilities.context_mutation.mid_conversation_tools);
         assert_eq!(

@@ -197,6 +197,9 @@ pub(super) fn control_fields(
     if wire == HttpWire::OpenAiResponses {
         return responses_control_fields(&model.model, controls);
     }
+    if wire == HttpWire::GeminiGenerateContent {
+        return super::gemini_request::gemini_controls(model, controls);
+    }
     match controls.reasoning {
         Reasoning::BudgetTokens(_) => {
             return Err(unsupported(
@@ -270,7 +273,9 @@ pub(super) fn control_fields(
                 unreachable!("rejected above")
             }
         },
-        HttpWire::AnthropicMessages | HttpWire::OpenAiResponses => unreachable!("handled above"),
+        HttpWire::AnthropicMessages
+        | HttpWire::OpenAiResponses
+        | HttpWire::GeminiGenerateContent => unreachable!("handled above"),
     }
     Ok(fields)
 }

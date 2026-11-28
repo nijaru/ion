@@ -42,6 +42,8 @@ ion doctor
 
 For example, `ion use openai gpt-6.2-sol` selects the OpenAI Responses API with `OPENAI_API_KEY` or an API key saved with `ion login openai`. It does not use a ChatGPT subscription login.
 
+`ion use google gemini-4-hydrogen` selects Gemini's GenerateContent API. Set `GEMINI_API_KEY` or run `ion login google` with a Gemini API key. Ion keeps the conversation in its Session and sends the history with each request. Long decode is not supported. For a custom route, `--wire gemini-generate-content` takes an API base URL (such as `https://generativelanguage.googleapis.com/v1beta`), not a model method URL. Custom routes must follow the same signed tool-call contract.
+
 Configuration, saved credentials, resources and Sessions use `~/.ion` by default, or `ION_HOME` when set. Workspace `.ion` files are separate. Ion does not automatically migrate old XDG storage.
 
 ## Use

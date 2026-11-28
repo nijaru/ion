@@ -20,6 +20,7 @@ pub enum CatalogWire {
     MiMoChat,
     OpenRouterChat,
     AnthropicMessages(AnthropicProfile),
+    GeminiGenerateContent,
 }
 
 /// Verified OpenAI Responses effort and default-thinking behavior. An unknown
@@ -231,6 +232,7 @@ pub struct CatalogModel {
 
 const CHECKED_ON: &str = "2026-09-26";
 const DIRECT_CHECKED_ON: &str = "2026-11-28";
+pub(crate) const GEMINI_HYDROGEN: &str = "gemini-4-hydrogen";
 const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/responses";
 const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const CLAUDE_1M: (u32, u32) = (1_000_000, 128_000);
@@ -462,6 +464,20 @@ const MODELS: &[CatalogModel] = &[
         ANTHROPIC_CACHE_ONLY,
         "https://platform.claude.com/docs/en/models/haiku-4-5/overview",
     ),
+    CatalogModel {
+        provider: "google",
+        id: GEMINI_HYDROGEN,
+        label: "Gemini 4 Hydrogen",
+        wire: CatalogWire::GeminiGenerateContent,
+        endpoint: "https://generativelanguage.googleapis.com/v1beta",
+        api_key_env: "GEMINI_API_KEY",
+        context_window: 1_048_576,
+        max_output_tokens: 65_536,
+        image_input: true,
+        capabilities: ModelCapabilities::conservative(),
+        source_url: "https://aistudio.google.com/docs/models/gemini-4-hydrogen",
+        checked_on: DIRECT_CHECKED_ON,
+    },
 ];
 
 pub fn models() -> &'static [CatalogModel] {

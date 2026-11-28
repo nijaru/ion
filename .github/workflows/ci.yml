@@ -64,6 +64,8 @@ jobs:
         run: python3 scripts/smoke_anthropic.py
       - name: Responses stateless replay and effect-fence smoke
         run: python3 scripts/smoke_responses.py
+      - name: Gemini GenerateContent wire smoke
+        run: python3 scripts/smoke_gemini.py
       - name: Shared TUI, CLI, and SDK coding qualification smoke
         run: python3 scripts/smoke_coding.py
       - name: Native web retrieval smoke
