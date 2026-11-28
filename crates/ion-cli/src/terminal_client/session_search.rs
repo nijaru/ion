@@ -19,7 +19,7 @@ impl SessionSearch {
                 .as_ref()
                 .map(|path| path.to_string_lossy().to_lowercase())
                 .unwrap_or_default(),
-            id: session.id.to_lowercase(),
+            id: session.id.to_string(),
             preview: session
                 .preview
                 .as_deref()

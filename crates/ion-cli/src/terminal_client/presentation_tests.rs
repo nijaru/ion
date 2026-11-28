@@ -1555,7 +1555,9 @@ fn session_picker_detail_never_hides_the_selected_row() {
         items: navigation::session_items(
             (0..3)
                 .map(|index| ion_app::SessionSummary {
-                    id: format!("019abcdef0{index:02}-4567-89ab-cdef01234567"),
+                    id: format!("019abc{index:02}-f012-4567-89ab-cdef01234567")
+                        .parse()
+                        .unwrap(),
                     path: PathBuf::from(format!("/session-{index}")),
                     cwd: None,
                     name: Some("saved task".into()),
@@ -1569,7 +1571,7 @@ fn session_picker_detail_never_hides_the_selected_row() {
                     updated: std::time::UNIX_EPOCH,
                 })
                 .collect(),
-            Some("019abcdef002-4567-89ab-cdef01234567"),
+            Some("019abc02-f012-4567-89ab-cdef01234567"),
             false,
             std::time::UNIX_EPOCH,
         ),
@@ -1584,14 +1586,14 @@ fn session_picker_detail_never_hides_the_selected_row() {
             assert!(
                 rows.iter().any(|row| {
                     let row = row.to_string();
-                    row.starts_with('›') && (width < 24 || row.contains("019abcdef002"))
+                    row.starts_with('›') && (width < 24 || row.contains("019abc02-f01"))
                 }),
                 "selected Session hidden at {width}x{height}"
             );
             if height >= 6 && width >= 80 {
                 assert!(
                     rows.iter()
-                        .any(|row| row.to_string().contains("id 019abcdef")),
+                        .any(|row| row.to_string().contains("id 019abc02")),
                     "selected metadata missing at {width}x{height}"
                 );
             }

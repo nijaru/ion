@@ -22,7 +22,7 @@ pub struct SessionCatalog {
 
 #[derive(Clone, Debug)]
 pub struct SessionSummary {
-    pub id: String,
+    pub id: uuid::Uuid,
     pub path: PathBuf,
     pub cwd: Option<PathBuf>,
     pub name: Option<String>,
@@ -181,7 +181,7 @@ impl SessionCatalog {
         })
     }
 
-    pub fn latest(&self) -> Result<PathBuf> {
+    pub fn latest(&self) -> Result<SessionSummary> {
         let mut recent = self
             .paths()?
             .into_iter()
@@ -191,11 +191,10 @@ impl SessionCatalog {
         recent
             .into_iter()
             .find_map(|(path, _)| self.summary(path, false))
-            .map(|session| session.path)
             .context("no saved session for this directory")
     }
 
-    pub fn by_id(&self, id: &str) -> Result<PathBuf> {
+    pub fn by_id(&self, id: &str) -> Result<SessionSummary> {
         if id.is_empty() {
             bail!("session ID is empty");
         }
@@ -205,25 +204,31 @@ impl SessionCatalog {
             .filter(|path| {
                 Session::inspect_id(path).is_ok_and(|identity| identity.to_string().starts_with(id))
             })
-            .filter_map(|path| self.summary(path, false));
+            .filter_map(|path| self.summary(path, false))
+            .filter(|summary| summary.id.to_string().starts_with(id));
         let first = matches.next().context("session ID was not found")?;
         if matches.next().is_some() {
             bail!("session ID is ambiguous; use more characters")
         }
-        Ok(first.path)
+        Ok(first)
     }
 
-    pub fn resolve_explicit(&self, value: PathBuf) -> Result<PathBuf> {
+    pub fn resolve_explicit(&self, value: PathBuf) -> Result<(PathBuf, Option<uuid::Uuid>)> {
         if is_session_path(&value) {
-            Ok(value)
+            Ok((value, None))
         } else {
-            self.by_id(&value.to_string_lossy())
+            let saved = self.by_id(&value.to_string_lossy())?;
+            Ok((saved.path, Some(saved.id)))
         }
     }
 
     /// Startup can bind the saved workspace. Unlike in-session switching, it
     /// allows a full UUID across workspaces; prefixes remain local.
-    pub fn resolve_launch(&self, value: PathBuf, stop: &CancellationToken) -> Result<PathBuf> {
+    pub fn resolve_launch(
+        &self,
+        value: PathBuf,
+        stop: &CancellationToken,
+    ) -> Result<(PathBuf, Option<uuid::Uuid>)> {
         // A bare UUID is an ID even if cwd contains a same-named file.
         // Explicit paths (including ./UUID) still bypass the catalog.
         let Some(id) = value
@@ -241,7 +246,8 @@ impl SessionCatalog {
                 bail!("Session lookup interrupted");
             }
             if Session::inspect_id(&path).ok() == Some(id)
-                && Session::inspect_metadata(&path).is_ok_and(|view| view.cwd.is_some())
+                && Session::inspect_metadata(&path)
+                    .is_ok_and(|view| view.id == id && view.cwd.is_some())
             {
                 ensure!(
                     matched.is_none(),
@@ -250,7 +256,9 @@ impl SessionCatalog {
                 matched = Some(path);
             }
         }
-        matched.context("session ID was not found")
+        matched
+            .map(|path| (path, Some(id)))
+            .context("session ID was not found")
     }
 }
 
@@ -312,9 +320,8 @@ fn summary(path: PathBuf) -> Option<SessionSummary> {
         }
     });
     preview.as_ref()?;
-    let id = view.id.to_string();
     Some(SessionSummary {
-        id,
+        id: view.id,
         path,
         cwd: view.cwd,
         name: view.name,
@@ -429,13 +436,13 @@ mod tests {
         drop(session);
         let listed = catalog.list().unwrap();
         assert_eq!(listed.len(), 1);
-        let id = &listed[0].id;
-        assert_eq!(catalog.by_id(id).unwrap(), listed[0].path);
+        let id = &listed[0].id.to_string();
+        assert_eq!(catalog.by_id(id).unwrap().path, listed[0].path);
         let elsewhere = SessionCatalog::new(catalog.root.clone(), Some(root.join("elsewhere")));
         let stop = CancellationToken::new();
         assert_eq!(
             elsewhere.resolve_launch(PathBuf::from(id), &stop).unwrap(),
-            first
+            (first.clone(), Some(listed[0].id))
         );
         assert!(elsewhere.by_id(id).is_err());
         let duplicate = first.with_file_name("duplicate.sqlite");
@@ -445,11 +452,11 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("multiple saved databases"));
         fs::remove_file(duplicate).unwrap();
-        assert_eq!(catalog.latest().unwrap(), listed[0].path);
+        assert_eq!(catalog.latest().unwrap().path, listed[0].path);
         assert_eq!(listed[0].name.as_deref(), Some("First task"));
         fs::write(first.with_file_name("damaged.sqlite"), b"partial database").unwrap();
         assert_eq!(catalog.list().unwrap().len(), 1);
-        assert_eq!(catalog.latest().unwrap(), listed[0].path);
+        assert_eq!(catalog.latest().unwrap().path, listed[0].path);
         fs::remove_dir_all(root).unwrap();
     }
 

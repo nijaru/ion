@@ -14,6 +14,39 @@ use tokio::sync::Notify;
 
 const DEADLINE: Duration = Duration::from_secs(2);
 
+#[tokio::test]
+async fn switch_refuses_a_replaced_catalog_selection_without_changing_binding() {
+    let fixture = Fixture::new();
+    let mut control = fixture.setup().into_control::<()>();
+    let source = control.session().clone();
+    let path = fixture.root.0.join("selected.sqlite");
+    let saved = Session::create(&path, None).unwrap();
+    let expected_id = saved.id();
+    drop(saved);
+    fs::rename(&path, path.with_extension("held")).unwrap();
+    let replacement = Session::create(&path, None).unwrap();
+    assert_ne!(replacement.id(), expected_id);
+    drop(replacement);
+    let error = control
+        .change_binding(BindingChange::SwitchSession {
+            path: path.clone(),
+            expected_id: Some(expected_id),
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("saved Session changed since it was selected")
+    );
+    assert!(Arc::ptr_eq(control.session(), &source));
+    assert!(
+        Session::open(&path).is_ok(),
+        "a refused switch must release the replacement's lease"
+    );
+    control.shutdown().await;
+}
+
 #[test]
 fn switch_rejects_followups_before_native_idle_reservation_and_until_result_taken() {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -35,7 +68,10 @@ fn switch_rejects_followups_before_native_idle_reservation_and_until_result_take
             .await
             .unwrap();
         let operation = control
-            .start_binding(BindingChange::SwitchSession(target_path))
+            .start_binding(BindingChange::SwitchSession {
+                path: target_path,
+                expected_id: None,
+            })
             .unwrap();
         // The only native thread is blocked. Core's idle guard is still free,
         // which previously allowed this input to be retargeted after switch.
@@ -122,7 +158,10 @@ async fn released_writer_close_is_awaited_before_reopen_without_blocking_native_
     .await
     .unwrap();
     let operation = control
-        .start_binding(BindingChange::SwitchSession(old_path))
+        .start_binding(BindingChange::SwitchSession {
+            path: old_path,
+            expected_id: None,
+        })
         .unwrap();
     let pending =
         tokio::time::timeout(Duration::from_millis(25), control.join_binding(operation)).await;

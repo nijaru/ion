@@ -234,7 +234,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             for session in catalog.list()? {
                 print_stdout(format_args!(
                     "{}\t{}\t{} turn(s)\t{}\t{}",
-                    metadata_field(&session.id),
+                    session.id,
                     metadata_field(session.name.as_deref().unwrap_or("")),
                     session.turns,
                     session
@@ -401,19 +401,18 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
             let catalog = host.sessions(Some(cwd.clone()));
-            let requested_id = cli.session.as_deref().and_then(std::path::Path::to_str)
-                .and_then(|value| uuid::Uuid::parse_str(value).ok());
-            let path = if cli.resume_session {
-                let Some(path) =
+            let (path, requested_id) = if cli.resume_session {
+                let Some((path, id)) =
                     terminal_client::choose_session(catalog.clone(), &keys, &themes, &terminated).await?
                 else {
                     return Ok(());
                 };
-                path
+                (path, Some(id))
             } else if let Some(explicit) = cli.session {
                 catalog.resolve_launch(explicit, &stop)?
             } else if cli.continue_session {
-                catalog.latest()?
+                let saved = catalog.latest()?;
+                (saved.path, Some(saved.id))
             } else if matches!(
                 action,
                 Action::Inspect
@@ -428,10 +427,15 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     "use --continue, --resume in a terminal, or --session ID; run `ion sessions` to find one"
                 )
             } else {
-                catalog.new_path()?
+                (catalog.new_path()?, None)
             };
             ensure!(!stop.is_cancelled(), "application startup interrupted");
-            let saved = cli.resume_session || cli.continue_session || path.is_file();
+            let saved = requested_id.is_some() || path.is_file();
+            let check_identity = |actual| -> Result<()> {
+                ensure!(requested_id.is_none_or(|wanted| wanted == actual),
+                    "saved Session changed since it was selected; reopen the picker or resolve its ID again");
+                Ok(())
+            };
             let check_cwd = |actual: Option<&std::path::Path>| -> Result<()> {
                 ensure!(
                     !explicit_cwd || actual == Some(cwd.as_path()),
@@ -444,6 +448,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Action::Usage => {
                     ensure!(saved, "session does not exist");
                     let (metadata, usage) = Session::inspect_usage(&path)?;
+                    check_identity(metadata.id)?;
                     check_cwd(metadata.cwd.as_deref())?;
                     print_stdout(format_args!(
                         "Session {}\n{}",
@@ -455,6 +460,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Action::Turns => {
                     ensure!(saved, "session does not exist");
                     let (metadata, turns) = Session::inspect_turns(&path, preview_input)?;
+                    check_identity(metadata.id)?;
                     check_cwd(metadata.cwd.as_deref())?;
                     for turn in turns {
                         print_stdout(format_args!(
@@ -469,6 +475,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 Action::Inspect | Action::Export { .. } => {
                     ensure!(saved, "session does not exist");
                     let view = Session::inspect(&path)?;
+                    check_identity(view.id)?;
                     check_cwd(view.cwd.as_deref())?;
                     if let Action::Export { path: output } = &action {
                         if let Some(output) = output {
@@ -514,8 +521,7 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             };
             if let Some((id, actual)) = &location {
                 check_cwd(actual.as_deref())?;
-                ensure!(requested_id.is_none_or(|wanted| wanted == *id),
-                    "saved Session identity changed during startup; reopen it explicitly");
+                check_identity(*id)?;
             }
             let mut opened = if let Some((id, actual)) = &location && acquire_early {
                 let mut acquisition = ion_app::SessionTarget::Open {

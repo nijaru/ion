@@ -81,7 +81,7 @@ pub async fn choose_session(
     keys: &KeyBindings,
     themes: &crate::themes::Themes,
     termination: &CancellationToken,
-) -> Result<Option<PathBuf>> {
+) -> Result<Option<(PathBuf, uuid::Uuid)>> {
     anyhow::ensure!(
         !termination.is_cancelled(),
         "application startup interrupted"
@@ -128,8 +128,8 @@ pub async fn choose_session(
                     suspend_terminal(&mut terminal, &mut screen, &mut ui, &mut program).await?;
                 }
                 InputEvent::Key(key) => {
-                    if let Some(PickerValue::Session { path, .. }) = ui.pickers.key(key, keys) {
-                        return Ok(Some(path));
+                    if let Some(PickerValue::Session { path, id, .. }) = ui.pickers.key(key, keys) {
+                        return Ok(Some((path, id)));
                     }
                     if ui.pickers.active().is_none() {
                         return Ok(None);

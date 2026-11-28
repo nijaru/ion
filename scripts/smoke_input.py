@@ -1818,9 +1818,13 @@ def exercise_resume(work, base_env, endpoint):
             terminal.close()
         mcp.unlink()
 
-        # A discovery snapshot is not permission to create a replacement when
-        # its file vanishes, including after metadata was read for key setup.
-        for stage, cwd, prompt in (("selection", a, "RESUME_ALPHA"), ("key setup", b, "RESUME_BETA")):
+        # A discovery snapshot is not permission to open a replacement, or
+        # create a new file if the saved one disappears during selection/setup.
+        for stage, cwd, prompt in (
+            ("replacement", a, "RESUME_ALPHA"),
+            ("selection", a, "RESUME_ALPHA"),
+            ("key setup", b, "RESUME_BETA"),
+        ):
             path, = [path for path in paths if json.loads(subprocess.run(
                 [binary, "--session", path, "inspect"], env=env, capture_output=True,
                 check=True).stdout)["cwd"] == str(cwd.resolve())]
@@ -1836,8 +1840,17 @@ def exercise_resume(work, base_env, endpoint):
                     terminal.send(b"\r")
                     terminal.wait(lambda: "openai API key:" in terminal.text())
                 path.rename(backup)
+                if stage == "replacement":
+                    # Same workspace and history, different logical identity.
+                    # Only the retained picker ID can distinguish the copy.
+                    with closing(sqlite3.connect(f"file:{backup}?mode=ro", uri=True)) as source, closing(sqlite3.connect(path)) as replacement:
+                        source.backup(replacement)
+                        header = json.loads(replacement.execute("SELECT header FROM session").fetchone()[0])
+                        header["id"] = "11111111-1111-4111-8111-111111111111"
+                        replacement.execute("UPDATE session SET header=?", (json.dumps(header).encode(),))
+                        replacement.commit()
                 terminal.output.clear()
-                if stage == "selection":
+                if stage != "key setup":
                     terminal.send(b"\r")
                 else:
                     terminal.send(b"\x03")
@@ -1847,10 +1860,16 @@ def exercise_resume(work, base_env, endpoint):
                     terminal.output.clear()
                     terminal.send(b"\r")
                 end = time.monotonic() + 10
-                while terminal.child.poll() is None and not path.exists():
+                while terminal.child.poll() is None:
+                    if stage != "replacement":
+                        assert not path.exists(), f"missing saved Session was recreated during {stage}"
                     assert time.monotonic() < end, terminal.text()
                     terminal.pump()
-                assert not path.exists(), f"missing saved Session was recreated during {stage}"
+                terminal.paint()
+                if stage == "replacement":
+                    assert "saved Session changed since it was selected" in terminal.text(), terminal.text()
+                else:
+                    assert not path.exists(), f"missing saved Session was recreated during {stage}"
                 assert terminal.child.wait(timeout=5) == 1
                 assert termios.tcgetattr(terminal.master) == terminal.original_modes
             finally:

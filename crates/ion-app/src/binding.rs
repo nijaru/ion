@@ -102,7 +102,10 @@ pub enum BindingChange {
         expected: ContextPosition,
         head_entry: u64,
     },
-    SwitchSession(PathBuf),
+    SwitchSession {
+        path: PathBuf,
+        expected_id: Option<uuid::Uuid>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -403,6 +406,14 @@ pub(crate) fn validate_model(
     Ok(())
 }
 
+fn check_switch_identity(expected: Option<uuid::Uuid>, session: &Session) -> Result<()> {
+    ensure!(
+        expected.is_none_or(|id| id == session.id()),
+        "saved Session changed since it was selected; reopen the picker"
+    );
+    Ok(())
+}
+
 fn check_stop(stop: &CancellationToken) -> Result<()> {
     ensure!(!stop.is_cancelled(), "binding preparation stopped");
     Ok(())
@@ -565,14 +576,28 @@ impl BindingSource {
                     result: BindingResult::ContextNavigated(position),
                 })
             }
-            BindingChange::SwitchSession(path) => {
+            BindingChange::SwitchSession { path, expected_id } => {
                 let _idle = self.session.reserve_idle()?;
-                let path = fs::canonicalize(self.catalog.resolve_explicit(path)?)?;
+                let (path, expected_id) = if expected_id.is_some() {
+                    (path, expected_id)
+                } else {
+                    self.catalog.resolve_explicit(path)?
+                };
+                let path = fs::canonicalize(path)?;
                 if self
                     .session
                     .file_path()
                     .is_ok_and(|current| current == path)
                 {
+                    check_switch_identity(expected_id, &self.session)?;
+                    // A checked picker row describes the file, not just the
+                    // current in-memory binding at that path.
+                    if let Some(id) = expected_id {
+                        ensure!(
+                            Session::inspect_id(&path)? == id,
+                            "saved Session changed since it was selected; reopen the picker"
+                        );
+                    }
                     return self.reload(&stop, BindingResult::SessionSwitched);
                 }
                 let session = match self
@@ -583,6 +608,7 @@ impl BindingSource {
                     Some(parent) => parent,
                     None => Arc::new(Session::open(path)?),
                 };
+                check_switch_identity(expected_id, &session)?;
                 let target_idle = session.reserve_idle()?;
                 ensure!(
                     session.cwd() == self.session.cwd(),
@@ -672,7 +698,7 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         // writer close, not fail spuriously or block a native worker behind
         // another task on the same bounded pool. Live external leases are not
         // awaited and remain ordinary AlreadyOpen refusals.
-        let retirements = if matches!(change, BindingChange::SwitchSession(_)) {
+        let retirements = if matches!(change, BindingChange::SwitchSession { .. }) {
             self.setup.retirements.released()
         } else {
             Vec::new()
@@ -825,8 +851,11 @@ impl<M: Serialize + Send + 'static> SessionControl<M> {
         }
     }
     pub async fn switch_session(&mut self, path: PathBuf) -> Result<()> {
-        self.change_binding(BindingChange::SwitchSession(path))
-            .await?;
+        self.change_binding(BindingChange::SwitchSession {
+            path,
+            expected_id: None,
+        })
+        .await?;
         Ok(())
     }
 

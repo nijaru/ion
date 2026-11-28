@@ -345,10 +345,13 @@ pub(super) async fn apply_picker(
                 }
             };
         }
-        PickerValue::Session { path, .. } => super::session_io::start_binding(
+        PickerValue::Session { path, id, .. } => super::session_io::start_binding(
             runtime,
             ui,
-            ion_app::BindingChange::SwitchSession(path),
+            ion_app::BindingChange::SwitchSession {
+                path,
+                expected_id: Some(id),
+            },
             None,
         ),
         PickerValue::Model(model) => super::configuration::select_model(

@@ -158,9 +158,10 @@ async fn main() -> Result<()> {
     });
     let catalog = SessionCatalog::new(root.clone(), None);
     let target = if resume {
+        let saved = catalog.latest()?;
         SessionTarget::Open {
-            path: catalog.latest()?,
-            expected_id: None,
+            path: saved.path,
+            expected_id: Some(saved.id),
         }
     } else {
         SessionTarget::Create(catalog.new_path()?)

@@ -339,8 +339,9 @@ async fn stale_read_cannot_retarget_a_replaced_session() {
     let old = fixture.control.session().id();
     let old_path = fixture.control.session().file_path().unwrap().to_owned();
     let switch_path = old_path.clone();
-    let release = hold_read(&fixture.control, &mut ui, move |_| {
-        ReadOutput::Switch(switch_path)
+    let release = hold_read(&fixture.control, &mut ui, move |_| ReadOutput::Switch {
+        path: switch_path,
+        id: old,
     })
     .await;
     ui.session_io
@@ -404,7 +405,10 @@ async fn stale_file_failure_and_late_binding_error_keep_original_scope_and_cause
     start_binding(
         &mut fixture.control,
         &mut ui,
-        BindingChange::SwitchSession(fixture.root.join("missing.sqlite")),
+        BindingChange::SwitchSession {
+            path: fixture.root.join("missing.sqlite"),
+            expected_id: None,
+        },
         None,
     )
     .unwrap();

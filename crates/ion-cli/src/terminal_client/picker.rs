@@ -27,6 +27,7 @@ use super::session_search::{MessageSearch, SessionQuery, SessionSearch};
 pub(super) enum PickerValue {
     Session {
         path: PathBuf,
+        id: uuid::Uuid,
         search: SessionSearch,
     },
     Model(ModelRef),
@@ -1002,7 +1003,7 @@ mod tests {
 
     fn held_session_job(result: Result<PickerOutput>) -> (Pickers, oneshot::Sender<()>) {
         held_job(
-            session_request("019abcdef0123456789abcdef01234567"),
+            session_request("019abcde-f012-3456-789a-bcdef0123456"),
             "Resume session",
             result,
         )
@@ -1017,7 +1018,7 @@ mod tests {
 
     fn sessions(path: &str) -> Result<PickerOutput> {
         Ok(PickerOutput::Sessions(vec![SessionSummary {
-            id: "019abcdef0123456789abcdef01234567".into(),
+            id: "019abcde-f012-3456-789a-bcdef0123456".parse().unwrap(),
             path: path.into(),
             cwd: Some("/workspace".into()),
             name: Some("saved task".into()),
@@ -1477,7 +1478,7 @@ mod tests {
         for (request, title) in [
             (file_request(), "Choose file"),
             (
-                session_request("019abcdef0123456789abcdef01234567"),
+                session_request("019abcde-f012-3456-789a-bcdef0123456"),
                 "Resume session",
             ),
         ] {
@@ -1537,7 +1538,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(id, name, cwd, preview, latest_prompt)| SessionSummary {
-            id: id.into(),
+            id: id.parse().unwrap(),
             path: id.into(),
             name: name.map(str::to_owned),
             cwd: Some(cwd.into()),
@@ -1600,7 +1601,7 @@ mod tests {
         ]
         .into_iter()
         .map(|(path, name)| SessionSummary {
-            id: path.into(),
+            id: uuid::Uuid::new_v4(),
             path: path.into(),
             cwd: Some("/workspace".into()),
             name: name.map(str::to_owned),
@@ -1770,7 +1771,7 @@ mod tests {
         assert_eq!(picker.selected, 0);
         assert!(picker.items[0].label.starts_with("[current]"));
         let detail = picker.items[0].detail.as_deref().unwrap();
-        assert!(detail.contains("019abcdef0123456789abcdef01234567"));
+        assert!(detail.contains("019abcde-f012-3456-789a-bcdef0123456"));
         assert!(detail.contains("2 turn(s)"));
         let rows = pickers.painted_rows(80, 10, &Theme::default());
         assert!(rows.iter().any(|row| row.to_string().starts_with("› ")));

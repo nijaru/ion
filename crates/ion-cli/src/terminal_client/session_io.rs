@@ -37,7 +37,10 @@ pub(super) enum ReadOutput {
     SessionInfo(String),
     Context(super::navigation::ContextPickerValue),
     Fork(super::navigation::ForkPickerValue),
-    Switch(PathBuf),
+    Switch {
+        path: PathBuf,
+        id: uuid::Uuid,
+    },
     Exported(PathBuf),
     OutputSaved {
         name: String,
@@ -629,8 +632,16 @@ pub(super) fn apply(
             let result = super::navigation::apply_fork(runtime, ui, value);
             finish_command(ui, source, result);
         }
-        Ok(ReadOutput::Switch(path)) => {
-            let result = start_binding(runtime, ui, BindingChange::SwitchSession(path), None);
+        Ok(ReadOutput::Switch { path, id }) => {
+            let result = start_binding(
+                runtime,
+                ui,
+                BindingChange::SwitchSession {
+                    path,
+                    expected_id: Some(id),
+                },
+                None,
+            );
             finish_command(ui, source, result);
         }
         Ok(ReadOutput::Exported(path)) => {

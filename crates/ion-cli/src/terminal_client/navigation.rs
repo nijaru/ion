@@ -168,9 +168,11 @@ pub(super) fn resume(
         let io = runtime.session().io()?;
         ui.session_io
             .start_binding_read(runtime.session(), async move {
-                Ok(super::session_io::ReadOutput::Switch(
-                    io.run(move |_| Ok(catalog.by_id(&id))).await??,
-                ))
+                let saved = io.run(move |_| Ok(catalog.by_id(&id))).await??;
+                Ok(super::session_io::ReadOutput::Switch {
+                    path: saved.path,
+                    id: saved.id,
+                })
             })?;
     }
     Ok(())
@@ -292,10 +294,11 @@ pub(super) fn session_items(
     show_cwd: bool,
     now: SystemTime,
 ) -> Vec<PickerItem> {
+    let current_id = current_id.and_then(|id| id.parse::<uuid::Uuid>().ok());
     sessions
         .into_iter()
         .map(|session| {
-            let is_current = Some(session.id.as_str()) == current_id;
+            let is_current = current_id == Some(session.id);
             let mut label = session_label(&session, is_current);
             let mut detail = session_detail(&session, is_current, now);
             if show_cwd && let Some(cwd) = &session.cwd {
@@ -309,6 +312,7 @@ pub(super) fn session_items(
                 value: PickerValue::Session {
                     search: super::session_search::SessionSearch::new(&session),
                     path: session.path,
+                    id: session.id,
                 },
             }
         })
@@ -316,7 +320,7 @@ pub(super) fn session_items(
 }
 
 fn session_label(session: &SessionSummary, current: bool) -> String {
-    let mut parts = vec![short_session_id(&session.id).to_owned()];
+    let mut parts = vec![short_session_id(&session.id.to_string()).to_owned()];
     if let Some(name) = session.name.as_deref().filter(|name| !name.is_empty()) {
         parts.push(plain(name));
     }
@@ -344,7 +348,7 @@ fn session_detail(session: &SessionSummary, current: bool, now: SystemTime) -> S
     );
     let mut detail = format!(
         "id {}{} · {} turn(s)\nmodel {} · {}",
-        plain(&session.id),
+        session.id,
         if current { " · current Session" } else { "" },
         session.turns,
         model,
@@ -471,7 +475,7 @@ mod tests {
 
     fn summary(name: &str, model: Option<ModelRef>, updated: SystemTime) -> SessionSummary {
         SessionSummary {
-            id: "019abcdef0123456789abcdef01234567".into(),
+            id: "019abcde-f012-3456-789a-bcdef0123456".parse().unwrap(),
             path: "/state/session.sqlite".into(),
             cwd: Some("/workspace".into()),
             name: Some(name.into()),
@@ -554,17 +558,17 @@ mod tests {
         let recent = now - Duration::from_secs(125);
         let item = session_items(
             vec![summary("Named\u{1b}[31m task", None, recent)],
-            Some("019abcdef0123456789abcdef01234567"),
+            Some("019abcde-f012-3456-789a-bcdef0123456"),
             false,
             now,
         )
         .pop()
         .unwrap();
-        assert!(item.label.starts_with("[current] 019abcdef012"));
+        assert!(item.label.starts_with("[current] 019abcde-f01"));
         assert!(item.label.contains("Named [31m task"));
         assert!(!item.label.contains('\u{1b}'));
         let detail = item.detail.as_deref().unwrap();
-        assert!(detail.contains("id 019abcdef0123456789abcdef01234567 · current Session"));
+        assert!(detail.contains("id 019abcde-f012-3456-789a-bcdef0123456 · current Session"));
         assert!(detail.contains("3 turn(s)"));
         assert!(detail.contains("model unknown"));
         assert!(detail.contains("file activity 2023-11-14 22:11:15 UTC (2m ago)"));
@@ -583,7 +587,7 @@ mod tests {
             now,
         );
         let detail = session_detail(&summary, false, now);
-        assert!(detail.contains("id 019abcdef0123456789abcdef01234567"));
+        assert!(detail.contains("id 019abcde-f012-3456-789a-bcdef0123456"));
         assert!(detail.contains('…'));
         assert!(!detail.contains(&huge_model));
         assert!(!detail.contains('\u{1b}'));

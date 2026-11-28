@@ -82,7 +82,10 @@ impl Control {
             }
             "switch_session" => (
                 "switch_session",
-                BindingChange::SwitchSession(PathBuf::from(required_string(value, "session")?)),
+                BindingChange::SwitchSession {
+                    path: PathBuf::from(required_string(value, "session")?),
+                    expected_id: None,
+                },
             ),
             "set_name" => {
                 let name = match value.get("name") {
