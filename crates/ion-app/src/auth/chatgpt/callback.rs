@@ -183,7 +183,7 @@ fn parse(
     })())
 }
 
-fn valid_client(id: &str) -> bool {
+pub(super) fn valid_client(id: &str) -> bool {
     id != DYNAMIC_CLIENT
         && !id.is_empty()
         && id.len() <= 128

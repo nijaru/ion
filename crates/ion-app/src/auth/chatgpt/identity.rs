@@ -1,12 +1,12 @@
 //! Verify signed ID tokens; access and refresh tokens remain opaque to Ion.
 use aws_lc_rs::signature::{RSA_PKCS1_2048_8192_SHA256, RsaPublicKeyComponents};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
 use super::{ISSUER, SignInError, visible_ascii};
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub(super) struct Identity {
     pub(super) sub: String,
     pub(super) email: Option<String>,
@@ -54,14 +54,14 @@ struct Claims {
     exp: u64,
     iat: u64,
     nbf: Option<u64>,
-    nonce: String,
+    nonce: Option<String>,
 }
 
 pub(super) fn verify(
     token: &str,
     keyset: KeySet,
     client: &str,
-    nonce: &str,
+    nonce: Option<&str>,
     now: u64,
 ) -> Result<Identity, SignInError> {
     let fail = SignInError::Identity;
@@ -122,7 +122,12 @@ pub(super) fn verify(
         || claims
             .nbf
             .is_some_and(|not_before| not_before > latest_issuance)
-        || !bool::from(nonce.as_bytes().ct_eq(claims.nonce.as_bytes()))
+        || nonce.is_some_and(|expected| {
+            !claims
+                .nonce
+                .as_deref()
+                .is_some_and(|received| bool::from(expected.as_bytes().ct_eq(received.as_bytes())))
+        })
     {
         return Err(fail);
     }

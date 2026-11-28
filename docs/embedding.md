@@ -40,7 +40,11 @@ Pending sources and prepared messages share a 32 MiB encoded custody budget. A l
 
 Anonymous and synthetic services may use the default access preflight. Forwarding services must delegate it. HTTP routes that require credentials reject a missing key both during preflight and at dispatch. Dispatch resolves credentials again: preflight is not an atomic grant, and logout or revocation can prevent a later request. Credentials are never Session facts.
 
-`ion_app::auth::chatgpt` implements the browser callback and signed grant exchange for [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source). It has been tested against loopback fixtures only. It does not open a browser, save credentials, refresh tokens, or bind a model route. The CLI still uses API keys for OpenAI Responses.
+`ion_app::auth::chatgpt` implements the callback and signed grant exchange for [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source). For native embedding, use `ProfileStore` with a dedicated owner-only directory on a local filesystem. Get its `host_id()` before registration, `remember()` the issued client before exchanging the code, and `install()` only after the exchange verifies the grant. For reauthorization, load the saved registration with `profile()`; do not register a new client for the same account.
+
+Resolve `access()` before each request. The store serializes refresh across processes and saves token replacements before returning them. After a refresh with an unknown result, sign in again with the same registration; the store won't replay the old token. Stop the host's in-flight requests before `disconnect()`. If it returns `RemoteUnconfirmed`, local tokens are gone but the user may still need to disconnect the app in [ChatGPT Settings](https://chatgpt.com/settings/usage). The native store uses Unix file permissions, not encryption; don't put it in shared storage or restore it from a snapshot.
+
+This SDK has been tested against loopback fixtures only. It does not launch a browser or bind a model route. The CLI still uses API keys for OpenAI Responses.
 
 ## Cancellation and resource lifetime
 

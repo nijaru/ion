@@ -13,9 +13,9 @@ use tokio::{
 };
 
 type Query = BTreeMap<String, String>;
-const CLIENT: &str = "oaiapp_ion_fixture";
-const SUBJECT: &str = "local-fixture-account";
-const DEADLINE: Duration = Duration::from_secs(5);
+pub(super) const CLIENT: &str = "oaiapp_ion_fixture";
+pub(super) const SUBJECT: &str = "local-fixture-account";
+pub(super) const DEADLINE: Duration = Duration::from_secs(5);
 
 fn host() -> HostId {
     "urn:uuid:d9429cf7-34d8-4722-8e2a-db1fb53bbc8f"
@@ -47,7 +47,7 @@ fn location(query: &Query) -> (Url, String) {
     (url, address)
 }
 
-async fn deliver(auth: Authorization, client: Option<&str>) -> (CodeExchange, Query) {
+pub(super) async fn deliver(auth: Authorization, client: Option<&str>) -> (CodeExchange, Query) {
     let query: Query = auth.url().query_pairs().into_owned().collect();
     let (url, address) = location(&query);
     let task = tokio::spawn(async move { auth.callback(&CancellationToken::new()).await });
@@ -71,14 +71,14 @@ async fn deliver(auth: Authorization, client: Option<&str>) -> (CodeExchange, Qu
     (exchange, query)
 }
 
-struct FixtureKey(SigningKey);
+pub(super) struct FixtureKey(SigningKey);
 
 impl FixtureKey {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self(SigningKey::generate(KeySize::Rsa2048).unwrap())
     }
 
-    fn keys(&self) -> Value {
+    pub(super) fn keys(&self) -> Value {
         // AWS-LC exposes the generated key as PKCS#1 DER. Read its two
         // components here solely to build the external JWKS fixture.
         let mut encoded = self.0.public_key().as_ref();
@@ -91,7 +91,7 @@ impl FixtureKey {
           "e":URL_SAFE_NO_PAD.encode(e.strip_prefix(&[0]).unwrap_or(e))}]})
     }
 
-    fn sign(&self, header: &Value, claims: &Value) -> String {
+    pub(super) fn sign(&self, header: &Value, claims: &Value) -> String {
         let signed = format!(
             "{}.{}",
             URL_SAFE_NO_PAD.encode(header.to_string()),
@@ -126,16 +126,16 @@ fn der_field<'a>(remaining: &mut &'a [u8], tag: u8) -> &'a [u8] {
     value
 }
 
-fn claims(nonce: &str, now: u64, subject: &str) -> Value {
+pub(super) fn claims(nonce: &str, now: u64, subject: &str) -> Value {
     json!({"iss": ISSUER,"aud":CLIENT,"sub":subject,"email":"fixture@example.invalid",
         "exp":now+3600,"iat":now,"nonce":nonce})
 }
 
-fn header() -> Value {
+pub(super) fn header() -> Value {
     json!({"alg":"RS256","kid":"fixture-key"})
 }
 
-async fn read_request(listener: &TcpListener) -> (TcpStream, String, String) {
+pub(super) async fn read_request(listener: &TcpListener) -> (TcpStream, String, String) {
     let (mut socket, _) = timeout(DEADLINE, listener.accept()).await.unwrap().unwrap();
     let mut bytes = Vec::new();
     let mut buffer = [0; 1024];
@@ -164,11 +164,11 @@ async fn read_request(listener: &TcpListener) -> (TcpStream, String, String) {
     (socket, head, body)
 }
 
-async fn reply(socket: &mut TcpStream, status: &str, extra: &str, body: &str) {
+pub(super) async fn reply(socket: &mut TcpStream, status: &str, extra: &str, body: &str) {
     socket.write_all(format!("HTTP/1.1 {status}\r\nConnection: close\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\n\r\n{body}", body.len()).as_bytes()).await.unwrap();
 }
 
-async fn exchange_with_keys(
+pub(super) async fn exchange_with_keys(
     exchange: CodeExchange,
     query: Query,
     key: &FixtureKey,
@@ -340,7 +340,7 @@ fn signed_identity_checks_claims_and_pinned_keys() {
             token,
             serde_json::from_value(keys).unwrap(),
             CLIENT,
-            "pending-nonce",
+            Some("pending-nonce"),
             now,
         )
     };

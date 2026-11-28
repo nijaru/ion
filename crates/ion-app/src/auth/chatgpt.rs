@@ -1,11 +1,13 @@
-//! Native Sign in with ChatGPT for local open-source apps. This is a one-shot
-//! authorization flow, not an API-key resolver or a credential store. The host
-//! owns the system browser and must keep credentials outside the Session.
+//! Native Sign in with ChatGPT for local open-source apps. This authorization
+//! and credential store are separate from API-key resolution. The host owns
+//! the system browser and keeps credentials outside the Session.
 //!
 //! [OpenAI registration contract](https://developers.openai.com/siwc/token-sharing-open-source/sign-in)
 
 mod callback;
 mod identity;
+mod provider;
+mod store;
 #[cfg(test)]
 mod tests;
 
@@ -15,13 +17,17 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 use uuid::Uuid;
+
+pub use store::{
+    ConnectionStatus, Disconnect, PlanAccess, Profile, ProfileId, ProfileStore, StoreError,
+};
 
 const ISSUER: &str = "https://auth.openai.com";
 const AUTHORIZE: &str = "https://auth.openai.com/api/accounts/authorize";
@@ -242,38 +248,33 @@ impl CodeExchange {
         token_url: &str,
         jwks_url: &str,
     ) -> Result<Grant, SignInError> {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .no_proxy()
-            .timeout(Duration::from_secs(15))
-            .build()
-            .map_err(|_| SignInError::Network)?;
-        let body = url::form_urlencoded::Serializer::new(String::new())
-            .extend_pairs([
+        let provider = provider::Provider {
+            token: token_url,
+            jwks: jwks_url,
+            ..provider::OPENAI
+        };
+        let client = provider::client()?;
+        let reply = provider::form(
+            &client,
+            provider.token,
+            &[
                 ("grant_type", "authorization_code"),
                 ("client_id", &self.registration.client),
                 ("code", &self.code),
                 ("code_verifier", &self.binding.verifier),
                 ("redirect_uri", &self.binding.redirect),
                 ("resource", RESOURCE),
-            ])
-            .finish();
-        let reply = client
-            .post(token_url)
-            .header("content-type", "application/x-www-form-urlencoded")
-            .body(body)
-            .send()
-            .await
-            .map_err(|_| SignInError::Network)?;
+            ],
+        )
+        .send()
+        .await
+        .map_err(|_| SignInError::Network)?;
         if reply.status() != reqwest::StatusCode::OK {
             return Err(match reply.status().as_u16() {
                 400 => {
-                    #[derive(Deserialize)]
-                    struct ErrorBody {
-                        error: String,
-                    }
-                    match read_json::<ErrorBody>(reply, SignInError::ExchangeRejected).await {
+                    match read_json::<provider::OAuthError>(reply, SignInError::ExchangeRejected)
+                        .await
+                    {
                         Ok(error) if error.error == "invalid_grant" => SignInError::CodeExpired,
                         _ => SignInError::ExchangeRejected,
                     }
@@ -282,29 +283,18 @@ impl CodeExchange {
                 _ => SignInError::ExchangeRejected,
             });
         }
-        let issued_at = SystemTime::now();
-        let tokens: Tokens = read_json(reply, SignInError::TokenResponse).await?;
-        let expires_at = tokens.validate(issued_at)?;
-        let keys = client
-            .get(jwks_url)
-            .send()
-            .await
-            .map_err(|_| SignInError::Network)?;
-        if keys.status() != reqwest::StatusCode::OK {
-            return Err(SignInError::Network);
-        }
-        let keys = read_json(keys, SignInError::Identity).await?;
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|_| SignInError::Identity)?
-            .as_secs();
-        let verified = identity::verify(
-            &tokens.id_token,
-            keys,
-            &self.registration.client,
-            &self.binding.nonce,
-            now,
-        )?;
+        let issued_at = provider::unix_now()?;
+        let reply: provider::TokenReply = read_json(reply, SignInError::TokenResponse).await?;
+        let (tokens, id_token) = reply.into_tokens(issued_at, None)?;
+        let id_token = id_token.ok_or(SignInError::Identity)?;
+        let verified = provider
+            .identity(
+                &client,
+                &id_token,
+                &self.registration.client,
+                Some(&self.binding.nonce),
+            )
+            .await?;
         if self
             .registration
             .subject()
@@ -316,7 +306,7 @@ impl CodeExchange {
         Ok(Grant {
             registration: self.registration,
             tokens,
-            expires_at,
+            id_token,
         })
     }
 }
@@ -326,8 +316,8 @@ impl CodeExchange {
 /// policy. Never place these values in a Session, URL, or diagnostic.
 pub struct Grant {
     registration: Registration,
-    tokens: Tokens,
-    expires_at: SystemTime,
+    tokens: provider::TokenSet,
+    id_token: String,
 }
 
 impl Grant {
@@ -341,60 +331,13 @@ impl Grant {
         &self.tokens.refresh_token
     }
     pub fn id_token(&self) -> &str {
-        &self.tokens.id_token
+        &self.id_token
     }
     pub fn scopes(&self) -> impl Iterator<Item = &str> {
         self.tokens.scope.split_ascii_whitespace()
     }
     pub fn expires_at(&self) -> SystemTime {
-        self.expires_at
-    }
-}
-
-#[derive(Deserialize)]
-struct Tokens {
-    // An identity-only response may omit all grant fields. Decide consent
-    // from the response before requiring tokens; these defaults cannot pass.
-    #[serde(default)]
-    access_token: String,
-    #[serde(default)]
-    refresh_token: String,
-    #[serde(default)]
-    id_token: String,
-    #[serde(default)]
-    token_type: String,
-    #[serde(default)]
-    expires_in: u64,
-    scope: String,
-}
-
-impl Tokens {
-    fn validate(&self, issued_at: SystemTime) -> Result<SystemTime, SignInError> {
-        for required in [
-            "resource.invoke",
-            "chatgpt.tokens.use.direct",
-            "offline_access",
-        ] {
-            if !self
-                .scope
-                .split_ascii_whitespace()
-                .any(|scope| scope == required)
-            {
-                return Err(SignInError::Consent);
-            }
-        }
-        if !self.token_type.eq_ignore_ascii_case("Bearer")
-            || self.expires_in == 0
-            || self.expires_in > 86_400
-            || [&self.access_token, &self.refresh_token, &self.id_token]
-                .iter()
-                .any(|token| !visible_ascii(token, 32 * 1024))
-        {
-            return Err(SignInError::TokenResponse);
-        }
-        issued_at
-            .checked_add(Duration::from_secs(self.expires_in))
-            .ok_or(SignInError::TokenResponse)
+        UNIX_EPOCH + Duration::from_secs(self.tokens.expires_at)
     }
 }
 
