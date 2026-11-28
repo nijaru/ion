@@ -10,12 +10,14 @@ description = "Ion shared application and SDK for models, tools and sessions"
 [dependencies]
 async-stream = "0.3.6"
 anyhow = "1.0"
+aws-lc-rs = { version = "1.18.0", default-features = false }
 base64 = "0.22.1"
 futures-util = "0.3.34"
 getrandom = "0.3.4"
 ignore = "0.4.33"
 indexmap = { version = "2.14.2", features = ["serde"] }
 httpdate = "1.0.3"
+httparse = "1.10.1"
 html5ever = "0.39"
 ion-ai.workspace = true
 ion-core.workspace = true
@@ -30,6 +32,7 @@ serde-saphyr = { version = "2.0.0", default-features = false, features = ["deser
 sha2 = "0.10.9"
 similar = "3.2.0"
 sse-stream = "0.2.6"
+subtle = "2.6.1"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt", "signal", "sync", "time"] }
 tokio-util.workspace = true

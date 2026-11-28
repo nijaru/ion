@@ -40,6 +40,8 @@ Pending sources and prepared messages share a 32 MiB encoded custody budget. A l
 
 Anonymous and synthetic services may use the default access preflight. Forwarding services must delegate it. HTTP routes that require credentials reject a missing key both during preflight and at dispatch. Dispatch resolves credentials again: preflight is not an atomic grant, and logout or revocation can prevent a later request. Credentials are never Session facts.
 
+`ion_app::auth::chatgpt` implements the browser callback and signed grant exchange for [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source). It has been tested against loopback fixtures only. It does not open a browser, save credentials, refresh tokens, or bind a model route. The CLI still uses API keys for OpenAI Responses.
+
 ## Cancellation and resource lifetime
 
 Core execution APIs treat a caller's cancellation token as a parent scope. Cancelling it stops all operations beneath it. Stopping or dropping one `Operation` stops only that operation and its descendants, not the parent or sibling Sessions. Dropping an operation handle requests stop but does not join it. Retain and await the handle, or join through Session shutdown, before releasing host resources its work uses.

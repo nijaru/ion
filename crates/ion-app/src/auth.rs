@@ -1,4 +1,6 @@
-//! Host-owned credentials for the CLI. Session history never contains keys.
+//! Host-owned credentials. Session history never contains keys.
+
+pub mod chatgpt;
 
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
