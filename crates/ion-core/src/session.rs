@@ -803,7 +803,9 @@ impl Session {
 
     #[cfg(unix)]
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let opened = OpenedStore::open(path.as_ref())?;
+        let opened = OpenedStore::open(path.as_ref(), |cut| {
+            cut.project(ProjectionMode::Working, |_| {})
+        })?;
         Ok(Self::from_native(opened, Executor::default()))
     }
 

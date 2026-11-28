@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     DelegationOutcome, DelegationOwnership, DelegationSite, DelegationSpec, DelegationTarget,
+    delegation::ChildMaterialization,
 };
 use ion_ai::{Content, Role, ToolCall};
 
@@ -106,6 +107,15 @@ fn follow_up_keeps_conversation_but_not_run_identity_receipt_or_authority() {
             )
             .unwrap();
         assert_ne!(first.run, first.child);
+        let ChildMaterialization::New {
+            entries,
+            artifact_source,
+        } = &prepared
+        else {
+            panic!("fresh child seed expected");
+        };
+        let fresh_prefix = entries.clone();
+        let fresh_artifact_source = artifact_source.clone();
         let child = Session::materialize_delegation(&first, prepared).unwrap();
         let first_receipt = complete(&child, &first, "first actual answer");
         first_parent
@@ -185,6 +195,19 @@ fn follow_up_keeps_conversation_but_not_run_identity_receipt_or_authority() {
         );
         let history = child.view().unwrap().entries;
         drop(child);
+        assert!(
+            matches!(
+                Session::materialize_delegation(
+                    &first,
+                    ChildMaterialization::New {
+                        entries: fresh_prefix,
+                        artifact_source: fresh_artifact_source,
+                    }
+                ),
+                Err(SessionError::InvalidHistory)
+            ),
+            "the exact original prefix no longer authorizes adoption after a newer own binding"
+        );
         let reopened = Session::open(&first.path).unwrap();
         assert_eq!(reopened.id(), first.child);
         assert_eq!(reopened.view().unwrap().entries, history);

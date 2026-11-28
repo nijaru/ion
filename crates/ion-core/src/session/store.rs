@@ -111,10 +111,13 @@ impl Store {
     /// Rebuild from one pinned read of an already acquired, configured connection.
     /// This neither acquires ownership nor repairs unfinished work.
     #[cfg(any(unix, test))]
-    pub(super) fn reopen(connection: Connection) -> Result<(Self, Header), SessionError> {
+    pub(super) fn reopen(
+        connection: Connection,
+        verify: impl FnOnce(&ReadCheckpoint<'_>) -> Result<HistoryProjection, SessionError>,
+    ) -> Result<(Self, Header), SessionError> {
         let (header, projection) = {
             let checkpoint = ReadCheckpoint::pin(&connection)?;
-            let projection = checkpoint.project(ProjectionMode::Working, |_| {})?;
+            let projection = verify(&checkpoint)?;
             (checkpoint.header, projection)
         };
         Ok((

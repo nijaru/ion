@@ -60,7 +60,10 @@ fn seed_append_and_reopen_use_only_the_acquired_connection() {
 
     // Discard the live projection but keep the database. No file or writer
     // lease exists, and no synthetic repair may be appended on reconstruction.
-    let (mut reopened, retained) = Store::reopen(working.connection).unwrap();
+    let (mut reopened, retained) = Store::reopen(working.connection, |cut| {
+        cut.project(ProjectionMode::Working, |_| {})
+    })
+    .unwrap();
     assert_eq!(retained.identity(), header.identity());
     assert_eq!(reopened.working.state.sequence, 2);
     assert_eq!(reopened.working.state.active, Some(1));
@@ -77,7 +80,10 @@ fn seed_append_and_reopen_use_only_the_acquired_connection() {
             reason: TurnEndReason::Interrupted,
         }])
         .unwrap();
-    let (final_store, _) = Store::reopen(reopened.connection).unwrap();
+    let (final_store, _) = Store::reopen(reopened.connection, |cut| {
+        cut.project(ProjectionMode::Working, |_| {})
+    })
+    .unwrap();
     assert_eq!(final_store.working.state.sequence, 3);
     assert_eq!(final_store.working.state.active, None);
     let settled =

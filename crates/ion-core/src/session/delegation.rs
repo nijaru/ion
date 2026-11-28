@@ -323,7 +323,7 @@ impl Session {
                 }
                 context.extend(binding);
                 let child = if record.path.try_exists()? {
-                    Self::open(&record.path)?
+                    Self::open_materialized_child(record, &context)?
                 } else {
                     Self::create_initial(
                         &record.path,
@@ -338,17 +338,52 @@ impl Session {
                             }),
                     )?
                 };
-                let view = child.view()?;
-                if child.id() != record.child
-                    || child.cwd() != record.spec.cwd.as_deref()
-                    || view.parent_delegation() != Some(record)
-                    || !view.entries.starts_with(&context)
-                {
+                // Creation already validated this exact seed and installed it
+                // atomically. Only adoption had to verify a saved prefix.
+                if child.id() != record.child || child.cwd() != record.spec.cwd.as_deref() {
                     return Err(SessionError::InvalidHistory);
                 }
                 Ok(Arc::new(child))
             }
         }
+    }
+
+    #[cfg(unix)]
+    fn open_materialized_child(
+        record: &DelegationRecord,
+        prefix: &[SessionEntry],
+    ) -> Result<Self, SessionError> {
+        let opened = OpenedStore::open(&record.path, |cut| {
+            if cut.header.id != record.child || cut.header.cwd != record.spec.cwd {
+                return Err(SessionError::InvalidHistory);
+            }
+            let mut expected = prefix.iter();
+            let mut matches_prefix = true;
+            let mut latest_own_binding_matches = false;
+            let projection = cut.project(ProjectionMode::Working, |entry| {
+                if let Some(wanted) = expected.next() {
+                    matches_prefix &= wanted == &entry;
+                }
+                if let SessionEntry::ChildSessionOf { record: binding } = &entry
+                    && binding.child == record.child
+                {
+                    latest_own_binding_matches = binding == record;
+                }
+            })?;
+            if !matches_prefix || expected.next().is_some() || !latest_own_binding_matches {
+                return Err(SessionError::InvalidHistory);
+            }
+            Ok(projection)
+        })?;
+        Ok(Self::from_native(opened, Executor::default()))
+    }
+
+    #[cfg(not(unix))]
+    fn open_materialized_child(
+        _: &DelegationRecord,
+        _: &[SessionEntry],
+    ) -> Result<Self, SessionError> {
+        Err(SessionError::FilePlatformUnsupported)
     }
 }
 

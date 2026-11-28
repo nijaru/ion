@@ -99,7 +99,12 @@ impl OpenedStore {
         Ok(Self::owned(path, lock, header, store))
     }
 
-    pub fn open(path: &Path) -> Result<Self, SessionError> {
+    pub fn open(
+        path: &Path,
+        replay: impl FnOnce(
+            &super::ReadCheckpoint<'_>,
+        ) -> Result<super::HistoryProjection, SessionError>,
+    ) -> Result<Self, SessionError> {
         let path = database_path(path)?;
         let lock = lock(&path)?;
         // A disappearing resume target must fail, not create a new empty file
@@ -109,7 +114,7 @@ impl OpenedStore {
             OpenFlags::default().difference(OpenFlags::SQLITE_OPEN_CREATE),
         )?;
         configure_connection(&connection)?;
-        let (store, header) = Store::reopen(connection)?;
+        let (store, header) = Store::reopen(connection, replay)?;
         prepare_writer(&store.connection)?;
         Ok(Self::owned(path, lock, header, store))
     }
