@@ -890,10 +890,19 @@ impl Session {
     /// Read only the immutable logical identity, not execution status or history
     /// validity. Catalog lookup can filter headers before validating full history.
     pub fn inspect_id(path: impl AsRef<Path>) -> Result<uuid::Uuid, SessionError> {
+        Ok(Self::inspect_location(path)?.0)
+    }
+
+    /// Inspect only the saved identity and workspace, before writer acquisition.
+    /// This does not validate the journal or authorize execution.
+    pub fn inspect_location(
+        path: impl AsRef<Path>,
+    ) -> Result<(uuid::Uuid, Option<PathBuf>), SessionError> {
         let path = database_path(path.as_ref())?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
-        Ok(read_header(&connection)?.id)
+        let header = read_header(&connection)?;
+        Ok((header.id, header.cwd))
     }
 
     /// Validate committed history without accumulating historical payloads. Labels

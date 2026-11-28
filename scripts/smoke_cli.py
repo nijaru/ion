@@ -513,6 +513,31 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         assert view["last_model"] == {"provider": "first", "model": "vendor/model"}
         assert store.read_bytes() == saved_default
 
+        # A correct saved header fences the workspace before writer acquisition.
+        # Remove the disposable unlocked sidecar to detect accidental acquisition.
+        lock = session.with_suffix(".sqlite.lock")
+        lock.unlink()
+        count = len(requests)
+        refused = run("--cwd", root, "--session", session, "run", "wrong workspace", check=False)
+        assert refused.returncode != 0 and b"--cwd does not match the session" in refused.stderr
+        assert not lock.exists() and len(requests) == count
+
+        # A failed unattended preflight leaves the lease available and the
+        # committed facts unchanged.
+        refused = run("--session", session, "--model", "not-a-real-route", "run", "not admitted", check=False)
+        assert refused.returncode != 0 and len(requests) == count
+        assert json.loads(run("inspect", "--session", session).stdout) == view
+        probe = subprocess.Popen([BINARY, "--session", session, "rpc"], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
+        try:
+            output, error = probe.communicate(timeout=8)
+        finally:
+            if probe.poll() is None:
+                probe.kill()
+                probe.communicate(timeout=5)
+        assert probe.returncode == 0 and json.loads(output.splitlines()[0])["type"] == "ready", error
+        assert len(requests) == count
+
         # Failed input cannot create a Session, start MCP, or contact a model.
         marker = root / "mcp-started"
         sentinel = root / "sentinel.py"

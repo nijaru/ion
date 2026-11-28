@@ -373,7 +373,10 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 .as_ref()
                 .map(termination::Termination::token)
                 .unwrap_or_default();
-            let result = async move {
+            let mut early_retirement = None;
+            let result = {
+                let early_retirement = &mut early_retirement;
+                async move {
             let credentials = host.credentials();
             let models = host.models();
             let keys = if cli.resume_session
@@ -398,6 +401,8 @@ async fn run_cli(cli: Invocation) -> Result<()> {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
             let catalog = host.sessions(Some(cwd.clone()));
+            let requested_id = cli.session.as_deref().and_then(std::path::Path::to_str)
+                .and_then(|value| uuid::Uuid::parse_str(value).ok());
             let path = if cli.resume_session {
                 let Some(path) =
                     terminal_client::choose_session(catalog.clone(), &keys, &themes, &terminated).await?
@@ -490,28 +495,51 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 _ => {}
             }
 
-            let existing = saved.then(|| Session::inspect_metadata(&path)).transpose()?;
-            if let Some(view) = &existing {
-                check_cwd(view.cwd.as_deref())?;
+            let interactive_setup = matches!(action, Action::Chat { .. })
+                && io::stdin().is_terminal()
+                && io::stdout().is_terminal();
+            let passive_candidate = interactive_setup && cli.image.is_empty()
+                && matches!(&action, Action::Chat { input } if input.is_empty());
+            // Passive reopen and explicit copies can retain the validated
+            // writer. Other launches still preflight before trying the lease.
+            let acquire_early = passive_candidate || matches!(action, Action::Clone | Action::Fork { .. });
+            let metadata = (saved && !acquire_early)
+                .then(|| Session::inspect_metadata(&path)).transpose()?;
+            let location = if let Some(metadata) = &metadata {
+                Some((metadata.id, metadata.cwd.clone()))
+            } else if saved {
+                Some(Session::inspect_location(&path)?)
+            } else {
+                None
+            };
+            if let Some((id, actual)) = &location {
+                check_cwd(actual.as_deref())?;
+                ensure!(requested_id.is_none_or(|wanted| wanted == *id),
+                    "saved Session identity changed during startup; reopen it explicitly");
             }
-            // Copies and navigation belong to the stored Session's namespace,
-            // not the directory that happened to launch this executable.
-            let catalog = existing
-                .as_ref()
-                .map_or(catalog, |view| host.sessions(view.cwd.clone()));
+            let mut opened = if let Some((id, actual)) = &location && acquire_early {
+                let mut acquisition = ion_app::SessionTarget::Open {
+                    path: path.clone(),
+                    expected_id: Some(*id),
+                }.prepare(actual.clone(), stop.child_token());
+                let session = acquisition.join().await?;
+                *early_retirement = Some(session.retirement());
+                Some(session)
+            } else {
+                None
+            };
+
             if matches!(action, Action::Clone) {
-                ensure!(existing.is_some(), "session does not exist");
-                let source = Session::open(&path)?;
-                let target = catalog.new_path()?;
+                let source = opened.as_ref().context("session does not exist")?;
+                let target = host.sessions(source.cwd().map(std::path::Path::to_owned)).new_path()?;
                 let cloned = source.clone_to(&target)?;
                 let id = cloned.id().to_string();
                 print_stdout(format_args!("Cloned session as {}", metadata_field(&id)))?;
                 return Ok(());
             }
             if let Action::Fork { turn, after } = &action {
-                ensure!(existing.is_some(), "session does not exist");
-                let source = Session::open(&path)?;
-                let target = catalog.new_path()?;
+                let source = opened.as_ref().context("session does not exist")?;
+                let target = host.sessions(source.cwd().map(std::path::Path::to_owned)).new_path()?;
                 let fork = source.fork_to(
                     &target,
                     if *after {
@@ -525,40 +553,41 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 return Ok(());
             }
             if matches!(action, Action::Compact { .. }) {
-                ensure!(existing.is_some(), "session does not exist");
+                ensure!(saved, "session does not exist");
             }
-            let session_cwd = match &existing {
-                Some(view) => view
-                    .cwd
-                    .as_deref()
-                    .context("coding requires a working directory")?,
+            let session_cwd = match &location {
+                Some((_, cwd)) => cwd.as_deref().context("coding requires a working directory")?,
                 None => cwd.as_path(),
             };
-            let previous = existing.as_ref().and_then(|view| view.last_model.as_ref());
-            let interactive_setup = matches!(action, Action::Chat { .. })
-                && io::stdin().is_terminal()
-                && io::stdout().is_terminal();
+            let previous = match &opened {
+                Some(session) => session.model_preference()?,
+                None => metadata.and_then(|metadata| metadata.last_model),
+            };
             let selection = match cli.model {
                 Some(pattern) => {
                     models.resolve_pattern(&pattern.text, pattern.provider.as_deref(), credentials)
                 }
-                None => models.choose(None, previous.cloned(), credentials),
+                None => models.choose(None, previous.clone(), credentials),
             };
             // Browsing an already-selected conversation is not model access.
             // Explicit new inputs or a different model retain startup preflight.
-            let passive_reopen = interactive_setup
-                && cli.image.is_empty()
-                && matches!(&action, Action::Chat { input } if input.is_empty())
-                && previous.is_some_and(|previous| selection.as_ref().is_ok_and(|selected| {
+            let passive_reopen = passive_candidate
+                && previous.as_ref().is_some_and(|previous| selection.as_ref().is_ok_and(|selected| {
                     selected.provider == previous.provider && selected.model == previous.model
                 }));
             let selected = if interactive_setup && !passive_reopen {
+                // Don't hold the writer across a model picker or credential
+                // entry. A saved path must still resolve on later acquisition.
+                drop(opened.take());
+                if let Some(receipt) = early_retirement.take() {
+                    receipt.join().await?;
+                }
                 let selected = match selection {
                     Ok(selected) => Some(selected),
                     Err(error) if error.is::<ion_app::ModelSelectionRequired>() => None,
                     Err(error) => return Err(error),
                 };
-                let choose_default = existing.is_none() && selected.is_none();
+                let choose_default = !saved && selected.is_none();
                 let Some(selected) =
                     terminal_client::setup_model(&host, selected, choose_default, &keys, &themes, &terminated)
                         .await?
@@ -691,9 +720,10 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 validate_launch_size(&ion_ai::Message::user_input(instructions.clone(), []))?;
             }
             ensure!(!stop.is_cancelled(), "application startup interrupted");
-            let target = match &existing {
-                Some(view) => ion_app::SessionTarget::Open { path, expected_id: Some(view.id) },
-                None => ion_app::SessionTarget::Create(path),
+            let target = match (opened, &location) {
+                (Some(session), _) => ion_app::SessionTarget::Acquired(session),
+                (None, Some((id, _))) => ion_app::SessionTarget::Open { path, expected_id: Some(*id) },
+                (None, None) => ion_app::SessionTarget::Create(path),
             };
             // Preserve preflight's default SIGINT disposition, then keep one
             // stream through MCP startup, writer acquisition and the client.
@@ -745,7 +775,11 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     result = preparation.join() => result,
                 };
                 let setup = match prepared {
-                    Ok(setup) => setup,
+                    Ok(setup) => {
+                        // The successful binding now owns the retirement receipt.
+                        early_retirement.take();
+                        setup
+                    }
                     Err(error) => {
                         // Failed-server cleanup diagnostics must not disappear
                         // just because independent binding preflight also fails.
@@ -836,7 +870,18 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                     Err(error.context(format!("MCP cleanup also failed: {cleanup:#}")))
                 }
             }
-            }.await;
+            }.await
+            };
+            let result = match early_retirement {
+                Some(receipt) => match (result, receipt.join().await) {
+                    (result, Ok(())) => result,
+                    (Ok(()), Err(error)) => Err(error.into()),
+                    (Err(error), Err(cleanup)) => {
+                        Err(error.context(format!("early Session cleanup also failed: {cleanup}")))
+                    }
+                },
+                None => result,
+            };
             match termination {
                 Some(termination) => termination.finish(result).await,
                 None => result,

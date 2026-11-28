@@ -114,17 +114,34 @@ async fn owned_close_releases_writer_without_stopping_a_sibling_or_losing_histor
             .await
             .is_err()
     );
-    let mut first = open(
-        SessionTarget::Open {
-            path: path.clone(),
-            expected_id: None,
-        },
-        None,
-    )
-    .join()
-    .await
-    .unwrap()
-    .into_control::<()>();
+    let id = Session::inspect_id(&path).unwrap();
+    let target = |id| SessionTarget::Open {
+        path: path.clone(),
+        expected_id: Some(id),
+    };
+    assert!(
+        target(uuid::Uuid::new_v4())
+            .prepare(None, CancellationToken::new())
+            .join()
+            .await
+            .is_err()
+    );
+    let acquired = target(id)
+        .prepare(None, CancellationToken::new())
+        .join()
+        .await
+        .unwrap();
+    assert!(matches!(
+        Session::open(&path),
+        Err(ion_core::SessionError::AlreadyOpen)
+    ));
+    let mut first = open(SessionTarget::Acquired(acquired.clone()), None)
+        .join()
+        .await
+        .unwrap()
+        .into_control::<()>();
+    assert!(Arc::ptr_eq(&acquired, first.session()));
+    drop(acquired);
     let mut sibling = open(SessionTarget::Create(catalog.new_path().unwrap()), None)
         .join()
         .await

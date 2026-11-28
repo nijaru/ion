@@ -16,9 +16,8 @@ use crate::{
     SessionControl, preparation::Preparation,
 };
 
-/// Initial writer acquisition, performed by the retained setup worker only
-/// after caller preflight. Reopening can require the identity seen in preflight.
-#[derive(Debug)]
+/// Writer acquisition for a new binding, or an existing writer transferred
+/// from an earlier retained acquisition. Creating a Session requires preflight.
 pub enum SessionTarget {
     Create(PathBuf),
     Open {
@@ -26,21 +25,40 @@ pub enum SessionTarget {
         expected_id: Option<uuid::Uuid>,
     },
     OpenOrCreate(PathBuf),
+    /// Reuse an already validated writer. Acquisition still checks workspace.
+    Acquired(Arc<Session>),
 }
 
 impl SessionTarget {
+    /// Acquire on a retained blocking worker. A caller can inspect the opened
+    /// Session and transfer it into setup without replaying the journal again.
+    pub fn prepare(
+        self,
+        cwd: Option<PathBuf>,
+        stop: CancellationToken,
+    ) -> SetupPreparation<Arc<Session>> {
+        SetupPreparation::start(stop, move |stop| {
+            let session = self.acquire(cwd.as_deref())?;
+            check_stop(&stop)?;
+            Ok(session)
+        })
+    }
+
     pub(crate) fn acquire(self, cwd: Option<&Path>) -> Result<Arc<Session>> {
         let (session, expected_id) = match self {
-            Self::Create(path) => (Session::create(path, cwd)?, None),
-            Self::Open { path, expected_id } => (Session::open(path)?, expected_id),
-            Self::OpenOrCreate(path) if path.try_exists()? => (Session::open(path)?, None),
-            Self::OpenOrCreate(path) => (Session::create(path, cwd)?, None),
+            Self::Create(path) => (Arc::new(Session::create(path, cwd)?), None),
+            Self::Open { path, expected_id } => (Arc::new(Session::open(path)?), expected_id),
+            Self::OpenOrCreate(path) if path.try_exists()? => {
+                (Arc::new(Session::open(path)?), None)
+            }
+            Self::OpenOrCreate(path) => (Arc::new(Session::create(path, cwd)?), None),
+            Self::Acquired(session) => (session, None),
         };
         ensure!(
             session.cwd() == cwd && expected_id.is_none_or(|id| session.id() == id),
             "saved Session identity or working directory changed during startup; reopen it explicitly"
         );
-        Ok(Arc::new(session))
+        Ok(session)
     }
 }
 
@@ -196,13 +214,13 @@ struct BindingSource {
 /// worker and outcome live outside the Session registry: a setup can itself
 /// retain that Session without creating a registry/outcome ownership cycle.
 #[must_use = "retain setup preparation and join its outcome"]
-pub struct SetupPreparation {
-    work: Preparation<SessionSetup>,
+pub struct SetupPreparation<T = SessionSetup> {
+    work: Preparation<T>,
 }
-impl SetupPreparation {
+impl<T: Send + 'static> SetupPreparation<T> {
     pub(crate) fn start(
         stop: CancellationToken,
-        work: impl FnOnce(CancellationToken) -> Result<SessionSetup> + Send + 'static,
+        work: impl FnOnce(CancellationToken) -> Result<T> + Send + 'static,
     ) -> Self {
         Self {
             work: Preparation::start_blocking(stop, move |stop| {
@@ -218,7 +236,7 @@ impl SetupPreparation {
     }
 
     /// Abandoning this borrowed wait retains the actual worker and its outcome.
-    pub async fn join(&mut self) -> Result<SessionSetup> {
+    pub async fn join(&mut self) -> Result<T> {
         self.work.join().await
     }
 }
