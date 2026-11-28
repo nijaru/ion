@@ -1,5 +1,6 @@
 //! Durable context selection is separate from the ordered execution ledger.
 use super::*;
+use context_index::TurnLocation;
 
 /// Optimistic navigation token. Even an unrelated late fact invalidates a stale
 /// preview; callers must inspect again rather than silently discard new work.
@@ -223,6 +224,54 @@ impl Session {
         Ok(position)
     }
 
+    /// Visit Turn inputs and closures in admission order, including inactive
+    /// alternatives, or inspect a specific Turn. When `ended_only` is set,
+    /// open Turns are excluded before reading their input. The visitor must
+    /// only project data; a file-backed walk holds a read transaction.
+    pub fn visit_turns(
+        &self,
+        turn: Option<u64>,
+        ended_only: bool,
+        mut visit: impl FnMut(TurnSummary),
+    ) -> Result<(), SessionError> {
+        let locations = |store: &Store| {
+            let index = &store.working.context_index;
+            let one = turn.and_then(|turn| index.turn_location(turn));
+            let turns = if turn.is_some() {
+                one.as_slice()
+            } else {
+                index.turns()
+            };
+            turns
+                .iter()
+                .filter(|turn| !ended_only || turn.end.is_some())
+                .map(|turn| (*turn, index.preferences_at(index.parent(turn.start)).1))
+                .collect::<Vec<_>>()
+        };
+        if self.journal().file.is_none() {
+            let turns = {
+                let store = self.lock_store()?;
+                locations(&store)
+                    .into_iter()
+                    .map(|(turn, reasoning)| read_turn(&store.connection, turn, reasoning))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            turns.into_iter().for_each(visit);
+            return Ok(());
+        }
+        let connection = self.open_file_reader()?;
+        let (snapshot, turns) = {
+            let store = self.lock_store()?;
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
+            (snapshot, locations(&store))
+        };
+        for (turn, reasoning) in turns {
+            visit(read_turn(&snapshot, turn, reasoning)?);
+        }
+        Ok(())
+    }
+
     pub fn prepare_navigation(
         &self,
         expected: ContextPosition,
@@ -247,6 +296,39 @@ impl Session {
             reasoning: context.reasoning,
         })
     }
+}
+
+fn read_turn(
+    snapshot: &Connection,
+    location: TurnLocation,
+    reasoning: Reasoning,
+) -> Result<TurnSummary, SessionError> {
+    let SessionEntry::TurnStarted {
+        turn, input, model, ..
+    } = read_entry(snapshot, location.start)?
+    else {
+        return Err(SessionError::InvalidHistory);
+    };
+    if turn != location.turn {
+        return Err(SessionError::InvalidHistory);
+    }
+    let end = location
+        .end
+        .map(|entry| match read_entry(snapshot, entry)? {
+            SessionEntry::TurnEnded {
+                turn: ended,
+                reason,
+            } if ended == turn => Ok(reason),
+            _ => Err(SessionError::InvalidHistory),
+        })
+        .transpose()?;
+    Ok(TurnSummary {
+        turn,
+        reasoning,
+        input,
+        model,
+        end,
+    })
 }
 
 impl SessionView {

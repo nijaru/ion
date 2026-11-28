@@ -186,6 +186,22 @@ impl SessionReader {
         .await
     }
 
+    /// Project Turn inputs and closures one at a time on the retained lane.
+    pub async fn map_turns<P, T: Send + 'static>(
+        &self,
+        turn: Option<u64>,
+        ended_only: bool,
+        mut project: impl FnMut(super::TurnSummary) -> P + Send + 'static,
+        finish: impl FnOnce(Vec<P>) -> T + Send + 'static,
+    ) -> Result<T, SessionError> {
+        self.run(move |session| {
+            let mut output = Vec::new();
+            session.visit_turns(turn, ended_only, |turn| output.push(project(turn)))?;
+            Ok(finish(output))
+        })
+        .await
+    }
+
     /// Project terminal history in a retained read, without a full SessionView.
     pub async fn map_presentation<T: Send + 'static>(
         &self,

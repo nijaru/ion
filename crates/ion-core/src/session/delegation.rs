@@ -227,7 +227,8 @@ impl Session {
         let context = match &record.spec.target {
             DelegationTarget::Fresh { .. } | DelegationTarget::Resume { .. } => Vec::new(),
             DelegationTarget::Fork { point, .. } => {
-                without_delivery_keys(fork_prefix(&store.connection, *point)?.0)
+                let boundary = ForkBoundary::locate(&store.working.context_index, *point)?;
+                without_delivery_keys(boundary.read_prefix(&store.connection)?)
             }
         };
         let projection = project(context.iter().map(Ok), ProjectionMode::Metadata, &|entry| {

@@ -13,11 +13,19 @@ pub(super) struct ContextIndex {
     display_dependents: BTreeMap<u64, Vec<DisplayDependent>>,
     tool_batches: BTreeMap<u64, ToolBatch>,
     text_assistants: BTreeMap<u64, u64>,
-    completed_turns: BTreeSet<u64>,
+    turns: Vec<TurnLocation>,
     pending: usize,
     shell: bool,
     admitted: BTreeMap<uuid::Uuid, crate::DelegationSite>,
     backgrounds: BTreeMap<uuid::Uuid, crate::DelegationSite>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct TurnLocation {
+    pub(super) turn: u64,
+    pub(super) start: u64,
+    pub(super) end: Option<u64>,
+    completed: bool,
 }
 
 struct Node {
@@ -60,7 +68,7 @@ enum ProjectionKind {
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 struct ContextRefs {
     model: u64,
-    reasoning: u64,
+    reasoning: Reasoning,
     effective: u64,
     context: u64,
     compaction: u64,
@@ -76,13 +84,22 @@ impl ContextIndex {
                 break;
             }
             if let Some(&turn) = self.text_assistants.get(&assistant)
-                && self.completed_turns.contains(&turn)
+                && self.turn_location(turn).is_some_and(|turn| turn.completed)
             {
                 return Some((assistant, turn));
             }
             head = self.parent(assistant);
         }
         None
+    }
+
+    pub(super) fn turn_location(&self, turn: u64) -> Option<TurnLocation> {
+        let offset = usize::try_from(turn.checked_sub(1)?).ok()?;
+        self.turns.get(offset).copied()
+    }
+
+    pub(super) fn turns(&self) -> &[TurnLocation] {
+        &self.turns
     }
 
     pub(super) fn parent(&self, entry: u64) -> u64 {
@@ -290,13 +307,6 @@ impl ContextIndex {
                 }
                 return;
             }
-            SessionEntry::TurnEnded {
-                turn,
-                reason: TurnEndReason::Completed,
-            } => {
-                self.completed_turns.insert(*turn);
-                return;
-            }
             // Branch navigation cannot select pending effects. A selected
             // admission with a dependent below the cut selects it too.
             SessionEntry::ToolResult { .. } => {
@@ -360,6 +370,11 @@ impl ContextIndex {
         }
     }
 
+    pub(super) fn preferences_at(&self, head: u64) -> (u64, Reasoning) {
+        let refs = self.context_refs(self.context_key(head));
+        (refs.model, refs.reasoning)
+    }
+
     pub(super) fn read_context(
         &self,
         head: u64,
@@ -371,14 +386,16 @@ impl ContextIndex {
         let refs = self.context_refs(self.context_key(head));
         let mut coordinates = [
             refs.model,
-            refs.reasoning,
             refs.effective,
             refs.context,
             refs.compaction,
             refs.assistant,
         ];
         coordinates.sort_unstable();
-        let mut state = State::default();
+        let mut state = State {
+            reasoning: refs.reasoning,
+            ..State::default()
+        };
         let mut previous = 0;
         for coordinate in coordinates {
             if coordinate != previous {
@@ -414,7 +431,21 @@ impl ContextIndex {
                 self.shell = false;
                 settled = true;
             }
-            SessionEntry::TurnEnded { .. } => settled = true,
+            SessionEntry::TurnStarted { turn, .. } => {
+                self.turns.push(TurnLocation {
+                    turn: *turn,
+                    start: coordinate,
+                    end: None,
+                    completed: false,
+                });
+            }
+            SessionEntry::TurnEnded { turn, reason } => {
+                let location = self.turns.last_mut().expect("validated Turn admission");
+                debug_assert_eq!(location.turn, *turn);
+                location.end = Some(coordinate);
+                location.completed = *reason == TurnEndReason::Completed;
+                settled = true;
+            }
             SessionEntry::DelegationAdmitted { record } => {
                 self.admitted.insert(record.run, record.site);
             }
@@ -462,7 +493,7 @@ impl ContextIndex {
             SessionEntry::ModelSelected { .. } | SessionEntry::TurnStarted { .. } => {
                 refs.model = coordinate
             }
-            SessionEntry::ReasoningSelected { .. } => refs.reasoning = coordinate,
+            SessionEntry::ReasoningSelected { reasoning } => refs.reasoning = *reasoning,
             SessionEntry::EffectiveModelChanged { .. } => refs.effective = coordinate,
             SessionEntry::ModelContextChanged { .. } => refs.context = coordinate,
             SessionEntry::Compacted { .. } => refs.compaction = coordinate,

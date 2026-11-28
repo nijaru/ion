@@ -1268,6 +1268,114 @@ fn interrupted_effects_close_atomically_before_selection_without_replay() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[tokio::test]
+async fn fork_reads_only_the_chosen_turn_or_copied_prefix() {
+    let (root, path, session) = fixture();
+    let first = finish(&session, "first input", "first answer");
+    let first_end = session.entry_count().unwrap();
+    let second = finish(&session, "second input", "second answer");
+    let later_answer = session.entry_count().unwrap() - 1;
+    let (open, _) = session
+        .begin_turn("open input".into(), model("one"))
+        .unwrap();
+    let open_input = session.entry_count().unwrap();
+    drop(session);
+
+    let session = Arc::new(Session::open(&path).unwrap());
+    let reader = session.reader().unwrap();
+    let independent = Connection::open(&path).unwrap();
+    let corrupt = |entry: u64| {
+        independent
+            .execute(
+                "UPDATE entries SET body=CAST('{}' AS BLOB) WHERE seq=?1",
+                [i64::try_from(entry).unwrap()],
+            )
+            .unwrap()
+    };
+    corrupt(later_answer);
+    assert!(reader.view().await.is_err());
+    let read = |target, ended_only| {
+        reader.map_turns(target, ended_only, |turn| turn, std::convert::identity)
+    };
+    let summaries = read(None, false).await.unwrap();
+    assert_eq!(
+        summaries
+            .iter()
+            .map(|turn| (turn.turn, turn.end.is_some()))
+            .collect::<Vec<_>>(),
+        vec![(first, true), (second, true), (open, false)]
+    );
+    assert_eq!(
+        summaries[1].input,
+        Message::user_input("second input".into(), [])
+    );
+    corrupt(open_input);
+    assert!(read(None, false).await.is_err());
+    assert_eq!(read(None, true).await.unwrap().len(), 2);
+    assert_eq!(
+        read(Some(first), false).await.unwrap()[0].input,
+        summaries[0].input
+    );
+    assert!(matches!(
+        session.fork_preferences(ForkPoint::AfterTurn(open)),
+        Err(SessionError::InvalidForkPoint)
+    ));
+    assert_eq!(
+        session
+            .fork_preferences(ForkPoint::BeforeTurn(second))
+            .unwrap(),
+        (model("one"), Reasoning::ProviderDefault)
+    );
+    assert_eq!(
+        session
+            .fork_preferences(ForkPoint::AfterTurn(first))
+            .unwrap(),
+        (model("one"), Reasoning::ProviderDefault)
+    );
+    let child = session
+        .fork_to(root.join("before.sqlite"), ForkPoint::BeforeTurn(second))
+        .unwrap();
+    assert_eq!(child.view().unwrap().turns().len(), 1);
+    drop(child);
+    let child = session
+        .fork_to(root.join("after.sqlite"), ForkPoint::AfterTurn(first))
+        .unwrap();
+    assert_eq!(
+        child.view().unwrap().turns()[0].end,
+        Some(TurnEndReason::Completed)
+    );
+    drop(child);
+    assert!(
+        session
+            .fork_to(root.join("bad.sqlite"), ForkPoint::AfterTurn(second))
+            .is_err()
+    );
+    assert!(!root.join("bad.sqlite").exists());
+    // An indexed closure replaced with an otherwise decodable record must not
+    // create an unfinished child under an after-Turn request.
+    independent
+        .execute(
+            "UPDATE entries SET body=?1 WHERE seq=?2",
+            params![
+                encode_entry(&SessionEntry::ReasoningSelected {
+                    reasoning: Reasoning::Off
+                })
+                .unwrap(),
+                i64::try_from(first_end).unwrap(),
+            ],
+        )
+        .unwrap();
+    assert!(matches!(
+        session.fork_to(root.join("wrong-end.sqlite"), ForkPoint::AfterTurn(first)),
+        Err(SessionError::InvalidHistory)
+    ));
+    assert!(!root.join("wrong-end.sqlite").exists());
+    drop(independent);
+    drop(reader);
+    drop(session);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn turn_summaries_follow_restored_reasoning_without_renumbering_turns() {
     let (root, _, session) = fixture();
@@ -1279,7 +1387,10 @@ fn turn_summaries_follow_restored_reasoning_without_renumbering_turns() {
     finish(&session, "high", "first");
     select(&session, 0);
     finish(&session, "default", "second");
-    let turns = session.view().unwrap().turns();
+    let mut turns = Vec::new();
+    session
+        .visit_turns(None, false, |turn| turns.push(turn))
+        .unwrap();
     assert_eq!(turns[0].reasoning, Reasoning::High);
     assert_eq!(turns[1].reasoning, Reasoning::ProviderDefault);
     assert_eq!(turns[1].turn, 2);

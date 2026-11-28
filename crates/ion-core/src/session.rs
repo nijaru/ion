@@ -117,7 +117,8 @@ pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState
 #[cfg(test)]
 use store::FORMAT_VERSION;
 use store::{
-    Header, ReadCheckpoint, Store, configure_connection, read_entries, read_entry, read_header,
+    Header, ReadCheckpoint, Store, configure_connection, read_entries, read_entries_through,
+    read_entry, read_header,
 };
 pub(crate) use submission::TurnAdmission;
 pub use submission::{RequestKey, RequestReceipt, SessionHistory, SubmissionRequest};
@@ -832,12 +833,20 @@ impl Session {
     /// Copy the valid prefix at a selected Turn boundary into an independent
     /// Session. The source and target still share the live working directory.
     pub fn fork_to(&self, path: impl AsRef<Path>, point: ForkPoint) -> Result<Self, SessionError> {
-        let source = self.lock_store()?;
-        let (mut entries, selected_model) = fork_prefix(&source.connection, point)?;
+        let connection = self.open_file_reader()?;
+        let (snapshot, boundary) = {
+            let store = self.lock_store()?;
+            let boundary = ForkBoundary::locate(&store.working.context_index, point)?;
+            let snapshot = connection.unchecked_transaction()?;
+            self.check_read_snapshot(&snapshot, store.working.state.sequence)?;
+            (snapshot, boundary)
+        };
+        let selected_model = boundary.before_model(&snapshot)?;
+        let mut entries = boundary.read_prefix(&snapshot)?;
+        drop(snapshot);
         if let Some(model) = selected_model {
             entries.push(SessionEntry::ModelSelected { model });
         }
-        drop(source);
         self.copy_entries_to(path.as_ref(), entries)
     }
 
@@ -848,16 +857,20 @@ impl Session {
         point: ForkPoint,
     ) -> Result<(ModelRef, Reasoning), SessionError> {
         let source = self.lock_store()?;
-        let (entries, selected_model) = fork_prefix(&source.connection, point)?;
-        let projection = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
-            Ok(entries[(entry - 1) as usize].clone())
-        })?;
-        Ok((
-            selected_model
-                .or(projection.state.last_model)
-                .ok_or(SessionError::InvalidForkPoint)?,
-            projection.state.reasoning,
-        ))
+        let index = &source.working.context_index;
+        let boundary = ForkBoundary::locate(index, point)?;
+        let (entry, reasoning) = index.preferences_at(boundary.head);
+        let model = match boundary.before_model(&source.connection)? {
+            Some(model) => model,
+            None if entry != 0 => match read_entry(&source.connection, entry)? {
+                SessionEntry::TurnStarted { model, .. } | SessionEntry::ModelSelected { model } => {
+                    model
+                }
+                _ => return Err(SessionError::InvalidHistory),
+            },
+            None => return Err(SessionError::InvalidForkPoint),
+        };
+        Ok((model, reasoning))
     }
 
     fn copy_entries_to(
@@ -1764,29 +1777,64 @@ impl Session {
     }
 }
 
-/// Preserve entry coordinates, compaction boundaries and replay facts exactly.
-/// The selected settled prefix, not an arbitrary message suffix, is the fork.
-fn fork_prefix(
-    connection: &Connection,
+/// Original coordinates are preserved, including prior alternative branches
+/// and compaction facts. Only the prefix through this boundary is copied.
+struct ForkBoundary {
+    through: u64,
+    head: u64,
     point: ForkPoint,
-) -> Result<(Vec<SessionEntry>, Option<ModelRef>), SessionError> {
-    let mut entries = read_entries(connection)?;
-    let boundary = entries
-        .iter()
-        .position(|entry| match (point, entry) {
-            (ForkPoint::BeforeTurn(selected), SessionEntry::TurnStarted { turn, .. })
-            | (ForkPoint::AfterTurn(selected), SessionEntry::TurnEnded { turn, .. }) => {
-                selected == *turn
+}
+
+impl ForkBoundary {
+    fn locate(index: &ContextIndex, point: ForkPoint) -> Result<Self, SessionError> {
+        match point {
+            ForkPoint::BeforeTurn(turn) => {
+                let location = index
+                    .turn_location(turn)
+                    .ok_or(SessionError::InvalidForkPoint)?;
+                Ok(Self {
+                    through: location.start - 1,
+                    head: index.parent(location.start),
+                    point,
+                })
             }
-            _ => false,
-        })
-        .ok_or(SessionError::InvalidForkPoint)?;
-    let selected_model = match (&point, &entries[boundary]) {
-        (ForkPoint::BeforeTurn(_), SessionEntry::TurnStarted { model, .. }) => Some(model.clone()),
-        _ => None,
-    };
-    entries.truncate(boundary + usize::from(matches!(point, ForkPoint::AfterTurn(_))));
-    Ok((entries, selected_model))
+            ForkPoint::AfterTurn(turn) => {
+                let end = index
+                    .turn_location(turn)
+                    .and_then(|location| location.end)
+                    .ok_or(SessionError::InvalidForkPoint)?;
+                Ok(Self {
+                    through: end,
+                    head: end,
+                    point,
+                })
+            }
+        }
+    }
+
+    fn before_model(&self, connection: &Connection) -> Result<Option<ModelRef>, SessionError> {
+        let ForkPoint::BeforeTurn(turn) = self.point else {
+            return Ok(None);
+        };
+        match read_entry(connection, self.through + 1)? {
+            SessionEntry::TurnStarted {
+                turn: admitted,
+                model,
+                ..
+            } if admitted == turn => Ok(Some(model)),
+            _ => Err(SessionError::InvalidHistory),
+        }
+    }
+
+    fn read_prefix(&self, connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
+        let entries = read_entries_through(connection, self.through)?;
+        if let ForkPoint::AfterTurn(turn) = self.point
+            && !matches!(entries.last(), Some(SessionEntry::TurnEnded { turn: ended, .. }) if *ended == turn)
+        {
+            return Err(SessionError::InvalidHistory);
+        }
+        Ok(entries)
+    }
 }
 
 fn without_delivery_keys(mut entries: Vec<SessionEntry>) -> Vec<SessionEntry> {

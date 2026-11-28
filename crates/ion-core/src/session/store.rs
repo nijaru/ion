@@ -295,6 +295,21 @@ pub(super) fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>,
     journal::decode_rows(SqliteRows(statement.query([])?)).collect()
 }
 
+pub(super) fn read_entries_through(
+    connection: &Connection,
+    through: u64,
+) -> Result<Vec<SessionEntry>, SessionError> {
+    let end = i64::try_from(through).map_err(|_| SessionError::InvalidHistory)?;
+    let mut statement =
+        connection.prepare("SELECT seq, body FROM entries WHERE seq <= ?1 ORDER BY seq")?;
+    let entries =
+        journal::decode_rows(SqliteRows(statement.query([end])?)).collect::<Result<Vec<_>, _>>()?;
+    if entries.len() as u64 != through {
+        return Err(SessionError::InvalidHistory);
+    }
+    Ok(entries)
+}
+
 pub(super) fn shell_settlement(
     connection: &Connection,
     admission: u64,

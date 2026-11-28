@@ -193,7 +193,7 @@ pub(super) fn fork_after(
 }
 
 fn read_fork(
-    runtime: &SessionControl<EditorDraft>,
+    runtime: &mut SessionControl<EditorDraft>,
     ui: &mut Frontend,
     args: &str,
     after: bool,
@@ -201,103 +201,89 @@ fn read_fork(
     let turn = (!args.is_empty())
         .then(|| args.parse::<u64>().context("use /fork[-after] [TURN]"))
         .transpose()?;
-    let reader = runtime.session().reader()?;
-    let read = async move {
-        reader
-            .map_view(move |view| prepare_fork(view.turns(), turn, after))
-            .await?
-    };
-    if turn.is_some() {
-        ui.session_io.start_binding_read(runtime.session(), read)
-    } else {
-        ui.session_io.start(runtime.session(), read)
-    }
-}
-
-fn prepare_fork(
-    turns: Vec<TurnSummary>,
-    turn: Option<u64>,
-    after: bool,
-) -> Result<super::session_io::ReadOutput> {
     if let Some(turn) = turn {
-        let restore = if after {
-            None
-        } else {
-            Some(
-                turns
-                    .into_iter()
-                    .find(|item| item.turn == turn)
-                    .context("selected Turn does not exist")?
-                    .input,
-            )
-        };
-        Ok(super::session_io::ReadOutput::Fork(ForkPickerValue {
-            point: if after {
-                ForkPoint::AfterTurn(turn)
-            } else {
-                ForkPoint::BeforeTurn(turn)
-            },
-            restore,
-        }))
+        if after {
+            // Binding preflight resolves the exact closure; no draft is needed.
+            return apply_fork(
+                runtime,
+                ui,
+                ForkPickerValue {
+                    point: ForkPoint::AfterTurn(turn),
+                    restore: None,
+                },
+            );
+        }
+        let reader = runtime.session().reader()?;
+        ui.session_io
+            .start_binding_read(runtime.session(), async move {
+                reader
+                    .map_turns(
+                        Some(turn),
+                        false,
+                        |turn| turn.input,
+                        move |mut inputs| {
+                            let input = inputs.pop().context("selected Turn does not exist")?;
+                            Ok(super::session_io::ReadOutput::Fork(ForkPickerValue {
+                                point: ForkPoint::BeforeTurn(turn),
+                                restore: Some(input),
+                            }))
+                        },
+                    )
+                    .await?
+            })
     } else {
-        let items = if after {
-            fork_after_items(turns)
-        } else {
-            fork_before_items(turns)
-        };
-        anyhow::ensure!(!items.is_empty(), "no complete Turn boundaries to fork");
-        Ok(super::session_io::ReadOutput::Picker(Box::new(Picker {
-            title: if after {
-                "Fork after Turn"
-            } else {
-                "Fork before Turn"
-            },
-            query: String::new(),
-            selected: items.len() - 1,
-            items,
-        })))
+        let reader = runtime.session().reader()?;
+        ui.session_io.start(runtime.session(), async move {
+            reader
+                .map_turns(
+                    None,
+                    after,
+                    move |turn| fork_item(turn, after),
+                    move |items| fork_picker(items.into_iter().flatten().collect(), after),
+                )
+                .await?
+        })
     }
 }
 
-fn fork_before_items(turns: Vec<TurnSummary>) -> Vec<PickerItem> {
-    turns
-        .into_iter()
-        .map(|item| {
-            let metadata = format!("Turn {}", item.turn);
-            PickerItem {
-                label: format!("{metadata}  {}", plain(&crate::preview_input(&item.input))),
-                detail: None,
-                value: PickerValue::Fork {
-                    search: MessageSearch::new(&item.input, &metadata),
-                    target: ForkPickerValue {
-                        point: ForkPoint::BeforeTurn(item.turn),
-                        restore: Some(item.input),
-                    },
-                },
-            }
-        })
-        .collect()
+fn fork_picker(items: Vec<PickerItem>, after: bool) -> Result<super::session_io::ReadOutput> {
+    anyhow::ensure!(!items.is_empty(), "no complete Turn boundaries to fork");
+    Ok(super::session_io::ReadOutput::Picker(Box::new(Picker {
+        title: if after {
+            "Fork after Turn"
+        } else {
+            "Fork before Turn"
+        },
+        query: String::new(),
+        selected: items.len() - 1,
+        items,
+    })))
 }
 
-fn fork_after_items(turns: Vec<TurnSummary>) -> Vec<PickerItem> {
-    turns
-        .into_iter()
-        .filter_map(|item| {
-            let end = item.end.as_ref()?;
-            let metadata = format!("Turn {}  ended {}", item.turn, turn_end_label(end));
-            Some(PickerItem {
-                label: format!("{metadata}  {}", plain(&crate::preview_input(&item.input))),
-                detail: None,
-                value: PickerValue::Fork {
-                    search: MessageSearch::new(&item.input, &metadata),
-                    target: ForkPickerValue {
-                        point: ForkPoint::AfterTurn(item.turn),
-                        restore: None,
-                    },
-                },
-            })
-        })
-        .collect()
+fn fork_item(item: TurnSummary, after: bool) -> Option<PickerItem> {
+    let (metadata, point) = if after {
+        let end = item.end.as_ref()?;
+        (
+            format!("Turn {}  ended {}", item.turn, turn_end_label(end)),
+            ForkPoint::AfterTurn(item.turn),
+        )
+    } else {
+        (
+            format!("Turn {}", item.turn),
+            ForkPoint::BeforeTurn(item.turn),
+        )
+    };
+    Some(PickerItem {
+        label: format!("{metadata}  {}", plain(&crate::preview_input(&item.input))),
+        detail: None,
+        value: PickerValue::Fork {
+            search: MessageSearch::new(&item.input, &metadata),
+            target: ForkPickerValue {
+                point,
+                restore: (!after).then_some(item.input),
+            },
+        },
+    })
 }
 
 pub(super) fn session_items(
@@ -463,6 +449,13 @@ mod tests {
         }
     }
 
+    fn fork_items(turns: Vec<TurnSummary>, after: bool) -> Vec<PickerItem> {
+        turns
+            .into_iter()
+            .filter_map(|turn| fork_item(turn, after))
+            .collect()
+    }
+
     fn turn(turn: u64, end: Option<TurnEndReason>) -> TurnSummary {
         TurnSummary {
             turn,
@@ -499,7 +492,7 @@ mod tests {
                 turn(3, None),
             ];
             let super::super::session_io::ReadOutput::Picker(picker) =
-                prepare_fork(turns, None, after).unwrap()
+                fork_picker(fork_items(turns, after), after).unwrap()
             else {
                 panic!("expected a fork picker");
             };
@@ -526,8 +519,8 @@ mod tests {
         ));
         let original = source.input.clone();
         for items in [
-            fork_before_items(vec![source.clone()]),
-            fork_after_items(vec![source]),
+            fork_items(vec![source.clone()], false),
+            fork_items(vec![source], true),
         ] {
             let picker = super::super::picker::Picker {
                 title: "Fork fixture",
@@ -625,17 +618,20 @@ mod tests {
 
     #[test]
     fn fork_after_picker_requires_a_recorded_end_and_keeps_reasons() {
-        let items = fork_after_items(vec![
-            turn(1, Some(TurnEndReason::Completed)),
-            turn(2, None),
-            turn(3, Some(TurnEndReason::Cancelled)),
-            turn(4, Some(TurnEndReason::Failed("provider\tfailed".into()))),
-        ]);
+        let items = fork_items(
+            vec![
+                turn(1, Some(TurnEndReason::Completed)),
+                turn(2, None),
+                turn(3, Some(TurnEndReason::Cancelled)),
+                turn(4, Some(TurnEndReason::Failed("provider\tfailed".into()))),
+            ],
+            true,
+        );
         assert_eq!(items.len(), 3);
         assert!(items[0].label.contains("ended completed"));
         assert!(items[1].label.contains("ended cancelled"));
         assert!(items[2].label.contains("ended failed: provider failed"));
-        let before = fork_before_items(vec![turn(1, None), turn(2, None)]);
+        let before = fork_items(vec![turn(1, None), turn(2, None)], false);
         assert_eq!(before.len(), 2);
         assert!(before.iter().all(|item| item.label.starts_with("Turn ")));
     }

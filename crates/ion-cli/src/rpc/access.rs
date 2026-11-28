@@ -72,25 +72,37 @@ impl Control {
                         .await?
                 });
             }
-            "inspect" | "list_turns" => {
-                let command = if command == "inspect" {
-                    "inspect"
-                } else {
-                    "list_turns"
-                };
+            "list_turns" => {
                 let reader = self.host.session().reader()?;
                 let reply_id = id.clone();
-                self.queue_access(id, command, credit, async move {
-                    let result = reader.map_view(move |view| -> Result<AccessData> {
-                        let data = if command == "inspect" {
-                            inspection::to_value(&view)?
-                        } else {
-                            json!(view.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())
-                        };
-                        let bytes = crate::publication::encode(crate::publication::Record::Json(success(reply_id, command, data)))?;
-                        Ok(AccessData::Encoded(bytes))
-                    }).await??;
-                    Ok(result)
+                self.queue_access(id, "list_turns", credit, async move {
+                    reader.map_turns(
+                        None,
+                        false,
+                        |item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()}),
+                        move |turns| {
+                            let bytes = crate::publication::encode(crate::publication::Record::Json(
+                                success(reply_id, "list_turns", json!(turns)),
+                            ))?;
+                            Ok(AccessData::Encoded(bytes))
+                        },
+                    ).await?
+                });
+            }
+            "inspect" => {
+                let reader = self.host.session().reader()?;
+                let reply_id = id.clone();
+                self.queue_access(id, "inspect", credit, async move {
+                    reader
+                        .map_view(move |view| {
+                            let data = inspection::to_value(&view)?;
+                            let bytes =
+                                crate::publication::encode(crate::publication::Record::Json(
+                                    success(reply_id, "inspect", data),
+                                ))?;
+                            Ok(AccessData::Encoded(bytes))
+                        })
+                        .await?
                 });
             }
             "get_state" => {
