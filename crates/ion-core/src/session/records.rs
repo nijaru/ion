@@ -230,6 +230,14 @@ pub struct SessionView {
     pub last_usage: Option<Usage>,
 }
 
+/// One recorded Turn's projected input and whether it has a committed end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnListing<T> {
+    pub turn: u64,
+    pub input: T,
+    pub ended: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct TurnSummary {
     pub turn: u64,

@@ -595,7 +595,25 @@ with tempfile.TemporaryDirectory(prefix="ion-cli-") as temporary:
         assert "Cache write tokens: unknown" in report, report
         assert "first/vendor/model" in report and "second/other" in report, report
         assert "provider reports served-alias" in report and "Cost: unknown" in report, report
+        assert run("turns", "--session", session, input=b"\xff").stdout.decode().splitlines() == [
+            "1\tended\tdefault", "2\tended\toverride", "3\tended\trestore",
+        ]
         assert json.loads(run("inspect", "--session", session).stdout) == view
+        denied_export = root / "denied-export.html"
+        for command in (("usage",), ("turns",), ("inspect",), ("export", denied_export)):
+            denied = run("--cwd", root, "--session", session, *command, check=False)
+            assert denied.returncode != 0 and not denied.stdout
+            assert b"--cwd does not match the session" in denied.stderr
+        assert not denied_export.exists()
+
+        damaged = root / "report-damaged.sqlite"
+        with closing(sqlite3.connect(f"file:{session}?mode=ro", uri=True)) as source, closing(sqlite3.connect(damaged)) as copy:
+            source.backup(copy)
+            copy.execute("UPDATE entries SET body=? WHERE seq=(SELECT MAX(seq) FROM entries)", (b"{}",))
+            copy.commit()
+        for verb in ("usage", "turns"):
+            refused = run(verb, "--session", damaged, check=False)
+            assert refused.returncode != 0 and not refused.stdout, refused
         latest = run("--cwd", workspace, "--continue", "usage").stdout.decode()
         assert "Total tokens: unknown" in latest and "Cost: unknown" in latest, latest
         assert len(requests) == calls and not marker.exists()

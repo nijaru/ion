@@ -199,13 +199,13 @@ fn reopen_checkpoint_pins_header_scan_and_context_point_reads() {
     ] {
         assert_eq!(cut.header.name.as_deref(), Some(label));
         assert_eq!(
-            cut.project(ProjectionMode::Metadata)
+            cut.project(ProjectionMode::Metadata, |_| {})
                 .unwrap()
                 .latest_prompt
                 .as_deref(),
             Some(prompt)
         );
-        let working = cut.project(ProjectionMode::Working).unwrap();
+        let working = cut.project(ProjectionMode::Working, |_| {}).unwrap();
         assert_eq!(
             working.messages[0].message,
             Message::user_input(prompt.into(), [])

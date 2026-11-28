@@ -594,6 +594,8 @@ fn passive_metadata_is_bounded_validated_and_does_not_recover_history() {
     for result in [
         Session::open(&path).map(|_| ()),
         Session::inspect_metadata(&path).map(|_| ()),
+        Session::inspect_usage(&path).map(|_| ()),
+        Session::inspect_turns(&path, |_| ()).map(|_| ()),
         Session::inspect(&path).map(|_| ()),
     ] {
         assert!(matches!(result, Err(SessionError::Json(_))), "{result:?}");

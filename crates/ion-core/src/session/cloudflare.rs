@@ -87,6 +87,7 @@ impl WorkerJournalCut {
             },
             ProjectionMode::Working,
             |entry| read_entry(entry, |seq| source.read_record(seq)),
+            |_| {},
         )
         .map_err(js_error)?;
         Ok(Self(WorkingJournal::open(identity, projection)))

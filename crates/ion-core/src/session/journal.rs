@@ -273,8 +273,9 @@ pub(super) fn replay(
     rows: impl EntryRows,
     mode: ProjectionMode,
     read: impl Fn(u64) -> Result<SessionEntry, SessionError>,
+    observe: impl FnMut(SessionEntry),
 ) -> Result<HistoryProjection, SessionError> {
-    project(decode_rows(rows), mode, &read)
+    projection::project_observing(decode_rows(rows), mode, &read, observe)
 }
 
 pub(super) fn decode_rows(
@@ -344,14 +345,19 @@ mod tests {
             .unwrap(),
         )];
         let restore = |records: &[(i64, Vec<u8>)]| {
-            replay(Rows(records.iter()), ProjectionMode::Working, |entry| {
-                let (sequence, body) = &records[usize::try_from(entry - 1).unwrap()];
-                EncodedRecord {
-                    sequence: *sequence,
-                    body,
-                }
-                .decode(entry)
-            })
+            replay(
+                Rows(records.iter()),
+                ProjectionMode::Working,
+                |entry| {
+                    let (sequence, body) = &records[usize::try_from(entry - 1).unwrap()];
+                    EncodedRecord {
+                        sequence: *sequence,
+                        body,
+                    }
+                    .decode(entry)
+                },
+                |_| {},
+            )
         };
         let restored = restore(&rows).unwrap();
         assert_eq!(restored.state.active, Some(1));

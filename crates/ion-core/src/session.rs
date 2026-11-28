@@ -110,8 +110,8 @@ use projection::{
 pub(crate) use records::valid_user_message;
 pub use records::{
     ForkPoint, ModelContextSnapshot, ModelUsagePurpose, SessionEntry, SessionInputPreview,
-    SessionMetadata, SessionStatus, SessionView, StoredToolActivity, TurnEndReason, TurnSummary,
-    UnobservedUserShell, UserShellOutcome,
+    SessionMetadata, SessionStatus, SessionView, StoredToolActivity, TurnEndReason, TurnListing,
+    TurnSummary, UnobservedUserShell, UserShellOutcome,
 };
 pub use recovery::{AuthorityScope, RecoveryBinding, RecoveryPoint, RecoveryState};
 #[cfg(test)]
@@ -899,13 +899,53 @@ impl Session {
     /// Validate committed history without accumulating historical payloads. Labels
     /// contain at most 120 characters from the first input's first line.
     pub fn inspect_metadata(path: impl AsRef<Path>) -> Result<SessionMetadata, SessionError> {
-        let path = database_path(path.as_ref())?;
+        Self::inspect_report(path.as_ref(), |_| {})
+    }
+
+    /// Validate one saved cut and account for all recorded routes and purposes
+    /// without acquiring write ownership or retaining the raw history.
+    pub fn inspect_usage(
+        path: impl AsRef<Path>,
+    ) -> Result<(SessionMetadata, crate::SessionUsage), SessionError> {
+        let mut usage = crate::session_usage::UsageIndex::default();
+        let metadata = Self::inspect_report(path.as_ref(), |entry| usage.observe(&entry))?;
+        Ok((metadata, usage.report()))
+    }
+
+    /// Validate one saved cut and return caller-projected Turn inputs with
+    /// their closure status. The mapper must only project data: it runs while
+    /// the snapshot is open and before the entire journal has been validated.
+    pub fn inspect_turns<T>(
+        path: impl AsRef<Path>,
+        mut project_input: impl FnMut(&Message) -> T,
+    ) -> Result<(SessionMetadata, Vec<TurnListing<T>>), SessionError> {
+        let mut turns = Vec::<TurnListing<T>>::new();
+        let metadata = Self::inspect_report(path.as_ref(), |entry| match entry {
+            SessionEntry::TurnStarted { turn, input, .. } => turns.push(TurnListing {
+                turn,
+                input: project_input(&input),
+                ended: false,
+            }),
+            SessionEntry::TurnEnded { turn, .. } => {
+                let last = turns.last_mut().expect("validated admission");
+                debug_assert_eq!(last.turn, turn);
+                last.ended = true;
+            }
+            _ => {}
+        })?;
+        Ok((metadata, turns))
+    }
+
+    fn inspect_report(
+        path: &Path,
+        observe: impl FnMut(SessionEntry),
+    ) -> Result<SessionMetadata, SessionError> {
+        let path = database_path(path)?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
         let checkpoint = ReadCheckpoint::pin(&connection)?;
-        let projection = checkpoint.project(ProjectionMode::Metadata)?;
+        let projection = checkpoint.project(ProjectionMode::Metadata, observe)?;
         let header = checkpoint.header;
-
         Ok(SessionMetadata {
             id: header.id,
             cwd: header.cwd,
@@ -922,18 +962,18 @@ impl Session {
         let path = database_path(path.as_ref())?;
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         configure_connection(&connection)?;
-        let (header, entries) = {
+        let mut entries = Vec::new();
+        let (header, projection) = {
             let checkpoint = ReadCheckpoint::pin(&connection)?;
-            let entries = checkpoint.read_entries()?;
-            (checkpoint.header, entries)
+            let projection =
+                checkpoint.project(ProjectionMode::Metadata, |entry| entries.push(entry))?;
+            (checkpoint.header, projection)
         };
         let HistoryProjection {
             state,
             context_index,
             ..
-        } = project(entries.iter().map(Ok), ProjectionMode::Metadata, &|entry| {
-            Ok(entries[(entry - 1) as usize].clone())
-        })?;
+        } = projection;
         let context_path = context_index.path(context_index.head());
         let messages = selected_messages(&entries, &context_path, MessageAudience::Model);
         Ok(SessionView {

@@ -362,6 +362,15 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     mode: ProjectionMode,
     read: &impl Fn(u64) -> Result<SessionEntry, SessionError>,
 ) -> Result<HistoryProjection, SessionError> {
+    project_observing(entries, mode, read, |_| {})
+}
+
+pub(super) fn project_observing<E: Borrow<SessionEntry>>(
+    entries: impl IntoIterator<Item = Result<E, SessionError>>,
+    mode: ProjectionMode,
+    read: &impl Fn(u64) -> Result<SessionEntry, SessionError>,
+    mut observe: impl FnMut(E),
+) -> Result<HistoryProjection, SessionError> {
     let mut state = State::default();
     let mut child_records = ChildRecordIndex::default();
     let mut context_index = ContextIndex::default();
@@ -370,8 +379,8 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
     let mut first_input = None;
     let mut latest_prompt = None;
     for entry in entries {
-        let entry = entry?;
-        let entry = entry.borrow();
+        let item = entry?;
+        let entry = item.borrow();
         let transition = state.apply(entry, &|coordinate| context_index.is_settled(coordinate))?;
         keys.observe(None, state.sequence, entry)?;
         if let SessionEntry::ContextSelected { head_entry } = entry {
@@ -399,6 +408,7 @@ pub(super) fn project<E: Borrow<SessionEntry>>(
                 first_input = preview;
             }
         }
+        observe(item);
     }
     let (settled, messages, context_changes) = if matches!(mode, ProjectionMode::Metadata) {
         (BTreeSet::new(), Vec::new(), Vec::new())

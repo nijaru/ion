@@ -426,79 +426,79 @@ async fn run_cli(cli: Invocation) -> Result<()> {
                 catalog.new_path()?
             };
             ensure!(!stop.is_cancelled(), "application startup interrupted");
-            let existing = if cli.resume_session || cli.continue_session || path.is_file() {
-                Some(Session::inspect_metadata(&path)?)
-            } else {
-                None
-            };
-            if let Some(view) = &existing {
+            let saved = cli.resume_session || cli.continue_session || path.is_file();
+            let check_cwd = |actual: Option<&std::path::Path>| -> Result<()> {
                 ensure!(
-                    !explicit_cwd || view.cwd.as_deref() == Some(cwd.as_path()),
+                    !explicit_cwd || actual == Some(cwd.as_path()),
                     "--cwd does not match the session's working directory ({})",
-                    view.cwd
-                        .as_deref()
-                        .map_or_else(|| "(none)".into(), |cwd| cwd.display().to_string())
+                    actual.map_or_else(|| "(none)".into(), |cwd| cwd.display().to_string())
                 );
+                Ok(())
+            };
+            match &action {
+                Action::Usage => {
+                    ensure!(saved, "session does not exist");
+                    let (metadata, usage) = Session::inspect_usage(&path)?;
+                    check_cwd(metadata.cwd.as_deref())?;
+                    print_stdout(format_args!(
+                        "Session {}\n{}",
+                        metadata.id,
+                        session_usage::render(&usage)
+                    ))?;
+                    return Ok(());
+                }
+                Action::Turns => {
+                    ensure!(saved, "session does not exist");
+                    let (metadata, turns) = Session::inspect_turns(&path, preview_input)?;
+                    check_cwd(metadata.cwd.as_deref())?;
+                    for turn in turns {
+                        print_stdout(format_args!(
+                            "{}\t{}\t{}",
+                            turn.turn,
+                            if turn.ended { "ended" } else { "active" },
+                            turn.input
+                        ))?;
+                    }
+                    return Ok(());
+                }
+                Action::Inspect | Action::Export { .. } => {
+                    ensure!(saved, "session does not exist");
+                    let view = Session::inspect(&path)?;
+                    check_cwd(view.cwd.as_deref())?;
+                    if let Action::Export { path: output } = &action {
+                        if let Some(output) = output {
+                            let target = if output.is_absolute() {
+                                output.clone()
+                            } else {
+                                view.cwd
+                                    .as_deref()
+                                    .context("relative export path requires a working directory")?
+                                    .join(output)
+                            };
+                            transcript::save_new(&view, &target).with_context(|| {
+                                format!("cannot save transcript to {}", target.display())
+                            })?;
+                            print_stdout(format_args!("{}", target.display()))?;
+                        } else {
+                            io::stdout().write_all(transcript::render(&view).as_bytes())?;
+                        }
+                    } else {
+                        inspection::write(&view, &mut io::stdout().lock())?;
+                    }
+                    return Ok(());
+                }
+                _ => {}
+            }
+
+            let existing = saved.then(|| Session::inspect_metadata(&path)).transpose()?;
+            if let Some(view) = &existing {
+                check_cwd(view.cwd.as_deref())?;
             }
             // Copies and navigation belong to the stored Session's namespace,
             // not the directory that happened to launch this executable.
             let catalog = existing
                 .as_ref()
                 .map_or(catalog, |view| host.sessions(view.cwd.clone()));
-            if matches!(action, Action::Inspect) {
-                ensure!(existing.is_some(), "session does not exist");
-                let view = Session::inspect(&path)?;
-                inspection::write(&view, &mut io::stdout().lock())?;
-                return Ok(());
-            }
-            if matches!(action, Action::Usage) {
-                ensure!(existing.is_some(), "session does not exist");
-                let view = Session::inspect(&path)?;
-                print_stdout(format_args!(
-                    "Session {}\n{}",
-                    view.id,
-                    session_usage::render(&view.usage())
-                ))?;
-                return Ok(());
-            }
-            if let Action::Export { path: output } = &action {
-                ensure!(existing.is_some(), "session does not exist");
-                let view = Session::inspect(&path)?;
-                if let Some(output) = output {
-                    let target = if output.is_absolute() {
-                        output.clone()
-                    } else {
-                        view.cwd
-                            .as_deref()
-                            .context("relative export path requires a working directory")?
-                            .join(output)
-                    };
-                    transcript::save_new(&view, &target).with_context(|| {
-                        format!("cannot save transcript to {}", target.display())
-                    })?;
-                    print_stdout(format_args!("{}", target.display()))?;
-                } else {
-                    io::stdout().write_all(transcript::render(&view).as_bytes())?;
-                }
-                return Ok(());
-            }
-            if matches!(action, Action::Turns) {
-                ensure!(existing.is_some(), "session does not exist");
-                let view = Session::inspect(&path)?;
-                for turn in view.turns() {
-                    print_stdout(format_args!(
-                        "{}\t{}\t{}",
-                        turn.turn,
-                        if turn.end.is_some() {
-                            "ended"
-                        } else {
-                            "active"
-                        },
-                        preview_input(&turn.input)
-                    ))?;
-                }
-                return Ok(());
-            }
             if matches!(action, Action::Clone) {
                 ensure!(existing.is_some(), "session does not exist");
                 let source = Session::open(&path)?;

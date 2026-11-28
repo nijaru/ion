@@ -114,7 +114,7 @@ impl Store {
     pub(super) fn reopen(connection: Connection) -> Result<(Self, Header), SessionError> {
         let (header, projection) = {
             let checkpoint = ReadCheckpoint::pin(&connection)?;
-            let projection = checkpoint.project(ProjectionMode::Working)?;
+            let projection = checkpoint.project(ProjectionMode::Working, |_| {})?;
             (checkpoint.header, projection)
         };
         Ok((
@@ -268,15 +268,18 @@ impl<'a> ReadCheckpoint<'a> {
         Ok(Self { snapshot, header })
     }
 
-    pub fn project(&self, mode: ProjectionMode) -> Result<HistoryProjection, SessionError> {
+    pub fn project(
+        &self,
+        mode: ProjectionMode,
+        observe: impl FnMut(SessionEntry),
+    ) -> Result<HistoryProjection, SessionError> {
         let mut statement = self.snapshot.prepare(SCAN_ENTRIES)?;
-        journal::replay(SqliteRows(statement.query([])?), mode, |entry| {
-            read_entry(&self.snapshot, entry)
-        })
-    }
-
-    pub fn read_entries(&self) -> Result<Vec<SessionEntry>, SessionError> {
-        read_entries(&self.snapshot)
+        journal::replay(
+            SqliteRows(statement.query([])?),
+            mode,
+            |entry| read_entry(&self.snapshot, entry),
+            observe,
+        )
     }
 }
 
